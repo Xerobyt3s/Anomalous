@@ -1,0 +1,61 @@
+#pragma once
+
+#include "core/types.h"
+
+struct Arena;
+
+#define MAX_KEYS 512
+#define MAX_MOUSE_BUTTONS 8
+
+#define KEY_SPACE 32
+#define KEY_ESCAPE 256
+#define KEY_ENTER 257
+#define KEY_TAB 258
+#define KEY_RIGHT 262
+#define KEY_LEFT 263
+#define KEY_DOWN 264
+#define KEY_UP 265
+#define KEY_LEFT_SHIFT 340
+#define KEY_LEFT_CONTROL 341
+#define KEY_F1 290
+#define KEY_F2 291
+#define KEY_F3 292
+#define KEY_F4 293
+#define KEY_F5 294
+#define KEY_F6 295
+
+#define MOUSE_LEFT 0
+#define MOUSE_RIGHT 1
+#define MOUSE_MIDDLE 2
+
+typedef struct GameInput {
+    u8 key_down[MAX_KEYS];
+    u8 key_pressed[MAX_KEYS];
+    u8 key_released[MAX_KEYS];
+    u8 mouse_down[MAX_MOUSE_BUTTONS];
+    u8 mouse_pressed[MAX_MOUSE_BUTTONS];
+    u8 mouse_released[MAX_MOUSE_BUTTONS];
+    f32 mouse_x, mouse_y;
+    f32 mouse_dx, mouse_dy;
+    f32 scroll_dy;
+} GameInput;
+
+typedef struct FileData {
+    u8* data;
+    u64 size;
+} FileData;
+
+b32  platform_init(const char* title, i32 width, i32 height);
+void platform_shutdown(void);
+b32  platform_should_close(void);
+void platform_request_close(void);
+void platform_poll_input(void);
+void platform_swap_buffers(void);
+void platform_set_title(const char* title);
+void platform_framebuffer_size(i32* out_width, i32* out_height);
+f64  platform_time_now(void);
+
+const GameInput* platform_input(void);
+
+FileData platform_read_entire_file(struct Arena* arena, const char* path);
+i64      platform_file_mtime(const char* path);
