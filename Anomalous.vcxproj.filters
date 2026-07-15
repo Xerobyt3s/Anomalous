@@ -10,6 +10,12 @@
     <Filter Include="platform">
       <UniqueIdentifier>{a1000000-0000-0000-0000-000000000003}</UniqueIdentifier>
     </Filter>
+    <Filter Include="render">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-000000000004}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="shaders">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-000000000005}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\main.c" />
@@ -27,6 +33,18 @@
     </ClCompile>
     <ClCompile Include="src\platform\platform.c">
       <Filter>platform</Filter>
+    </ClCompile>
+    <ClCompile Include="src\render\camera.c">
+      <Filter>render</Filter>
+    </ClCompile>
+    <ClCompile Include="src\render\debug_draw.c">
+      <Filter>render</Filter>
+    </ClCompile>
+    <ClCompile Include="src\render\render.c">
+      <Filter>render</Filter>
+    </ClCompile>
+    <ClCompile Include="src\render\text.c">
+      <Filter>render</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -48,5 +66,31 @@
     <ClInclude Include="src\platform\platform.h">
       <Filter>platform</Filter>
     </ClInclude>
+    <ClInclude Include="src\render\camera.h">
+      <Filter>render</Filter>
+    </ClInclude>
+    <ClInclude Include="src\render\debug_draw.h">
+      <Filter>render</Filter>
+    </ClInclude>
+    <ClInclude Include="src\render\render.h">
+      <Filter>render</Filter>
+    </ClInclude>
+    <ClInclude Include="src\render\text.h">
+      <Filter>render</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="shaders\debug.vert">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\debug.frag">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\text.vert">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\text.frag">
+      <Filter>shaders</Filter>
+    </None>
   </ItemGroup>
 </Project>

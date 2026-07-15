@@ -91,6 +91,10 @@
     <ClCompile Include="src\math\vmath.c" />
     <ClCompile Include="src\platform\gl_loader.c" />
     <ClCompile Include="src\platform\platform.c" />
+    <ClCompile Include="src\render\camera.c" />
+    <ClCompile Include="src\render\debug_draw.c" />
+    <ClCompile Include="src\render\render.c" />
+    <ClCompile Include="src\render\text.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\core\types.h" />
@@ -99,6 +103,16 @@
     <ClInclude Include="src\math\vmath.h" />
     <ClInclude Include="src\platform\gl_loader.h" />
     <ClInclude Include="src\platform\platform.h" />
+    <ClInclude Include="src\render\camera.h" />
+    <ClInclude Include="src\render\debug_draw.h" />
+    <ClInclude Include="src\render\render.h" />
+    <ClInclude Include="src\render\text.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="shaders\debug.vert" />
+    <None Include="shaders\debug.frag" />
+    <None Include="shaders\text.vert" />
+    <None Include="shaders\text.frag" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

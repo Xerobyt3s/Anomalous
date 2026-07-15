@@ -15,6 +15,7 @@ static GameInput s_input;
 static f32 s_prev_mouse_x;
 static f32 s_prev_mouse_y;
 static b32 s_first_mouse_sample = 1;
+static b32 s_cursor_captured;
 
 static void glfw_error_callback(int error, const char* description)
 {
@@ -190,6 +191,24 @@ f64 platform_time_now(void)
 const GameInput* platform_input(void)
 {
     return &s_input;
+}
+
+void platform_set_cursor_captured(b32 captured)
+{
+    if (s_cursor_captured == captured) {
+        return;
+    }
+    s_cursor_captured = captured;
+    glfwSetInputMode(s_window, GLFW_CURSOR, captured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+    if (captured && glfwRawMouseMotionSupported()) {
+        glfwSetInputMode(s_window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+    }
+    s_first_mouse_sample = 1;
+}
+
+b32 platform_cursor_captured(void)
+{
+    return s_cursor_captured;
 }
 
 FileData platform_read_entire_file(struct Arena* arena, const char* path)

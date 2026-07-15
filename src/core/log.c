@@ -23,8 +23,6 @@ void log_msg(LogLevel level, const char* fmt, ...)
     char line[1100];
     snprintf(line, sizeof(line), "%s%s\n", s_level_prefix[level], message);
     fputs(line, stdout);
-    if (level == LOG_ERROR) {
-        fflush(stdout);
-    }
+    fflush(stdout);
     OutputDebugStringA(line);
 }

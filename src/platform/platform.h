@@ -8,6 +8,14 @@ struct Arena;
 #define MAX_MOUSE_BUTTONS 8
 
 #define KEY_SPACE 32
+#define KEY_A 65
+#define KEY_D 68
+#define KEY_E 69
+#define KEY_F 70
+#define KEY_Q 81
+#define KEY_R 82
+#define KEY_S 83
+#define KEY_W 87
 #define KEY_ESCAPE 256
 #define KEY_ENTER 257
 #define KEY_TAB 258
@@ -56,6 +64,9 @@ void platform_framebuffer_size(i32* out_width, i32* out_height);
 f64  platform_time_now(void);
 
 const GameInput* platform_input(void);
+
+void platform_set_cursor_captured(b32 captured);
+b32  platform_cursor_captured(void);
 
 FileData platform_read_entire_file(struct Arena* arena, const char* path);
 i64      platform_file_mtime(const char* path);
