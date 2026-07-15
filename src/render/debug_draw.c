@@ -111,6 +111,14 @@ void dd_arrow(Vec3 from, Vec3 to, f32 head_size, u32 color)
     dd_line(to, vec3_sub(back, vec3_scale(v, spread)), color);
 }
 
+static void dd_box_edges(const Vec3 corners[8], u32 color)
+{
+    static const u8 edges[24] = { 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7 };
+    for (i32 i = 0; i < 24; i += 2) {
+        dd_line(corners[edges[i]], corners[edges[i + 1]], color);
+    }
+}
+
 void dd_aabb(Aabb box, u32 color)
 {
     Vec3 lo = box.min;
@@ -119,10 +127,22 @@ void dd_aabb(Aabb box, u32 color)
         { lo.x, lo.y, lo.z }, { hi.x, lo.y, lo.z }, { hi.x, lo.y, hi.z }, { lo.x, lo.y, hi.z },
         { lo.x, hi.y, lo.z }, { hi.x, hi.y, lo.z }, { hi.x, hi.y, hi.z }, { lo.x, hi.y, hi.z },
     };
-    static const u8 edges[24] = { 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7 };
-    for (i32 i = 0; i < 24; i += 2) {
-        dd_line(corners[edges[i]], corners[edges[i + 1]], color);
+    dd_box_edges(corners, color);
+}
+
+void dd_obb(Vec3 center, Quat rot, Vec3 half_extents, u32 color)
+{
+    Mat3 r = quat_to_mat3(rot);
+    Vec3 h = half_extents;
+    Vec3 local[8] = {
+        { -h.x, -h.y, -h.z }, { h.x, -h.y, -h.z }, { h.x, -h.y, h.z }, { -h.x, -h.y, h.z },
+        { -h.x, h.y, -h.z }, { h.x, h.y, -h.z }, { h.x, h.y, h.z }, { -h.x, h.y, h.z },
+    };
+    Vec3 corners[8];
+    for (i32 i = 0; i < 8; i++) {
+        corners[i] = vec3_add(center, mat3_mul_vec3(r, local[i]));
     }
+    dd_box_edges(corners, color);
 }
 
 void dd_circle(Vec3 center, Vec3 normal, f32 radius, u32 color)

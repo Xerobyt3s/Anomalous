@@ -16,6 +16,9 @@
     <Filter Include="shaders">
       <UniqueIdentifier>{a1000000-0000-0000-0000-000000000005}</UniqueIdentifier>
     </Filter>
+    <Filter Include="physics">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-000000000006}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\main.c" />
@@ -24,6 +27,18 @@
     </ClCompile>
     <ClCompile Include="src\core\log.c">
       <Filter>core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\pool.c">
+      <Filter>core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\physics\collide.c">
+      <Filter>physics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\physics\heightfield.c">
+      <Filter>physics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\physics\physics.c">
+      <Filter>physics</Filter>
     </ClCompile>
     <ClCompile Include="src\math\vmath.c">
       <Filter>math</Filter>
@@ -56,6 +71,21 @@
     </ClInclude>
     <ClInclude Include="src\core\log.h">
       <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\pool.h">
+      <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\rng.h">
+      <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\physics\collide.h">
+      <Filter>physics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\physics\heightfield.h">
+      <Filter>physics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\physics\physics.h">
+      <Filter>physics</Filter>
     </ClInclude>
     <ClInclude Include="src\math\vmath.h">
       <Filter>math</Filter>

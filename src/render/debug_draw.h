@@ -26,6 +26,7 @@ void dd_line(Vec3 a, Vec3 b, u32 color);
 void dd_ray(Vec3 origin, Vec3 dir, f32 length, u32 color);
 void dd_arrow(Vec3 from, Vec3 to, f32 head_size, u32 color);
 void dd_aabb(Aabb box, u32 color);
+void dd_obb(Vec3 center, Quat rot, Vec3 half_extents, u32 color);
 void dd_sphere(Vec3 center, f32 radius, u32 color);
 void dd_circle(Vec3 center, Vec3 normal, f32 radius, u32 color);
 void dd_cross(Vec3 p, f32 size, u32 color);

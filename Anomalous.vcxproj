@@ -88,6 +88,10 @@
     <ClCompile Include="src\main.c" />
     <ClCompile Include="src\core\arena.c" />
     <ClCompile Include="src\core\log.c" />
+    <ClCompile Include="src\core\pool.c" />
+    <ClCompile Include="src\physics\collide.c" />
+    <ClCompile Include="src\physics\heightfield.c" />
+    <ClCompile Include="src\physics\physics.c" />
     <ClCompile Include="src\math\vmath.c" />
     <ClCompile Include="src\platform\gl_loader.c" />
     <ClCompile Include="src\platform\platform.c" />
@@ -100,6 +104,11 @@
     <ClInclude Include="src\core\types.h" />
     <ClInclude Include="src\core\arena.h" />
     <ClInclude Include="src\core\log.h" />
+    <ClInclude Include="src\core\pool.h" />
+    <ClInclude Include="src\core\rng.h" />
+    <ClInclude Include="src\physics\collide.h" />
+    <ClInclude Include="src\physics\heightfield.h" />
+    <ClInclude Include="src\physics\physics.h" />
     <ClInclude Include="src\math\vmath.h" />
     <ClInclude Include="src\platform\gl_loader.h" />
     <ClInclude Include="src\platform\platform.h" />

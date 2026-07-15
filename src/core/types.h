@@ -24,5 +24,5 @@ typedef u32      b32;
 #if defined(_DEBUG)
     #define ASSERT(x) do { if (!(x)) { __debugbreak(); } } while (0)
 #else
-    #define ASSERT(x) ((void)0)
+    #define ASSERT(x) ((void)sizeof(!(x)))
 #endif
