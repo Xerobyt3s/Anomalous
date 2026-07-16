@@ -31,6 +31,8 @@ struct Arena;
 #define KEY_F4 293
 #define KEY_F5 294
 #define KEY_F6 295
+#define KEY_F7 296
+#define KEY_F8 297
 
 #define MOUSE_LEFT 0
 #define MOUSE_RIGHT 1

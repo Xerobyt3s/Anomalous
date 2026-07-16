@@ -5,7 +5,7 @@
 #define HF_RAY_EPS 1e-4f
 #define HF_T_INF 1e30f
 
-void heightfield_init_procedural(Heightfield* hf, struct Arena* arena, u32 size, f32 cell_size, u32 seed)
+static void heightfield_alloc(Heightfield* hf, struct Arena* arena, u32 size, f32 cell_size)
 {
     hf->size_x = size;
     hf->size_z = size;
@@ -13,6 +13,13 @@ void heightfield_init_procedural(Heightfield* hf, struct Arena* arena, u32 size,
     f32 half_x = (f32)(size - 1) * cell_size * 0.5f;
     hf->origin = v3(-half_x, 0.0f, -half_x);
     hf->heights = arena_push_array(arena, f32, (u64)size * size);
+    hf->min_height = HF_T_INF;
+    hf->max_height = -HF_T_INF;
+}
+
+void heightfield_init_procedural(Heightfield* hf, struct Arena* arena, u32 size, f32 cell_size, u32 seed, f32 roughness)
+{
+    heightfield_alloc(hf, arena, size, cell_size);
 
     Rng rng;
     rng_seed(&rng, seed);
@@ -23,17 +30,29 @@ void heightfield_init_procedural(Heightfield* hf, struct Arena* arena, u32 size,
     f32 p5 = rng_range(&rng, 0.0f, 2.0f * PI32);
     f32 p6 = rng_range(&rng, 0.0f, 2.0f * PI32);
 
-    hf->min_height = HF_T_INF;
-    hf->max_height = -HF_T_INF;
     for (u32 iz = 0; iz < size; iz++) {
         for (u32 ix = 0; ix < size; ix++) {
             f32 x = hf->origin.x + (f32)ix * cell_size;
             f32 z = hf->origin.z + (f32)iz * cell_size;
             f32 bowl = (x * x + z * z) * 0.006f;
-            f32 h = bowl
-                  + 1.6f * sinf(x * 0.19f + p1) * cosf(z * 0.16f + p2)
-                  + 0.7f * sinf(x * 0.47f + p3) * sinf(z * 0.41f + p4)
-                  + 0.3f * cosf(x * 0.83f + p5) * cosf(z * 0.77f + p6);
+            f32 waves = 1.6f * sinf(x * 0.19f + p1) * cosf(z * 0.16f + p2)
+                      + 0.7f * sinf(x * 0.47f + p3) * sinf(z * 0.41f + p4)
+                      + 0.3f * cosf(x * 0.83f + p5) * cosf(z * 0.77f + p6);
+            f32 h = roughness * (bowl + waves);
+            hf->heights[(u64)iz * size + ix] = h;
+            hf->min_height = f_min(hf->min_height, h);
+            hf->max_height = f_max(hf->max_height, h);
+        }
+    }
+}
+
+void heightfield_init_slope(Heightfield* hf, struct Arena* arena, u32 size, f32 cell_size, f32 grade)
+{
+    heightfield_alloc(hf, arena, size, cell_size);
+    for (u32 iz = 0; iz < size; iz++) {
+        for (u32 ix = 0; ix < size; ix++) {
+            f32 x = hf->origin.x + (f32)ix * cell_size;
+            f32 h = f_max(x, 0.0f) * grade;
             hf->heights[(u64)iz * size + ix] = h;
             hf->min_height = f_min(hf->min_height, h);
             hf->max_height = f_max(hf->max_height, h);

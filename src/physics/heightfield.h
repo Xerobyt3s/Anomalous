@@ -15,7 +15,8 @@ typedef struct Heightfield {
     f32 max_height;
 } Heightfield;
 
-void heightfield_init_procedural(Heightfield* hf, struct Arena* arena, u32 size, f32 cell_size, u32 seed);
+void heightfield_init_procedural(Heightfield* hf, struct Arena* arena, u32 size, f32 cell_size, u32 seed, f32 roughness);
+void heightfield_init_slope(Heightfield* hf, struct Arena* arena, u32 size, f32 cell_size, f32 grade);
 f32  heightfield_height_at(const Heightfield* hf, u32 ix, u32 iz);
 f32  heightfield_sample(const Heightfield* hf, f32 x, f32 z);
 Vec3 heightfield_normal(const Heightfield* hf, f32 x, f32 z);

@@ -19,6 +19,15 @@
     <Filter Include="physics">
       <UniqueIdentifier>{a1000000-0000-0000-0000-000000000006}</UniqueIdentifier>
     </Filter>
+    <Filter Include="vehicle">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-000000000007}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ui">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-000000000008}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="assets">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-000000000009}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\main.c" />
@@ -28,8 +37,26 @@
     <ClCompile Include="src\core\log.c">
       <Filter>core</Filter>
     </ClCompile>
+    <ClCompile Include="src\core\config.c">
+      <Filter>core</Filter>
+    </ClCompile>
     <ClCompile Include="src\core\pool.c">
       <Filter>core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\ui.c">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vehicle\drivetrain.c">
+      <Filter>vehicle</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vehicle\tire.c">
+      <Filter>vehicle</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vehicle\vehicle.c">
+      <Filter>vehicle</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vehicle\vehicle_config.c">
+      <Filter>vehicle</Filter>
     </ClCompile>
     <ClCompile Include="src\physics\collide.c">
       <Filter>physics</Filter>
@@ -72,8 +99,26 @@
     <ClInclude Include="src\core\log.h">
       <Filter>core</Filter>
     </ClInclude>
+    <ClInclude Include="src\core\config.h">
+      <Filter>core</Filter>
+    </ClInclude>
     <ClInclude Include="src\core\pool.h">
       <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\ui.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vehicle\drivetrain.h">
+      <Filter>vehicle</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vehicle\tire.h">
+      <Filter>vehicle</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vehicle\vehicle.h">
+      <Filter>vehicle</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vehicle\vehicle_config.h">
+      <Filter>vehicle</Filter>
     </ClInclude>
     <ClInclude Include="src\core\rng.h">
       <Filter>core</Filter>
@@ -121,6 +166,15 @@
     </None>
     <None Include="shaders\text.frag">
       <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\debug2d.vert">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\debug2d.frag">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="assets\cars\wagon.cfg">
+      <Filter>assets</Filter>
     </None>
   </ItemGroup>
 </Project>

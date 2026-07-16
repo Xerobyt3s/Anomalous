@@ -88,6 +88,7 @@
     <ClCompile Include="src\main.c" />
     <ClCompile Include="src\core\arena.c" />
     <ClCompile Include="src\core\log.c" />
+    <ClCompile Include="src\core\config.c" />
     <ClCompile Include="src\core\pool.c" />
     <ClCompile Include="src\physics\collide.c" />
     <ClCompile Include="src\physics\heightfield.c" />
@@ -99,11 +100,17 @@
     <ClCompile Include="src\render\debug_draw.c" />
     <ClCompile Include="src\render\render.c" />
     <ClCompile Include="src\render\text.c" />
+    <ClCompile Include="src\ui\ui.c" />
+    <ClCompile Include="src\vehicle\drivetrain.c" />
+    <ClCompile Include="src\vehicle\tire.c" />
+    <ClCompile Include="src\vehicle\vehicle.c" />
+    <ClCompile Include="src\vehicle\vehicle_config.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\core\types.h" />
     <ClInclude Include="src\core\arena.h" />
     <ClInclude Include="src\core\log.h" />
+    <ClInclude Include="src\core\config.h" />
     <ClInclude Include="src\core\pool.h" />
     <ClInclude Include="src\core\rng.h" />
     <ClInclude Include="src\physics\collide.h" />
@@ -116,12 +123,20 @@
     <ClInclude Include="src\render\debug_draw.h" />
     <ClInclude Include="src\render\render.h" />
     <ClInclude Include="src\render\text.h" />
+    <ClInclude Include="src\ui\ui.h" />
+    <ClInclude Include="src\vehicle\drivetrain.h" />
+    <ClInclude Include="src\vehicle\tire.h" />
+    <ClInclude Include="src\vehicle\vehicle.h" />
+    <ClInclude Include="src\vehicle\vehicle_config.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\debug.vert" />
     <None Include="shaders\debug.frag" />
+    <None Include="shaders\debug2d.vert" />
+    <None Include="shaders\debug2d.frag" />
     <None Include="shaders\text.vert" />
     <None Include="shaders\text.frag" />
+    <None Include="assets\cars\wagon.cfg" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
