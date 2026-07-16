@@ -28,6 +28,12 @@
     <Filter Include="assets">
       <UniqueIdentifier>{a1000000-0000-0000-0000-000000000009}</UniqueIdentifier>
     </Filter>
+    <Filter Include="world">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-00000000000a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="tools">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-00000000000b}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\main.c" />
@@ -39,6 +45,21 @@
     </ClCompile>
     <ClCompile Include="src\core\config.c">
       <Filter>core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\assets\assets.c">
+      <Filter>assets</Filter>
+    </ClCompile>
+    <ClCompile Include="src\render\terrain_render.c">
+      <Filter>render</Filter>
+    </ClCompile>
+    <ClCompile Include="src\world\terrain.c">
+      <Filter>world</Filter>
+    </ClCompile>
+    <ClCompile Include="src\world\world.c">
+      <Filter>world</Filter>
+    </ClCompile>
+    <ClCompile Include="src\world\zone.c">
+      <Filter>world</Filter>
     </ClCompile>
     <ClCompile Include="src\core\pool.c">
       <Filter>core</Filter>
@@ -101,6 +122,24 @@
     </ClInclude>
     <ClInclude Include="src\core\config.h">
       <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\assets\assets.h">
+      <Filter>assets</Filter>
+    </ClInclude>
+    <ClInclude Include="src\assets\mesh_format.h">
+      <Filter>assets</Filter>
+    </ClInclude>
+    <ClInclude Include="src\render\terrain_render.h">
+      <Filter>render</Filter>
+    </ClInclude>
+    <ClInclude Include="src\world\terrain.h">
+      <Filter>world</Filter>
+    </ClInclude>
+    <ClInclude Include="src\world\world.h">
+      <Filter>world</Filter>
+    </ClInclude>
+    <ClInclude Include="src\world\zone.h">
+      <Filter>world</Filter>
     </ClInclude>
     <ClInclude Include="src\core\pool.h">
       <Filter>core</Filter>
@@ -175,6 +214,30 @@
     </None>
     <None Include="assets\cars\wagon.cfg">
       <Filter>assets</Filter>
+    </None>
+    <None Include="assets\zones\testzone\zone.cfg">
+      <Filter>assets</Filter>
+    </None>
+    <None Include="shaders\mesh.vert">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\mesh.frag">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\terrain.vert">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\terrain.frag">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="tools\make_meshes.py">
+      <Filter>tools</Filter>
+    </None>
+    <None Include="tools\make_testzone.py">
+      <Filter>tools</Filter>
+    </None>
+    <None Include="tools\mesh_export.py">
+      <Filter>tools</Filter>
     </None>
   </ItemGroup>
 </Project>

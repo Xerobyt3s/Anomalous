@@ -235,6 +235,7 @@ void vehicle_tick(Vehicle* v, struct PhysWorld* world, f32 dt)
     Vec3 up = mat3_mul_vec3(rot, v3(0.0f, 1.0f, 0.0f));
     TireParams tp = tire_derive_params(cfg);
     f32 tire_load_clamp = cfg->mass * VEHICLE_GRAVITY * VEHICLE_TIRE_LOAD_CLAMP_FRAC;
+    f32 wheel_inertia = f_max(0.5f * cfg->wheel_mass * cfg->wheels[0].radius * cfg->wheels[0].radius, 0.05f);
     f32 total_load = 0.0f;
 
     for (u32 i = 0; i < VEHICLE_WHEEL_COUNT; i++) {
@@ -302,25 +303,36 @@ void vehicle_tick(Vehicle* v, struct PhysWorld* world, f32 dt)
 
         Vec3 force_tire = force_pacejka;
         if (patch_speed < cfg->tire_low_speed) {
-            if (!w->stick_active) {
-                w->stick_active = 1;
-                w->stick_pos = hit.point;
-            }
-            w->stick_pos = vec3_add(w->stick_pos, vec3_scale(long_dir, v_wheel * dt));
-            Vec3 error = vec3_sub(hit.point, w->stick_pos);
-            error = vec3_sub(error, vec3_scale(n, vec3_dot(error, n)));
-            Vec3 v_tangent = vec3_sub(v_patch, vec3_scale(n, vec3_dot(v_patch, n)));
             f32 patch_mass = f_max(tire_load / VEHICLE_GRAVITY, VEHICLE_STICK_MIN_MASS);
-            f32 damping = 2.0f * sqrtf(VEHICLE_STICK_STIFFNESS * patch_mass);
-            Vec3 force_stick = vec3_sub(vec3_scale(error, -VEHICLE_STICK_STIFFNESS),
-                                        vec3_scale(v_tangent, damping));
-            f32 stick_mag = vec3_length(force_stick);
-            if (stick_mag > limit && stick_mag > 1e-6f) {
-                force_stick = vec3_scale(force_stick, limit / stick_mag);
-                w->stick_pos = vec3_lerp(w->stick_pos, hit.point, 0.05f);
+            f32 brake_request = v->input.brake * cfg->brake_torque * wc->brake_share * v->effects.brake_mul;
+            if (v->input.handbrake && !wc->steered) {
+                brake_request += cfg->handbrake_torque;
+            }
+            b32 locked = brake_request > 1.0f && f_abs(v_wheel) < 0.3f;
+            f32 spin_mass = wheel_inertia / f_max(r_eff * r_eff, 1e-4f);
+            f32 m_eff_long = locked ? patch_mass
+                           : (patch_mass * spin_mass) / (patch_mass + spin_mass);
+            f32 fx_low = f_clamp(slip_vel * m_eff_long / dt, -limit, limit);
+            f32 fy_limit = limit * lat_grip_mul;
+            f32 fy_low = f_clamp(-v_lat * patch_mass / dt, -fy_limit, fy_limit);
+            if (locked) {
+                if (!w->stick_active) {
+                    w->stick_active = 1;
+                    w->stick_pos = hit.point;
+                }
+                Vec3 error = vec3_sub(hit.point, w->stick_pos);
+                error = vec3_sub(error, vec3_scale(n, vec3_dot(error, n)));
+                f32 fx_spring = -vec3_dot(error, long_dir) * VEHICLE_STICK_STIFFNESS;
+                fx_low = f_clamp(fx_low + fx_spring, -limit, limit);
+                if (f_abs(fx_low) >= limit * 0.999f) {
+                    w->stick_pos = vec3_lerp(w->stick_pos, hit.point, 0.05f);
+                }
+            } else {
+                w->stick_active = 0;
             }
             f32 blend = f_clamp01(patch_speed / f_max(cfg->tire_low_speed, 0.05f));
-            force_tire = vec3_lerp(force_stick, force_pacejka, blend);
+            Vec3 force_low = vec3_add(vec3_scale(long_dir, fx_low), vec3_scale(lat_dir, fy_low));
+            force_tire = vec3_lerp(force_low, force_pacejka, blend);
         } else {
             w->stick_active = 0;
         }
@@ -339,7 +351,6 @@ void vehicle_tick(Vehicle* v, struct PhysWorld* world, f32 dt)
     f32 throttle = v->effects.ignition_ok ? v->input.throttle : 0.0f;
     drivetrain_tick(&v->train, cfg, v->wheels, throttle, v->effects.engine_power_mul, dt);
 
-    f32 wheel_inertia = f_max(0.5f * cfg->wheel_mass * cfg->wheels[0].radius * cfg->wheels[0].radius, 0.05f);
     for (u32 i = 0; i < VEHICLE_WHEEL_COUNT; i++) {
         Wheel* w = &v->wheels[i];
         const WheelConfig* wc = &cfg->wheels[i];

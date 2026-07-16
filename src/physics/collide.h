@@ -4,6 +4,7 @@
 #include "math/vmath.h"
 
 struct Heightfield;
+struct StaticGrid;
 
 typedef struct SphereContact {
     Vec3 point;
@@ -12,3 +13,4 @@ typedef struct SphereContact {
 } SphereContact;
 
 b32 collide_sphere_heightfield(const struct Heightfield* hf, Sphere sphere, SphereContact* out_contact);
+u32 collide_sphere_statics(const struct StaticGrid* grid, Sphere sphere, SphereContact* out_contacts, u32 max_contacts);

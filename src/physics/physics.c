@@ -9,12 +9,239 @@
 #define PHYS_PUSHOUT_BETA 0.5f
 #define PHYS_RESTITUTION_MIN_SPEED 1.0f
 
+#define STATIC_GRID_CELL 8.0f
+#define STATIC_RAY_EPS 1e-4f
+#define STATIC_T_INF 1e30f
+
 void phys_init(PhysWorld* world, struct Arena* arena, const struct Heightfield* hf)
 {
     pool_init(&world->bodies, arena, sizeof(RigidBody), PHYS_MAX_BODIES);
     world->hf = hf;
     world->gravity = v3(0.0f, PHYS_GRAVITY_Y, 0.0f);
     world->contact_count = 0;
+    StaticGrid zero = {0};
+    world->statics = zero;
+}
+
+void phys_statics_reserve(PhysWorld* world, struct Arena* arena, u32 max_tris)
+{
+    world->statics.tris = arena_push_array(arena, StaticTri, max_tris);
+    world->statics.tri_capacity = max_tris;
+    world->statics.tri_count = 0;
+    world->statics.built = 0;
+}
+
+void phys_add_static_tri(PhysWorld* world, Vec3 a, Vec3 b, Vec3 c)
+{
+    StaticGrid* grid = &world->statics;
+    ASSERT(grid->tris && grid->tri_count < grid->tri_capacity && !grid->built);
+    if (!grid->tris || grid->tri_count >= grid->tri_capacity) {
+        return;
+    }
+    StaticTri* tri = &grid->tris[grid->tri_count++];
+    tri->a = a;
+    tri->b = b;
+    tri->c = c;
+}
+
+static void statics_tri_cell_range(const StaticGrid* grid, const StaticTri* tri,
+                                   i32* out_x0, i32* out_x1, i32* out_z0, i32* out_z1)
+{
+    Vec3 lo = vec3_min(tri->a, vec3_min(tri->b, tri->c));
+    Vec3 hi = vec3_max(tri->a, vec3_max(tri->b, tri->c));
+    *out_x0 = (i32)f_clamp((lo.x - grid->origin.x) / grid->cell_size, 0.0f, (f32)(grid->cells_x - 1));
+    *out_x1 = (i32)f_clamp((hi.x - grid->origin.x) / grid->cell_size, 0.0f, (f32)(grid->cells_x - 1));
+    *out_z0 = (i32)f_clamp((lo.z - grid->origin.z) / grid->cell_size, 0.0f, (f32)(grid->cells_z - 1));
+    *out_z1 = (i32)f_clamp((hi.z - grid->origin.z) / grid->cell_size, 0.0f, (f32)(grid->cells_z - 1));
+}
+
+void phys_statics_build(PhysWorld* world, struct Arena* arena)
+{
+    StaticGrid* grid = &world->statics;
+    if (!grid->tri_count) {
+        grid->built = 0;
+        return;
+    }
+
+    Aabb bounds = aabb_empty();
+    for (u32 i = 0; i < grid->tri_count; i++) {
+        bounds = aabb_expand(bounds, grid->tris[i].a);
+        bounds = aabb_expand(bounds, grid->tris[i].b);
+        bounds = aabb_expand(bounds, grid->tris[i].c);
+    }
+    grid->cell_size = STATIC_GRID_CELL;
+    grid->origin = v3(bounds.min.x - 0.5f, 0.0f, bounds.min.z - 0.5f);
+    grid->min_y = bounds.min.y - 0.5f;
+    grid->max_y = bounds.max.y + 0.5f;
+    grid->cells_x = (u32)((bounds.max.x - grid->origin.x) / grid->cell_size) + 2;
+    grid->cells_z = (u32)((bounds.max.z - grid->origin.z) / grid->cell_size) + 2;
+
+    u32 cell_count = grid->cells_x * grid->cells_z;
+    u32* counts = arena_push_array(arena, u32, cell_count + 1);
+    for (u32 i = 0; i <= cell_count; i++) {
+        counts[i] = 0;
+    }
+    u64 total_refs = 0;
+    for (u32 i = 0; i < grid->tri_count; i++) {
+        i32 x0, x1, z0, z1;
+        statics_tri_cell_range(grid, &grid->tris[i], &x0, &x1, &z0, &z1);
+        for (i32 z = z0; z <= z1; z++) {
+            for (i32 x = x0; x <= x1; x++) {
+                counts[(u32)z * grid->cells_x + (u32)x]++;
+                total_refs++;
+            }
+        }
+    }
+    grid->cell_first = arena_push_array(arena, u32, cell_count + 1);
+    u32 running = 0;
+    for (u32 i = 0; i < cell_count; i++) {
+        grid->cell_first[i] = running;
+        running += counts[i];
+        counts[i] = grid->cell_first[i];
+    }
+    grid->cell_first[cell_count] = running;
+    grid->cell_tris = arena_push_array(arena, u32, total_refs ? total_refs : 1);
+    for (u32 i = 0; i < grid->tri_count; i++) {
+        i32 x0, x1, z0, z1;
+        statics_tri_cell_range(grid, &grid->tris[i], &x0, &x1, &z0, &z1);
+        for (i32 z = z0; z <= z1; z++) {
+            for (i32 x = x0; x <= x1; x++) {
+                grid->cell_tris[counts[(u32)z * grid->cells_x + (u32)x]++] = i;
+            }
+        }
+    }
+    grid->built = 1;
+}
+
+static b32 statics_raycast(const StaticGrid* grid, Ray ray, f32 max_t, f32* out_t, Vec3* out_normal)
+{
+    if (!grid->built) {
+        return 0;
+    }
+    Aabb bounds;
+    bounds.min = v3(grid->origin.x, grid->min_y, grid->origin.z);
+    bounds.max = v3(grid->origin.x + (f32)grid->cells_x * grid->cell_size, grid->max_y,
+                    grid->origin.z + (f32)grid->cells_z * grid->cell_size);
+    f32 t_cur = 0.0f;
+    if (!aabb_contains_point(bounds, ray.origin)) {
+        if (!ray_vs_aabb(ray, bounds, max_t, &t_cur)) {
+            return 0;
+        }
+        t_cur += STATIC_RAY_EPS;
+    }
+
+    Vec3 p = vec3_add(ray.origin, vec3_scale(ray.dir, t_cur));
+    i32 max_ix = (i32)grid->cells_x - 1;
+    i32 max_iz = (i32)grid->cells_z - 1;
+    i32 ix = (i32)f_clamp((p.x - grid->origin.x) / grid->cell_size, 0.0f, (f32)max_ix);
+    i32 iz = (i32)f_clamp((p.z - grid->origin.z) / grid->cell_size, 0.0f, (f32)max_iz);
+    i32 step_x = ray.dir.x > 0.0f ? 1 : -1;
+    i32 step_z = ray.dir.z > 0.0f ? 1 : -1;
+    f32 t_max_x = STATIC_T_INF, t_max_z = STATIC_T_INF;
+    f32 t_delta_x = STATIC_T_INF, t_delta_z = STATIC_T_INF;
+    if (f_abs(ray.dir.x) > 1e-9f) {
+        f32 boundary = grid->origin.x + (f32)(ix + (step_x > 0 ? 1 : 0)) * grid->cell_size;
+        t_max_x = t_cur + (boundary - p.x) / ray.dir.x;
+        t_delta_x = grid->cell_size / f_abs(ray.dir.x);
+    }
+    if (f_abs(ray.dir.z) > 1e-9f) {
+        f32 boundary = grid->origin.z + (f32)(iz + (step_z > 0 ? 1 : 0)) * grid->cell_size;
+        t_max_z = t_cur + (boundary - p.z) / ray.dir.z;
+        t_delta_z = grid->cell_size / f_abs(ray.dir.z);
+    }
+
+    f32 best_t = max_t;
+    Vec3 best_normal = v3(0.0f, 1.0f, 0.0f);
+    b32 found = 0;
+    while (ix >= 0 && ix <= max_ix && iz >= 0 && iz <= max_iz && t_cur <= best_t) {
+        u32 cell = (u32)iz * grid->cells_x + (u32)ix;
+        for (u32 ref = grid->cell_first[cell]; ref < grid->cell_first[cell + 1]; ref++) {
+            const StaticTri* tri = &grid->tris[grid->cell_tris[ref]];
+            RayHitTri hit;
+            if (ray_vs_triangle(ray, tri->a, tri->b, tri->c, best_t, &hit) && hit.t < best_t) {
+                best_t = hit.t;
+                Vec3 n = vec3_normalize(vec3_cross(vec3_sub(tri->b, tri->a), vec3_sub(tri->c, tri->a)));
+                if (vec3_dot(n, ray.dir) > 0.0f) {
+                    n = vec3_negate(n);
+                }
+                best_normal = n;
+                found = 1;
+            }
+        }
+        if (t_max_x < t_max_z) {
+            t_cur = t_max_x;
+            t_max_x += t_delta_x;
+            ix += step_x;
+        } else {
+            t_cur = t_max_z;
+            t_max_z += t_delta_z;
+            iz += step_z;
+        }
+    }
+    if (found) {
+        if (out_t) {
+            *out_t = best_t;
+        }
+        if (out_normal) {
+            *out_normal = best_normal;
+        }
+    }
+    return found;
+}
+
+u32 collide_sphere_statics(const StaticGrid* grid, Sphere sphere, SphereContact* out_contacts, u32 max_contacts)
+{
+    if (!grid->built || !max_contacts) {
+        return 0;
+    }
+    f32 r = sphere.radius;
+    i32 max_ix = (i32)grid->cells_x - 1;
+    i32 max_iz = (i32)grid->cells_z - 1;
+    i32 x0 = (i32)f_clamp((sphere.center.x - r - grid->origin.x) / grid->cell_size, 0.0f, (f32)max_ix);
+    i32 x1 = (i32)f_clamp((sphere.center.x + r - grid->origin.x) / grid->cell_size, 0.0f, (f32)max_ix);
+    i32 z0 = (i32)f_clamp((sphere.center.z - r - grid->origin.z) / grid->cell_size, 0.0f, (f32)max_iz);
+    i32 z1 = (i32)f_clamp((sphere.center.z + r - grid->origin.z) / grid->cell_size, 0.0f, (f32)max_iz);
+
+    u32 count = 0;
+    for (i32 z = z0; z <= z1; z++) {
+        for (i32 x = x0; x <= x1; x++) {
+            u32 cell = (u32)z * grid->cells_x + (u32)x;
+            for (u32 ref = grid->cell_first[cell]; ref < grid->cell_first[cell + 1]; ref++) {
+                const StaticTri* tri = &grid->tris[grid->cell_tris[ref]];
+                Vec3 cp = closest_point_on_triangle(sphere.center, tri->a, tri->b, tri->c);
+                Vec3 delta = vec3_sub(sphere.center, cp);
+                f32 dist_sq = vec3_length_sq(delta);
+                if (dist_sq > r * r) {
+                    continue;
+                }
+                f32 dist = sqrtf(dist_sq);
+                Vec3 n;
+                if (dist > 1e-6f) {
+                    n = vec3_scale(delta, 1.0f / dist);
+                } else {
+                    n = vec3_normalize(vec3_cross(vec3_sub(tri->b, tri->a), vec3_sub(tri->c, tri->a)));
+                }
+                SphereContact contact;
+                contact.point = cp;
+                contact.normal = n;
+                contact.depth = r - dist;
+                if (count < max_contacts) {
+                    out_contacts[count++] = contact;
+                } else {
+                    u32 shallowest = 0;
+                    for (u32 i = 1; i < max_contacts; i++) {
+                        if (out_contacts[i].depth < out_contacts[shallowest].depth) {
+                            shallowest = i;
+                        }
+                    }
+                    if (contact.depth > out_contacts[shallowest].depth) {
+                        out_contacts[shallowest] = contact;
+                    }
+                }
+            }
+        }
+    }
+    return count;
 }
 
 BodyHandle phys_body_create_box(PhysWorld* world, Vec3 pos, Quat rot, Vec3 half_extents, f32 mass)
@@ -164,16 +391,22 @@ void phys_tick(PhysWorld* world, f32 dt)
             Sphere sphere;
             sphere.center = vec3_add(body->pos, mat3_mul_vec3(rot, body->sphere_offsets[i]));
             sphere.radius = body->sphere_radius;
-            SphereContact contact;
-            if (!collide_sphere_heightfield(world->hf, sphere, &contact)) {
-                continue;
+            SphereContact contacts[4];
+            u32 contact_count = 0;
+            if (collide_sphere_heightfield(world->hf, sphere, &contacts[0])) {
+                contact_count = 1;
             }
-            resolve_contact(body, &contact);
-            if (world->contact_count < PHYS_MAX_CONTACTS) {
-                PhysContact* record = &world->contacts[world->contact_count++];
-                record->point = contact.point;
-                record->normal = contact.normal;
-                record->depth = contact.depth;
+            contact_count += collide_sphere_statics(&world->statics, sphere,
+                                                    contacts + contact_count,
+                                                    ARRAY_COUNT(contacts) - contact_count);
+            for (u32 c = 0; c < contact_count; c++) {
+                resolve_contact(body, &contacts[c]);
+                if (world->contact_count < PHYS_MAX_CONTACTS) {
+                    PhysContact* record = &world->contacts[world->contact_count++];
+                    record->point = contacts[c].point;
+                    record->normal = contacts[c].normal;
+                    record->depth = contacts[c].depth;
+                }
             }
         }
     }
@@ -181,15 +414,26 @@ void phys_tick(PhysWorld* world, f32 dt)
 
 b32 phys_raycast(const PhysWorld* world, Ray ray, f32 max_t, PhysRayHit* out_hit)
 {
+    f32 best_t = max_t;
+    Vec3 best_normal = v3(0.0f, 1.0f, 0.0f);
+    b32 found = 0;
+
     f32 t;
     Vec3 normal;
-    if (!heightfield_raycast(world->hf, ray, max_t, &t, &normal)) {
-        return 0;
+    if (heightfield_raycast(world->hf, ray, best_t, &t, &normal)) {
+        best_t = t;
+        best_normal = normal;
+        found = 1;
     }
-    if (out_hit) {
-        out_hit->t = t;
-        out_hit->point = vec3_add(ray.origin, vec3_scale(ray.dir, t));
-        out_hit->normal = normal;
+    if (statics_raycast(&world->statics, ray, best_t, &t, &normal)) {
+        best_t = t;
+        best_normal = normal;
+        found = 1;
     }
-    return 1;
+    if (found && out_hit) {
+        out_hit->t = best_t;
+        out_hit->point = vec3_add(ray.origin, vec3_scale(ray.dir, best_t));
+        out_hit->normal = best_normal;
+    }
+    return found;
 }

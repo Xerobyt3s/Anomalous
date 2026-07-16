@@ -21,6 +21,8 @@ typedef struct Plane { Vec3 normal; f32 d; } Plane;
 
 typedef struct RayHitTri { f32 t, u, v; } RayHitTri;
 
+typedef struct Frustum { Plane planes[6]; } Frustum;
+
 static inline f32 f_min(f32 a, f32 b) { return a < b ? a : b; }
 static inline f32 f_max(f32 a, f32 b) { return a > b ? a : b; }
 static inline f32 f_abs(f32 x) { return fabsf(x); }
@@ -213,6 +215,9 @@ Aabb aabb_union(Aabb a, Aabb b);
 Aabb aabb_transform(Mat4 m, Aabb box);
 b32  aabb_contains_point(Aabb box, Vec3 point);
 b32  aabb_vs_aabb(Aabb a, Aabb b);
+
+Frustum frustum_from_view_proj(Mat4 view_proj);
+b32     frustum_test_aabb(const Frustum* frustum, Aabb box);
 
 b32  ray_vs_aabb(Ray ray, Aabb box, f32 max_t, f32* out_t);
 b32  ray_vs_sphere(Ray ray, Sphere sphere, f32 max_t, f32* out_t);

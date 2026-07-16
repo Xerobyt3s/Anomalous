@@ -86,6 +86,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\main.c" />
+    <ClCompile Include="src\assets\assets.c" />
     <ClCompile Include="src\core\arena.c" />
     <ClCompile Include="src\core\log.c" />
     <ClCompile Include="src\core\config.c" />
@@ -99,14 +100,20 @@
     <ClCompile Include="src\render\camera.c" />
     <ClCompile Include="src\render\debug_draw.c" />
     <ClCompile Include="src\render\render.c" />
+    <ClCompile Include="src\render\terrain_render.c" />
     <ClCompile Include="src\render\text.c" />
     <ClCompile Include="src\ui\ui.c" />
     <ClCompile Include="src\vehicle\drivetrain.c" />
     <ClCompile Include="src\vehicle\tire.c" />
     <ClCompile Include="src\vehicle\vehicle.c" />
     <ClCompile Include="src\vehicle\vehicle_config.c" />
+    <ClCompile Include="src\world\terrain.c" />
+    <ClCompile Include="src\world\world.c" />
+    <ClCompile Include="src\world\zone.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\assets\assets.h" />
+    <ClInclude Include="src\assets\mesh_format.h" />
     <ClInclude Include="src\core\types.h" />
     <ClInclude Include="src\core\arena.h" />
     <ClInclude Include="src\core\log.h" />
@@ -122,12 +129,16 @@
     <ClInclude Include="src\render\camera.h" />
     <ClInclude Include="src\render\debug_draw.h" />
     <ClInclude Include="src\render\render.h" />
+    <ClInclude Include="src\render\terrain_render.h" />
     <ClInclude Include="src\render\text.h" />
     <ClInclude Include="src\ui\ui.h" />
     <ClInclude Include="src\vehicle\drivetrain.h" />
     <ClInclude Include="src\vehicle\tire.h" />
     <ClInclude Include="src\vehicle\vehicle.h" />
     <ClInclude Include="src\vehicle\vehicle_config.h" />
+    <ClInclude Include="src\world\terrain.h" />
+    <ClInclude Include="src\world\world.h" />
+    <ClInclude Include="src\world\zone.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\debug.vert" />
@@ -136,7 +147,15 @@
     <None Include="shaders\debug2d.frag" />
     <None Include="shaders\text.vert" />
     <None Include="shaders\text.frag" />
+    <None Include="shaders\mesh.vert" />
+    <None Include="shaders\mesh.frag" />
+    <None Include="shaders\terrain.vert" />
+    <None Include="shaders\terrain.frag" />
     <None Include="assets\cars\wagon.cfg" />
+    <None Include="assets\zones\testzone\zone.cfg" />
+    <None Include="tools\make_meshes.py" />
+    <None Include="tools\make_testzone.py" />
+    <None Include="tools\mesh_export.py" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

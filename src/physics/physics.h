@@ -44,15 +44,40 @@ typedef struct PhysRayHit {
     Vec3 normal;
 } PhysRayHit;
 
+typedef struct StaticTri {
+    Vec3 a;
+    Vec3 b;
+    Vec3 c;
+} StaticTri;
+
+typedef struct StaticGrid {
+    StaticTri* tris;
+    u32 tri_count;
+    u32 tri_capacity;
+    u32* cell_first;
+    u32* cell_tris;
+    u32 cells_x;
+    u32 cells_z;
+    Vec3 origin;
+    f32 cell_size;
+    f32 min_y;
+    f32 max_y;
+    b32 built;
+} StaticGrid;
+
 typedef struct PhysWorld {
     Pool bodies;
     const struct Heightfield* hf;
+    StaticGrid statics;
     Vec3 gravity;
     PhysContact contacts[PHYS_MAX_CONTACTS];
     u32 contact_count;
 } PhysWorld;
 
 void       phys_init(PhysWorld* world, struct Arena* arena, const struct Heightfield* hf);
+void       phys_statics_reserve(PhysWorld* world, struct Arena* arena, u32 max_tris);
+void       phys_add_static_tri(PhysWorld* world, Vec3 a, Vec3 b, Vec3 c);
+void       phys_statics_build(PhysWorld* world, struct Arena* arena);
 BodyHandle phys_body_create_box(PhysWorld* world, Vec3 pos, Quat rot, Vec3 half_extents, f32 mass);
 void       phys_body_destroy(PhysWorld* world, BodyHandle handle);
 RigidBody* phys_body(PhysWorld* world, BodyHandle handle);

@@ -9,9 +9,14 @@
 #include "render/render.h"
 #include "render/debug_draw.h"
 #include "render/text.h"
+#include "render/terrain_render.h"
 #include "physics/heightfield.h"
 #include "physics/physics.h"
 #include "vehicle/vehicle.h"
+#include "assets/assets.h"
+#include "world/world.h"
+#include "world/terrain.h"
+#include "world/zone.h"
 #include "ui/ui.h"
 
 #include <stdio.h>
@@ -19,10 +24,7 @@
 
 #define FIXED_DT (1.0f / 120.0f)
 #define MAX_FRAME_DT 0.25
-#define TERRAIN_SIZE 96
-#define TERRAIN_CELL 1.0f
-#define TERRAIN_SEED 1234u
-#define TERRAIN_ROUGHNESS 0.35f
+#define ZONE_DIR "assets/zones/testzone"
 #define WAGON_CFG_PATH "assets/cars/wagon.cfg"
 #define SCENE_PHYS_SEED 1234u
 #define SCENE_PHYS_BODIES 24
@@ -41,14 +43,16 @@ typedef struct Telem {
 } Telem;
 
 static GameState s_game;
-static Heightfield s_heightfield;
+static Terrain s_terrain;
+static World s_world;
 static PhysWorld s_phys;
 static Vehicle s_vehicle;
+static ZoneSpawn s_zone_spawn;
 static Camera s_camera;
-static Rng s_spawn_rng;
 static f32 s_fps;
-static b32 s_show_telemetry = 1;
+static b32 s_show_telemetry;
 static b32 s_show_phys_debug;
+static b32 s_show_collision;
 static b32 s_show_tuning;
 static b32 s_slow_mo;
 static b32 s_free_cam;
@@ -86,14 +90,9 @@ static void spawn_random_box(PhysWorld* world, Rng* rng, Vec3 pos, Vec3 vel)
     spawn_box(world, pos, rot, half_extents, vel);
 }
 
-static Vec3 vehicle_spawn_pos(const Heightfield* hf, f32 x, f32 z)
-{
-    return v3(x, heightfield_sample(hf, x, z) + 1.0f, z);
-}
-
 static void reset_car(void)
 {
-    vehicle_teleport(&s_vehicle, &s_phys, vehicle_spawn_pos(&s_heightfield, 0.0f, 0.0f), 0.0f);
+    vehicle_teleport(&s_vehicle, &s_phys, s_zone_spawn.car_pos, s_zone_spawn.car_yaw);
 }
 
 static void game_tick(f32 dt)
@@ -110,29 +109,35 @@ static void game_tick(f32 dt)
     s_game.tick_count++;
 }
 
-static void draw_terrain(void)
+static void draw_collision_wireframe(void)
 {
-    const Heightfield* hf = &s_heightfield;
-    u32 minor = dd_rgba(40, 70, 50, 255);
-    u32 major = dd_rgba(60, 110, 75, 255);
-    for (u32 iz = 0; iz < hf->size_z; iz++) {
-        u32 color = (iz % 8 == 0) ? major : minor;
-        for (u32 ix = 0; ix + 1 < hf->size_x; ix++) {
-            Vec3 a = v3(hf->origin.x + (f32)ix * hf->cell_size, heightfield_height_at(hf, ix, iz),
-                        hf->origin.z + (f32)iz * hf->cell_size);
-            Vec3 b = v3(hf->origin.x + (f32)(ix + 1) * hf->cell_size, heightfield_height_at(hf, ix + 1, iz),
-                        hf->origin.z + (f32)iz * hf->cell_size);
-            dd_line(a, b, color);
+    const StaticGrid* grid = &s_phys.statics;
+    Vec3 cam = r_camera_pos();
+    if (grid->built) {
+        for (u32 i = 0; i < grid->tri_count; i++) {
+            const StaticTri* tri = &grid->tris[i];
+            if (vec3_distance_sq(tri->a, cam) > 80.0f * 80.0f) {
+                continue;
+            }
+            dd_line(tri->a, tri->b, DD_ORANGE);
+            dd_line(tri->b, tri->c, DD_ORANGE);
+            dd_line(tri->c, tri->a, DD_ORANGE);
         }
     }
-    for (u32 ix = 0; ix < hf->size_x; ix++) {
-        u32 color = (ix % 8 == 0) ? major : minor;
-        for (u32 iz = 0; iz + 1 < hf->size_z; iz++) {
-            Vec3 a = v3(hf->origin.x + (f32)ix * hf->cell_size, heightfield_height_at(hf, ix, iz),
-                        hf->origin.z + (f32)iz * hf->cell_size);
-            Vec3 b = v3(hf->origin.x + (f32)ix * hf->cell_size, heightfield_height_at(hf, ix, iz + 1),
-                        hf->origin.z + (f32)(iz + 1) * hf->cell_size);
-            dd_line(a, b, color);
+    const Heightfield* hf = &s_terrain.hf;
+    i32 cam_ix = (i32)((cam.x - hf->origin.x) / hf->cell_size);
+    i32 cam_iz = (i32)((cam.z - hf->origin.z) / hf->cell_size);
+    i32 radius = 14;
+    for (i32 iz = cam_iz - radius; iz < cam_iz + radius; iz++) {
+        for (i32 ix = cam_ix - radius; ix < cam_ix + radius; ix++) {
+            if (ix < 0 || iz < 0 || ix + 1 >= (i32)hf->size_x || iz + 1 >= (i32)hf->size_z) {
+                continue;
+            }
+            Vec3 tris[6];
+            heightfield_cell_triangles(hf, (u32)ix, (u32)iz, tris);
+            dd_line(tris[0], tris[1], dd_rgba(60, 120, 80, 255));
+            dd_line(tris[0], tris[2], dd_rgba(60, 120, 80, 255));
+            dd_line(tris[3], tris[5], dd_rgba(60, 120, 80, 255));
         }
     }
 }
@@ -144,8 +149,7 @@ static void draw_phys_debug(f32 alpha)
         if (!body) {
             continue;
         }
-        Handle handle = { idx, s_phys.bodies.gens[idx] };
-        if (handle.idx == s_vehicle.body.idx) {
+        if (idx == s_vehicle.body.idx) {
             continue;
         }
         Vec3 pos = vec3_lerp(body->prev_pos, body->pos, alpha);
@@ -239,13 +243,14 @@ static void draw_status_hud(void)
 {
     f32 line_height = text_line_height(16.0f);
     f32 y = 8.0f + line_height;
-    dd_text_2d(12.0f, y, 16.0f, DD_WHITE, "%.0f fps | tick %llu%s%s",
+    dd_text_2d(12.0f, y, 16.0f, DD_WHITE, "%.0f fps | tick %llu | %u terrain chunks%s%s",
                (f64)s_fps, (unsigned long long)s_game.tick_count,
+               terrain_render_chunks_drawn(),
                s_slow_mo ? " | SLOW-MO 0.1x" : "",
                s_free_cam ? " | FREE CAM" : "");
     y += line_height;
     dd_text_2d(12.0f, y, 16.0f, DD_GRAY,
-               "wasd drive | space handbrake | r reset | f1 telemetry | f2 forces | f5 slow-mo | f6 free cam | f7 tuning | esc quit");
+               "wasd drive | space handbrake | r reset | f1 telemetry | f2 forces | f3 collision | f5 slow-mo | f6 free cam | f7 tuning");
 }
 
 static void draw_telemetry_panel(void)
@@ -309,7 +314,7 @@ static void update_chase_camera(f32 dt, f32 alpha)
     }
     fwd = vec3_normalize(fwd);
     Vec3 target = vec3_add(vec3_sub(pos, vec3_scale(fwd, CHASE_DISTANCE)), v3(0.0f, CHASE_HEIGHT, 0.0f));
-    f32 terrain_floor = heightfield_sample(&s_heightfield, target.x, target.z) + 0.5f;
+    f32 terrain_floor = heightfield_sample(&s_terrain.hf, target.x, target.z) + 0.6f;
     target.y = f_max(target.y, terrain_floor);
     s_camera.pos = v3(f_approach_exp(s_camera.pos.x, target.x, 5.0f, dt),
                       f_approach_exp(s_camera.pos.y, target.y, 4.0f, dt),
@@ -324,9 +329,13 @@ static void game_render(f32 alpha, const GameInput* input)
     text_begin_frame();
     ui_begin_frame(input);
 
-    draw_terrain();
+    terrain_render_draw();
+    world_render(&s_world);
     vehicle_debug_draw(&s_vehicle, &s_phys, alpha, s_show_phys_debug);
     draw_phys_debug(alpha);
+    if (s_show_collision) {
+        draw_collision_wireframe();
+    }
     draw_mouse_ray(input);
     draw_status_hud();
     draw_drive_hud();
@@ -392,7 +401,7 @@ static ScenePhysResult scene_phys_run(void)
     ArenaTemp temp = arena_temp_begin(&g_perm_arena);
 
     Heightfield* hf = arena_push(&g_perm_arena, Heightfield);
-    heightfield_init_procedural(hf, &g_perm_arena, TERRAIN_SIZE, TERRAIN_CELL, SCENE_PHYS_SEED, 1.0f);
+    heightfield_init_procedural(hf, &g_perm_arena, 96, 1.0f, SCENE_PHYS_SEED, 1.0f);
     PhysWorld* world = arena_push(&g_perm_arena, PhysWorld);
     phys_init(world, &g_perm_arena, hf);
 
@@ -643,6 +652,82 @@ static int run_scene_car_test(void)
     return pass ? 0 : 1;
 }
 
+typedef struct ZoneCheckResult {
+    u64 checksum;
+    u32 ray_hits;
+    u32 static_tris;
+    b32 valid;
+} ZoneCheckResult;
+
+static ZoneCheckResult zone_check_run(void)
+{
+    ZoneCheckResult result = {0};
+    ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+
+    World* world = arena_push(&g_perm_arena, World);
+    world_init(world, &g_perm_arena);
+    Terrain* terrain = arena_push(&g_perm_arena, Terrain);
+    PhysWorld* phys = arena_push(&g_perm_arena, PhysWorld);
+    phys_init(phys, &g_perm_arena, &terrain->hf);
+    ZoneSpawn spawn;
+    if (!zone_load(ZONE_DIR, &g_perm_arena, world, phys, terrain, &spawn)) {
+        arena_temp_end(temp);
+        return result;
+    }
+    result.static_tris = phys->statics.tri_count;
+
+    u64 hash = 14695981039346656037ull;
+    Rng rng;
+    rng_seed(&rng, 99u);
+    for (u32 i = 0; i < 300; i++) {
+        Ray ray;
+        ray.origin = v3(rng_range(&rng, -360.0f, 360.0f), 80.0f, rng_range(&rng, -360.0f, 360.0f));
+        ray.dir = vec3_normalize(v3(rng_range(&rng, -0.3f, 0.3f), -1.0f, rng_range(&rng, -0.3f, 0.3f)));
+        PhysRayHit hit;
+        if (phys_raycast(phys, ray, 300.0f, &hit)) {
+            result.ray_hits++;
+            checksum_bytes(&hash, &hit.t, sizeof(hit.t));
+            checksum_bytes(&hash, &hit.normal, sizeof(hit.normal));
+        }
+    }
+
+    Vehicle* veh = arena_push(&g_perm_arena, Vehicle);
+    if (!vehicle_init(veh, phys, WAGON_CFG_PATH, spawn.car_pos, spawn.car_yaw)) {
+        arena_temp_end(temp);
+        return result;
+    }
+    VehicleInput idle = {0};
+    car_run_ticks(phys, veh, idle, 360);
+    VehicleInput drive = {0};
+    drive.throttle = 0.6f;
+    car_run_ticks(phys, veh, drive, 480);
+    car_checksum(&hash, phys, veh);
+
+    RigidBody* body = phys_body(phys, veh->body);
+    result.valid = body_state_valid(body)
+                && body->pos.y > terrain->hf.min_height - 2.0f
+                && vec3_distance(body->pos, spawn.car_pos) > 3.0f;
+    result.checksum = hash;
+
+    arena_temp_end(temp);
+    return result;
+}
+
+static int run_scene_zone_check(void)
+{
+    log_info("scene zone_check: %s", ZONE_DIR);
+    assets_init(0);
+    ZoneCheckResult a = zone_check_run();
+    ZoneCheckResult b = zone_check_run();
+    log_info("zone_check: run1 checksum %016llx | %u/300 ray hits | %u static tris | drove ok %d",
+             (unsigned long long)a.checksum, a.ray_hits, a.static_tris, a.valid);
+    log_info("zone_check: run2 checksum %016llx", (unsigned long long)b.checksum);
+    b32 pass = a.checksum == b.checksum && a.valid && b.valid
+             && a.ray_hits > 250 && a.static_tris > 1000;
+    log_info("scene zone_check: %s", pass ? "PASS" : "FAIL");
+    return pass ? 0 : 1;
+}
+
 int main(int argc, char** argv)
 {
     arena_init(&g_perm_arena, GIGABYTES(1));
@@ -651,6 +736,7 @@ int main(int argc, char** argv)
 #if defined(_DEBUG)
     math_selftest();
     config_selftest();
+    assets_selftest();
 #endif
 
     const char* scene = 0;
@@ -666,6 +752,9 @@ int main(int argc, char** argv)
         if (strcmp(scene, "car_test") == 0) {
             return run_scene_car_test();
         }
+        if (strcmp(scene, "zone_check") == 0) {
+            return run_scene_zone_check();
+        }
         log_error("unknown scene: %s", scene);
         return 1;
     }
@@ -677,18 +766,25 @@ int main(int argc, char** argv)
         platform_shutdown();
         return 1;
     }
+    assets_init(1);
 
-    heightfield_init_procedural(&s_heightfield, &g_perm_arena, TERRAIN_SIZE, TERRAIN_CELL, TERRAIN_SEED, TERRAIN_ROUGHNESS);
-    phys_init(&s_phys, &g_perm_arena, &s_heightfield);
-    rng_seed(&s_spawn_rng, 42u);
-    if (!vehicle_init(&s_vehicle, &s_phys, WAGON_CFG_PATH,
-                      vehicle_spawn_pos(&s_heightfield, 0.0f, 0.0f), 0.0f)) {
+    world_init(&s_world, &g_perm_arena);
+    phys_init(&s_phys, &g_perm_arena, &s_terrain.hf);
+    if (!zone_load(ZONE_DIR, &g_perm_arena, &s_world, &s_phys, &s_terrain, &s_zone_spawn)) {
+        platform_shutdown();
+        return 1;
+    }
+    if (!terrain_render_init(&s_terrain.hf, s_terrain.roadmask, s_terrain.mask_size)) {
+        platform_shutdown();
+        return 1;
+    }
+    if (!vehicle_init(&s_vehicle, &s_phys, WAGON_CFG_PATH, s_zone_spawn.car_pos, s_zone_spawn.car_yaw)) {
         platform_shutdown();
         return 1;
     }
 
-    camera_init(&s_camera, v3(0.0f, 8.0f, 14.0f));
-    camera_look_at(&s_camera, v3(0.0f, 1.0f, 0.0f));
+    camera_init(&s_camera, vec3_add(s_zone_spawn.car_pos, v3(-8.0f, 5.0f, 10.0f)));
+    camera_look_at(&s_camera, s_zone_spawn.car_pos);
 
     f64 prev_time = platform_time_now();
     f64 accumulator = 0.0;
@@ -720,6 +816,9 @@ int main(int argc, char** argv)
         if (input->key_pressed[KEY_F2]) {
             s_show_phys_debug = !s_show_phys_debug;
         }
+        if (input->key_pressed[KEY_F3]) {
+            s_show_collision = !s_show_collision;
+        }
         if (input->key_pressed[KEY_F5]) {
             s_slow_mo = !s_slow_mo;
         }
@@ -743,6 +842,7 @@ int main(int argc, char** argv)
         }
 
         r_hot_reload_poll(now);
+        assets_hot_reload_poll(now);
         if (now >= next_cfg_poll) {
             next_cfg_poll = now + 1.0;
             vehicle_poll_config_reload(&s_vehicle, &s_phys);
@@ -755,7 +855,7 @@ int main(int argc, char** argv)
         }
 
         RigidBody* car_body = phys_body(&s_phys, s_vehicle.body);
-        if (car_body && (car_body->pos.y < s_heightfield.min_height - 15.0f || !body_state_valid(car_body))) {
+        if (car_body && (car_body->pos.y < s_terrain.hf.min_height - 15.0f || !body_state_valid(car_body))) {
             reset_car();
         }
 
@@ -779,6 +879,8 @@ int main(int argc, char** argv)
         }
     }
 
+    terrain_render_shutdown();
+    assets_shutdown();
     text_shutdown();
     dd_shutdown();
     r_shutdown();

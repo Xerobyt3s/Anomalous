@@ -287,6 +287,45 @@ b32 aabb_vs_aabb(Aabb a, Aabb b)
         && a.min.z <= b.max.z && a.max.z >= b.min.z;
 }
 
+Frustum frustum_from_view_proj(Mat4 view_proj)
+{
+    const f32* m = view_proj.m;
+    Vec4 rows[4];
+    for (i32 i = 0; i < 4; i++) {
+        rows[i] = v4(m[i], m[4 + i], m[8 + i], m[12 + i]);
+    }
+    Vec4 raw[6] = {
+        vec4_add(rows[3], rows[0]),
+        vec4_add(rows[3], vec4_scale(rows[0], -1.0f)),
+        vec4_add(rows[3], rows[1]),
+        vec4_add(rows[3], vec4_scale(rows[1], -1.0f)),
+        vec4_add(rows[3], rows[2]),
+        vec4_add(rows[3], vec4_scale(rows[2], -1.0f)),
+    };
+    Frustum frustum;
+    for (i32 i = 0; i < 6; i++) {
+        Vec3 normal = v3(raw[i].x, raw[i].y, raw[i].z);
+        f32 inv_len = 1.0f / f_max(vec3_length(normal), 1e-8f);
+        frustum.planes[i].normal = vec3_scale(normal, inv_len);
+        frustum.planes[i].d = raw[i].w * inv_len;
+    }
+    return frustum;
+}
+
+b32 frustum_test_aabb(const Frustum* frustum, Aabb box)
+{
+    for (i32 i = 0; i < 6; i++) {
+        Vec3 n = frustum->planes[i].normal;
+        Vec3 far_corner = v3(n.x > 0.0f ? box.max.x : box.min.x,
+                             n.y > 0.0f ? box.max.y : box.min.y,
+                             n.z > 0.0f ? box.max.z : box.min.z);
+        if (vec3_dot(n, far_corner) + frustum->planes[i].d < 0.0f) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 b32 ray_vs_aabb(Ray ray, Aabb box, f32 max_t, f32* out_t)
 {
     f32 tmin = 0.0f;

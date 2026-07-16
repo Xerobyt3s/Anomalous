@@ -41,13 +41,19 @@ typedef i64 GLintptr;
 #define GL_LEQUAL 0x0203
 #define GL_SRC_ALPHA 0x0302
 #define GL_ONE_MINUS_SRC_ALPHA 0x0303
+#define GL_BACK 0x0405
 #define GL_UNPACK_ALIGNMENT 0x0CF5
 #define GL_TEXTURE_2D 0x0DE1
 #define GL_UNSIGNED_BYTE 0x1401
+#define GL_UNSIGNED_INT 0x1405
 #define GL_FLOAT 0x1406
 #define GL_RED 0x1903
+#define GL_RGBA 0x1908
 #define GL_NEAREST 0x2600
 #define GL_LINEAR 0x2601
+#define GL_LINEAR_MIPMAP_LINEAR 0x2703
+#define GL_REPEAT 0x2901
+#define GL_RGBA8 0x8058
 #define GL_TEXTURE_MAG_FILTER 0x2800
 #define GL_TEXTURE_MIN_FILTER 0x2801
 #define GL_TEXTURE_WRAP_S 0x2802
@@ -106,10 +112,16 @@ typedef void (GL_APIENTRY *GlDebugCallback)(GLenum source, GLenum type, GLuint i
     GLFN(void, glDeleteTextures, (GLsizei n, const GLuint* textures)) \
     GLFN(void, glPixelStorei, (GLenum pname, GLint param)) \
     GLFN(void, glDrawArrays, (GLenum mode, GLint first, GLsizei count)) \
+    GLFN(void, glDrawElements, (GLenum mode, GLsizei count, GLenum type, const void* indices)) \
     GLFN(void, glBlendFunc, (GLenum sfactor, GLenum dfactor)) \
     GLFN(void, glDepthMask, (GLboolean flag)) \
     GLFN(void, glDepthFunc, (GLenum func)) \
-    GLFN(void, glLineWidth, (GLfloat width))
+    GLFN(void, glLineWidth, (GLfloat width)) \
+    GLFN(void, glCullFace, (GLenum mode)) \
+    GLFN(void, glVertexArrayElementBuffer, (GLuint vao, GLuint buffer)) \
+    GLFN(void, glProgramUniformMatrix4fv, (GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLfloat* value)) \
+    GLFN(void, glProgramUniform4f, (GLuint program, GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3)) \
+    GLFN(void, glGenerateTextureMipmap, (GLuint texture))
 
 #define GLFN(ret, name, params) typedef ret (GL_APIENTRY *PFN_##name) params; extern PFN_##name name;
 GL_FUNCTION_LIST

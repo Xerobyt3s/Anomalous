@@ -1,6 +1,7 @@
 #include "render/render.h"
 #include "render/debug_draw.h"
 #include "render/text.h"
+#include "assets/assets.h"
 #include "core/arena.h"
 #include "core/log.h"
 #include "platform/platform.h"
@@ -29,6 +30,9 @@ typedef struct CameraUbo {
     Mat4 view_proj;
     Vec4 cam_pos;
     Vec4 viewport;
+    Vec4 sun_dir;
+    Vec4 sun_color_ambient;
+    Vec4 fog_color_density;
 } CameraUbo;
 
 static ShaderEntry s_shaders[MAX_SHADERS];
@@ -36,6 +40,12 @@ static u32 s_camera_ubo;
 static Mat4 s_view_proj;
 static Vec3 s_cam_pos;
 static Vec2 s_viewport;
+static Frustum s_frustum;
+static Vec3 s_sun_dir = { -0.45f, -0.8f, -0.35f };
+static Vec3 s_sun_color = { 1.0f, 0.95f, 0.85f };
+static f32 s_ambient = 0.38f;
+static Vec3 s_fog_color = { 0.62f, 0.68f, 0.76f };
+static f32 s_fog_density = 0.0028f;
 static f64 s_next_poll_time;
 
 static u32 shader_compile_stage(GLenum type, const char* path)
@@ -173,6 +183,15 @@ void r_hot_reload_poll(f64 now)
     }
 }
 
+void r_set_environment(Vec3 sun_dir, Vec3 sun_color, f32 ambient, Vec3 fog_color, f32 fog_density)
+{
+    s_sun_dir = vec3_normalize(sun_dir);
+    s_sun_color = sun_color;
+    s_ambient = ambient;
+    s_fog_color = fog_color;
+    s_fog_density = fog_density;
+}
+
 void r_begin_frame(const Camera* cam)
 {
     i32 width, height;
@@ -190,13 +209,17 @@ void r_begin_frame(const Camera* cam)
     ubo.view_proj = mat4_mul(ubo.proj, ubo.view);
     ubo.cam_pos = vec4_from_vec3(cam->pos, 1.0f);
     ubo.viewport = v4(s_viewport.x, s_viewport.y, 1.0f / s_viewport.x, 1.0f / s_viewport.y);
+    ubo.sun_dir = vec4_from_vec3(s_sun_dir, 0.0f);
+    ubo.sun_color_ambient = vec4_from_vec3(s_sun_color, s_ambient);
+    ubo.fog_color_density = vec4_from_vec3(s_fog_color, s_fog_density);
     glNamedBufferSubData(s_camera_ubo, 0, sizeof(CameraUbo), &ubo);
 
     s_view_proj = ubo.view_proj;
     s_cam_pos = cam->pos;
+    s_frustum = frustum_from_view_proj(s_view_proj);
 
     glViewport(0, 0, width, height);
-    glClearColor(0.03f, 0.05f, 0.07f, 1.0f);
+    glClearColor(s_fog_color.x, s_fog_color.y, s_fog_color.z, 1.0f);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glDisable(GL_BLEND);
@@ -222,6 +245,40 @@ Vec3 r_camera_pos(void)
 Vec2 r_viewport_size(void)
 {
     return s_viewport;
+}
+
+const Frustum* r_frustum(void)
+{
+    return &s_frustum;
+}
+
+void r_draw_mesh(const struct GpuMesh* mesh, Mat4 model)
+{
+    if (!mesh || !mesh->loaded) {
+        return;
+    }
+    Aabb world_bounds = aabb_transform(model, mesh->bounds);
+    if (!frustum_test_aabb(&s_frustum, world_bounds)) {
+        return;
+    }
+    u32 program = r_shader("mesh");
+    if (!program) {
+        return;
+    }
+    glProgramUniformMatrix4fv(program, 0, 1, GL_FALSE, model.m);
+    glUseProgram(program);
+    glBindVertexArray(mesh->vao);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    for (u32 i = 0; i < mesh->submesh_count; i++) {
+        const GpuSubmesh* sub = &mesh->submeshes[i];
+        glBindTextureUnit(0, asset_texture_gl(sub->texture_slot));
+        glDrawElements(GL_TRIANGLES, (GLsizei)sub->index_count, GL_UNSIGNED_INT,
+                       (const void*)((u64)sub->first_index * sizeof(u32)));
+    }
+    glDisable(GL_CULL_FACE);
+    glBindVertexArray(0);
+    glUseProgram(0);
 }
 
 b32 r_project_to_screen(Vec3 world, Vec2* out_screen)
