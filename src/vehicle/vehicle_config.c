@@ -114,6 +114,11 @@ b32 vehicle_config_load(VehicleConfig* out, const char* path)
 
     out->seat_eye = config_get_vec3(&cfg, "cabin.seat_eye", v3(-0.4f, 0.35f, -0.3f));
 
+    snprintf(out->body_mesh, sizeof(out->body_mesh), "%s",
+             config_get_str(&cfg, "render.body_mesh", ""));
+    snprintf(out->wheel_mesh, sizeof(out->wheel_mesh), "%s",
+             config_get_str(&cfg, "render.wheel_mesh", ""));
+
     arena_temp_end(temp);
     return 1;
 }

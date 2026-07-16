@@ -24,6 +24,8 @@ EntityHandle world_spawn(World* world, EntityKind kind, Vec3 pos, Quat rot, f32 
     entity->scale = scale;
     entity->mesh = 0;
     entity->mesh_name[0] = 0;
+    entity->aux_kind = 0;
+    entity->aux_value = 0.0f;
     if (mesh_name) {
         snprintf(entity->mesh_name, sizeof(entity->mesh_name), "%s", mesh_name);
         entity->mesh = asset_mesh(mesh_name);
@@ -34,6 +36,11 @@ EntityHandle world_spawn(World* world, EntityKind kind, Vec3 pos, Quat rot, f32 
 Entity* world_entity(World* world, EntityHandle handle)
 {
     return pool_get(&world->entities, handle);
+}
+
+void world_despawn(World* world, EntityHandle handle)
+{
+    pool_free(&world->entities, handle);
 }
 
 void world_render(World* world)

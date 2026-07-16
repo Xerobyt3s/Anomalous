@@ -72,6 +72,9 @@ typedef struct VehicleConfig {
     f32 steer_rate_deg;
 
     Vec3 seat_eye;
+
+    char body_mesh[32];
+    char wheel_mesh[32];
 } VehicleConfig;
 
 b32 vehicle_config_load(VehicleConfig* cfg, const char* path);

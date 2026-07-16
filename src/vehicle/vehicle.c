@@ -226,8 +226,6 @@ void vehicle_tick(Vehicle* v, struct PhysWorld* world, f32 dt)
     }
     const VehicleConfig* cfg = &v->cfg;
 
-    effects_reset(&v->effects);
-
     f32 speed = vec3_length(body->vel);
     vehicle_update_steering(v, speed, dt);
 
@@ -348,8 +346,8 @@ void vehicle_tick(Vehicle* v, struct PhysWorld* world, f32 dt)
         w->reaction_torque = -fx_applied * r_eff;
     }
 
-    f32 throttle = v->effects.ignition_ok ? v->input.throttle : 0.0f;
-    drivetrain_tick(&v->train, cfg, v->wheels, throttle, v->effects.engine_power_mul, dt);
+    drivetrain_tick(&v->train, cfg, v->wheels, v->input.throttle, v->effects.engine_power_mul,
+                    v->effects.ignition_ok, dt);
 
     for (u32 i = 0; i < VEHICLE_WHEEL_COUNT; i++) {
         Wheel* w = &v->wheels[i];

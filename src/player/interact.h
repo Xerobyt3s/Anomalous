@@ -1,0 +1,58 @@
+#pragma once
+
+#include "core/types.h"
+#include "core/pool.h"
+#include "math/vmath.h"
+#include "carsys/parts.h"
+#include "carsys/items.h"
+
+struct Player;
+struct Vehicle;
+struct CarSys;
+struct World;
+struct PhysWorld;
+
+#define INTERACT_RANGE 2.6f
+#define INTERACT_HOLD_TIME 1.2f
+
+typedef enum InteractAction {
+    ACTION_NONE,
+    ACTION_INFO,
+    ACTION_OPEN_DOOR,
+    ACTION_CLOSE_DOOR,
+    ACTION_ENTER_CAR,
+    ACTION_EXIT_CAR,
+    ACTION_HANDBRAKE,
+    ACTION_REMOVE_PART,
+    ACTION_INSTALL_PART,
+    ACTION_TOGGLE_HOOD,
+    ACTION_TOGGLE_TRUNK,
+    ACTION_PLACE_CARGO,
+    ACTION_TAKE_CARGO,
+    ACTION_PICKUP,
+    ACTION_REFUEL,
+    ACTION_OIL_FILL,
+} InteractAction;
+
+typedef struct Interact {
+    Item hands;
+    InteractAction action;
+    PartKind target_part;
+    Handle target_entity;
+    i32 target_side;
+    u32 target_cargo;
+    Vec3 target_center;
+    Vec3 target_half;
+    Vec3 place_pos;
+    f32 hold_time;
+    f32 hold_progress;
+    b32 action_is_hold;
+    char prompt[96];
+} Interact;
+
+void interact_init(Interact* it);
+void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
+                     struct CarSys* sys, struct World* world, struct PhysWorld* phys,
+                     Ray view_ray, b32 e_down, b32 e_pressed, f32 dt);
+b32  interact_drop(Interact* it, struct World* world, struct PhysWorld* phys,
+                   Vec3 pos, f32 yaw);

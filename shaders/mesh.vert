@@ -15,6 +15,8 @@ layout(std140, binding = 0) uniform CameraBlock {
     vec4 u_sun_dir;
     vec4 u_sun_color_ambient;
     vec4 u_fog_color_density;
+    vec4 u_spot_pos_cone[2];
+    vec4 u_spot_dir_intensity[2];
 };
 
 out vec3 v_world;

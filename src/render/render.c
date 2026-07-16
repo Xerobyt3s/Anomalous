@@ -33,6 +33,8 @@ typedef struct CameraUbo {
     Vec4 sun_dir;
     Vec4 sun_color_ambient;
     Vec4 fog_color_density;
+    Vec4 spot_pos_cone[2];
+    Vec4 spot_dir_intensity[2];
 } CameraUbo;
 
 static ShaderEntry s_shaders[MAX_SHADERS];
@@ -47,6 +49,9 @@ static f32 s_ambient = 0.38f;
 static Vec3 s_fog_color = { 0.62f, 0.68f, 0.76f };
 static f32 s_fog_density = 0.0028f;
 static f64 s_next_poll_time;
+static Vec3 s_spot_pos[2];
+static Vec3 s_spot_dir = { 0.0f, 0.0f, -1.0f };
+static f32 s_spot_intensity;
 
 static u32 shader_compile_stage(GLenum type, const char* path)
 {
@@ -183,6 +188,14 @@ void r_hot_reload_poll(f64 now)
     }
 }
 
+void r_set_headlights(Vec3 pos_left, Vec3 pos_right, Vec3 dir, f32 intensity)
+{
+    s_spot_pos[0] = pos_left;
+    s_spot_pos[1] = pos_right;
+    s_spot_dir = vec3_normalize(dir);
+    s_spot_intensity = intensity;
+}
+
 void r_set_environment(Vec3 sun_dir, Vec3 sun_color, f32 ambient, Vec3 fog_color, f32 fog_density)
 {
     s_sun_dir = vec3_normalize(sun_dir);
@@ -212,6 +225,11 @@ void r_begin_frame(const Camera* cam)
     ubo.sun_dir = vec4_from_vec3(s_sun_dir, 0.0f);
     ubo.sun_color_ambient = vec4_from_vec3(s_sun_color, s_ambient);
     ubo.fog_color_density = vec4_from_vec3(s_fog_color, s_fog_density);
+    f32 cone = cosf(21.0f * DEG_TO_RAD);
+    for (u32 i = 0; i < 2; i++) {
+        ubo.spot_pos_cone[i] = vec4_from_vec3(s_spot_pos[i], cone);
+        ubo.spot_dir_intensity[i] = vec4_from_vec3(s_spot_dir, s_spot_intensity);
+    }
     glNamedBufferSubData(s_camera_ubo, 0, sizeof(CameraUbo), &ubo);
 
     s_view_proj = ubo.view_proj;

@@ -10,6 +10,7 @@ b32  r_init(void);
 void r_shutdown(void);
 void r_hot_reload_poll(f64 now);
 void r_set_environment(Vec3 sun_dir, Vec3 sun_color, f32 ambient, Vec3 fog_color, f32 fog_density);
+void r_set_headlights(Vec3 pos_left, Vec3 pos_right, Vec3 dir, f32 intensity);
 void r_begin_frame(const Camera* cam);
 void r_end_frame(void);
 void r_draw_mesh(const struct GpuMesh* mesh, Mat4 model);

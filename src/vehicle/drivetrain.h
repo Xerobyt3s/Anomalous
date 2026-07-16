@@ -18,4 +18,4 @@ f32  drivetrain_rpm(const Drivetrain* train);
 f32  drivetrain_ratio(const Drivetrain* train, const VehicleConfig* cfg);
 f32  drivetrain_torque_curve(const VehicleConfig* cfg, f32 rpm);
 void drivetrain_tick(Drivetrain* train, const VehicleConfig* cfg, struct Wheel* wheels,
-                     f32 throttle, f32 power_mul, f32 dt);
+                     f32 throttle, f32 power_mul, b32 ignition, f32 dt);

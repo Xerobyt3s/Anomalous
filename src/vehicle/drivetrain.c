@@ -50,8 +50,11 @@ f32 drivetrain_torque_curve(const VehicleConfig* cfg, f32 rpm)
 }
 
 void drivetrain_tick(Drivetrain* train, const VehicleConfig* cfg, struct Wheel* wheels,
-                     f32 throttle, f32 power_mul, f32 dt)
+                     f32 throttle, f32 power_mul, b32 ignition, f32 dt)
 {
+    if (!ignition) {
+        throttle = 0.0f;
+    }
     f32 rpm = drivetrain_rpm(train);
     f32 idle_omega = cfg->idle_rpm * RPM_TO_RAD;
     f32 max_omega = cfg->max_rpm * RPM_TO_RAD;
@@ -99,7 +102,12 @@ void drivetrain_tick(Drivetrain* train, const VehicleConfig* cfg, struct Wheel* 
         engine_torque = f_min(engine_torque, 0.0f);
     }
     engine_torque -= cfg->engine_brake * f_max(rpm - cfg->idle_rpm, 0.0f) * 0.001f * (1.0f - throttle);
-    engine_torque += f_clamp((idle_omega - train->engine_omega) * IDLE_GOVERNOR_GAIN, 0.0f, IDLE_GOVERNOR_MAX);
+    if (ignition) {
+        engine_torque += f_clamp((idle_omega - train->engine_omega) * IDLE_GOVERNOR_GAIN, 0.0f, IDLE_GOVERNOR_MAX);
+    } else {
+        engine_torque -= cfg->engine_brake * 0.004f * rpm;
+    }
+    f32 min_omega = ignition ? idle_omega * 0.5f : 0.0f;
 
     f32 ratio = drivetrain_ratio(train, cfg);
     f32 bite_rpm = f_lerp(cfg->idle_rpm * 1.2f, cfg->max_rpm * 0.55f, throttle);
@@ -133,7 +141,7 @@ void drivetrain_tick(Drivetrain* train, const VehicleConfig* cfg, struct Wheel* 
             wheels[i].drive_torque = wheel_inertia * wheel_accel - wheels[i].reaction_torque + couple;
         }
         train->engine_omega = (avg_driven_omega + wheel_accel * dt) * ratio;
-        train->engine_omega = f_clamp(train->engine_omega, idle_omega * 0.5f, max_omega * 1.05f);
+        train->engine_omega = f_clamp(train->engine_omega, min_omega, max_omega * 1.05f);
         return;
     }
 
@@ -144,7 +152,7 @@ void drivetrain_tick(Drivetrain* train, const VehicleConfig* cfg, struct Wheel* 
     }
 
     train->engine_omega += (engine_torque - clutch_torque) / f_max(cfg->engine_inertia, 0.01f) * dt;
-    train->engine_omega = f_clamp(train->engine_omega, idle_omega * 0.5f, max_omega * 1.05f);
+    train->engine_omega = f_clamp(train->engine_omega, min_omega, max_omega * 1.05f);
 
     if (driven_count && ratio != 0.0f) {
         f32 drive_total = clutch_torque * ratio * cfg->driveline_eff;

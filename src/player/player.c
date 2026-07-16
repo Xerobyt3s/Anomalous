@@ -178,7 +178,7 @@ static void player_move_on_foot(Player* p, struct PhysWorld* phys, const RigidBo
     if (wish_len > 1.0f) {
         wish = vec3_scale(wish, 1.0f / wish_len);
     }
-    f32 target_speed = cmd.run ? PLAYER_RUN_SPEED : PLAYER_WALK_SPEED;
+    f32 target_speed = (cmd.run ? PLAYER_RUN_SPEED : PLAYER_WALK_SPEED) * p->speed_mul;
 
     b32 was_grounded = p->grounded;
     if (p->grounded) {
@@ -245,7 +245,8 @@ static b32 player_fits(struct PhysWorld* phys, const RigidBody* car, Vec3 foot)
     return contact.depth <= PLAYER_EXIT_CLEARANCE;
 }
 
-static b32 player_probe_exit(struct PhysWorld* phys, const Vehicle* veh, Vec3* out_foot)
+static b32 player_probe_exit(struct PhysWorld* phys, const Vehicle* veh, i32 pref_side,
+                             Vec3* out_foot)
 {
     RigidBody* body = phys_body(phys, veh->body);
     if (!body) {
@@ -253,14 +254,23 @@ static b32 player_probe_exit(struct PhysWorld* phys, const Vehicle* veh, Vec3* o
     }
     Vec3 he = body->half_extents;
     f32 side = veh->cfg.seat_eye.x < 0.0f ? -1.0f : 1.0f;
+    if (pref_side != 0) {
+        side = (f32)pref_side;
+    }
     f32 out_x = he.x + PLAYER_RADIUS + 0.45f;
     f32 out_z = he.z + PLAYER_RADIUS + 0.6f;
     Vec3 candidates[4];
+    u32 candidate_count = 4;
     candidates[0] = v3(side * out_x, 0.0f, veh->cfg.seat_eye.z);
     candidates[1] = v3(-side * out_x, 0.0f, veh->cfg.seat_eye.z);
     candidates[2] = v3(0.0f, 0.0f, out_z);
     candidates[3] = v3(0.0f, 0.0f, -out_z);
-    for (u32 i = 0; i < 4; i++) {
+    if (pref_side != 0) {
+        candidates[1] = candidates[2];
+        candidates[2] = candidates[3];
+        candidate_count = 3;
+    }
+    for (u32 i = 0; i < candidate_count; i++) {
         Vec3 world = vec3_add(body->pos, quat_rotate_vec3(body->rot, candidates[i]));
         Ray ray;
         ray.origin = vec3_add(world, v3(0.0f, 1.5f, 0.0f));
@@ -291,6 +301,7 @@ void player_init(Player* p, Vec3 pos, f32 yaw)
     p->pos = pos;
     p->prev_pos = pos;
     p->yaw = yaw;
+    p->speed_mul = 1.0f;
 }
 
 b32 player_driving(const Player* p)
@@ -328,7 +339,7 @@ b32 player_can_exit(const Player* p, struct PhysWorld* phys, const struct Vehicl
     if (!body || vec3_length(body->vel) > PLAYER_EXIT_MAX_SPEED) {
         return 0;
     }
-    return player_probe_exit(phys, veh, 0);
+    return player_probe_exit(phys, veh, p->exit_pref, 0);
 }
 
 void player_tick(Player* p, struct PhysWorld* phys, struct Vehicle* veh, PlayerCommand cmd, f32 dt)
@@ -371,7 +382,7 @@ void player_tick(Player* p, struct PhysWorld* phys, struct Vehicle* veh, PlayerC
         }
         if (cmd.interact && body && vec3_length(body->vel) <= PLAYER_EXIT_MAX_SPEED) {
             Vec3 foot;
-            if (player_probe_exit(phys, veh, &foot)) {
+            if (player_probe_exit(phys, veh, p->exit_pref, &foot)) {
                 p->state = PLAYER_EXITING;
                 p->transition_t = 0.0f;
                 p->exit_pos = foot;

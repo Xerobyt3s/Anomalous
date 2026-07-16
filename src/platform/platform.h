@@ -13,6 +13,8 @@ struct Arena;
 #define KEY_D 68
 #define KEY_E 69
 #define KEY_F 70
+#define KEY_G 71
+#define KEY_L 76
 #define KEY_Q 81
 #define KEY_R 82
 #define KEY_S 83

@@ -13,11 +13,15 @@
 #include "physics/heightfield.h"
 #include "physics/physics.h"
 #include "vehicle/vehicle.h"
+#include "vehicle/vehicle_render.h"
 #include "assets/assets.h"
 #include "world/world.h"
 #include "world/terrain.h"
 #include "world/zone.h"
 #include "player/player.h"
+#include "player/interact.h"
+#include "carsys/carsys.h"
+#include "carsys/carsys_render.h"
 #include "ui/ui.h"
 
 #include <stdio.h>
@@ -26,7 +30,7 @@
 #define FIXED_DT (1.0f / 120.0f)
 #define MAX_FRAME_DT 0.25
 #define ZONE_DIR "assets/zones/testzone"
-#define WAGON_CFG_PATH "assets/cars/wagon.cfg"
+#define CAR_CFG_PATH "assets/cars/excel.cfg"
 #define SCENE_PHYS_SEED 1234u
 #define SCENE_PHYS_BODIES 24
 #define SCENE_PHYS_TICKS 1440
@@ -49,6 +53,8 @@ static World s_world;
 static PhysWorld s_phys;
 static Vehicle s_vehicle;
 static Player s_player;
+static CarSys s_carsys;
+static Interact s_interact;
 static ZoneSpawn s_zone_spawn;
 static Camera s_camera;
 static f32 s_fps;
@@ -56,6 +62,7 @@ static b32 s_show_telemetry;
 static b32 s_show_phys_debug;
 static b32 s_show_collision;
 static b32 s_show_tuning;
+static b32 s_show_carsys;
 static b32 s_slow_mo;
 static b32 s_free_cam;
 static b32 s_chase_cam;
@@ -102,6 +109,7 @@ static void reset_car(void)
 
 static void game_tick(f32 dt, PlayerCommand cmd)
 {
+    carsys_tick(&s_carsys, &s_vehicle, &s_phys, dt);
     vehicle_tick(&s_vehicle, &s_phys, dt);
     phys_tick(&s_phys, dt);
     player_tick(&s_player, &s_phys, &s_vehicle, cmd, dt);
@@ -243,6 +251,79 @@ static void draw_drive_hud(void)
     if (s_vehicle.input.handbrake) {
         dd_text_2d(x, bar_y - 6.0f, 15.0f, DD_ORANGE, "HANDBRAKE");
     }
+
+    f32 gx = x + 240.0f;
+    f32 temp_norm = f_clamp01((s_carsys.fluids.coolant_temp - COOLANT_AMBIENT_C)
+                              / (COOLANT_MELTDOWN_C - COOLANT_AMBIENT_C));
+    b32 hot = s_carsys.fluids.coolant_temp > COOLANT_OVERHEAT_C;
+    draw_input_bar(gx, bar_y, 100.0f, s_carsys.fluids.fuel, 0.0f, dd_rgba(90, 160, 240, 255), "fuel");
+    draw_input_bar(gx, bar_y + 18.0f, 100.0f, temp_norm, 0.0f,
+                   hot ? dd_rgba(240, 60, 50, 255) : dd_rgba(230, 160, 60, 255), "temp");
+    draw_input_bar(gx, bar_y + 36.0f, 100.0f, s_carsys.elec.battery_charge, 0.0f,
+                   dd_rgba(220, 210, 90, 255), "battery");
+    draw_input_bar(gx, bar_y + 54.0f, 100.0f, s_carsys.parts[PART_ENGINE].condition, 0.0f,
+                   dd_rgba(140, 220, 140, 255), "engine");
+
+    f32 warn_y = bar_y - 24.0f;
+    if (hot) {
+        dd_text_2d(gx, warn_y, 15.0f, DD_RED, "TEMP");
+    }
+    if (s_carsys.fluids.oil < 0.3f) {
+        dd_text_2d(gx + 56.0f, warn_y, 15.0f, DD_RED, "OIL");
+    }
+    if (s_carsys.elec.battery_charge < 0.15f) {
+        dd_text_2d(gx + 100.0f, warn_y, 15.0f, DD_ORANGE, "BATT");
+    }
+    if (s_carsys.headlight_switch) {
+        dd_text_2d(gx + 156.0f, warn_y, 15.0f,
+                   s_vehicle.effects.headlights_on ? DD_CYAN : DD_GRAY, "LIGHTS");
+    }
+}
+
+static void draw_carsys_panel(void)
+{
+    ui_panel_begin("car systems [f4]", 336.0f, 66.0f, 330.0f);
+    for (u32 i = 0; i < PART_COUNT; i++) {
+        const PartDef* def = part_def((PartKind)i);
+        const PartSlot* slot = &s_carsys.parts[i];
+        ui_label("%-11s %s %5.1f%%", def->name, slot->installed ? "in " : "OUT",
+                 (f64)(slot->condition * 100.0f));
+    }
+    ui_label("battery %3.0f%% | alt %4.1fA | draw %4.1fA",
+             (f64)(s_carsys.elec.battery_charge * 100.0f), (f64)s_carsys.elec.alternator_amps,
+             (f64)s_carsys.elec.draw_amps);
+    for (u32 i = 0; i < CONSUMER_COUNT; i++) {
+        ui_label("%-10s fuse %s | %s", consumer_name((Consumer)i),
+                 s_carsys.elec.fuse_ok[i] ? "ok " : "BLOWN",
+                 s_carsys.elec.powered[i] ? "powered" : "off");
+    }
+    ui_label("fuel %3.0f%% | oil %3.0f%% | coolant %3.0fC",
+             (f64)(s_carsys.fluids.fuel * 100.0f), (f64)(s_carsys.fluids.oil * 100.0f),
+             (f64)s_carsys.fluids.coolant_temp);
+    ui_label("engine %s | power x%.2f | hood %s",
+             s_carsys.engine_on ? "RUNNING" : "OFF", (f64)s_vehicle.effects.engine_power_mul,
+             s_carsys.hood_target ? "open" : "shut");
+    ui_label("handbrake %s | trunk %s | cargo %u/%u",
+             s_carsys.handbrake_latched ? "SET" : "off",
+             s_carsys.trunk_target ? "open" : "shut", carsys_cargo_count(&s_carsys), CARGO_MAX);
+    ui_panel_end();
+}
+
+static void update_headlights(f32 alpha)
+{
+    RigidBody* body = phys_body(&s_phys, s_vehicle.body);
+    if (!body) {
+        r_set_headlights(vec3_zero(), vec3_zero(), v3(0.0f, 0.0f, -1.0f), 0.0f);
+        return;
+    }
+    Vec3 pos = vec3_lerp(body->prev_pos, body->pos, alpha);
+    Quat rot = quat_slerp(body->prev_rot, body->rot, alpha);
+    Vec3 com = s_vehicle.cfg.com_offset;
+    Vec3 left = vec3_add(pos, quat_rotate_vec3(rot, vec3_sub(v3(-0.55f, 0.02f, -2.05f), com)));
+    Vec3 right = vec3_add(pos, quat_rotate_vec3(rot, vec3_sub(v3(0.55f, 0.02f, -2.05f), com)));
+    Vec3 dir = quat_rotate_vec3(rot, v3(0.0f, -0.10f, -0.99f));
+    f32 intensity = s_vehicle.effects.headlights_on ? 5.0f : 0.0f;
+    r_set_headlights(left, right, dir, intensity);
 }
 
 static void draw_status_hud(void)
@@ -257,21 +338,149 @@ static void draw_status_hud(void)
     y += line_height;
     if (player_driving(&s_player)) {
         dd_text_2d(12.0f, y, 16.0f, DD_GRAY,
-                   "wasd drive | space handbrake | e exit | c camera | r reset | f1 telemetry | f2 forces | f3 collision | f5 slow-mo | f6 free cam | f7 tuning");
+                   "wasd drive | space handbrake | f engine | l lights | e doors/lever, look out open door to exit | c camera | f1-f7 debug");
     } else {
         dd_text_2d(12.0f, y, 16.0f, DD_GRAY,
-                   "wasd walk | shift run | space jump | e enter car | r reset car | f1-f7 debug");
+                   "wasd walk | shift run | space jump | e interact/enter | g drop | r reset car | f1-f7 debug");
     }
 }
 
 static void draw_interact_prompt(void)
 {
     Vec2 vp = r_viewport_size();
-    if (player_can_enter(&s_player, &s_phys, &s_vehicle)) {
-        dd_text_2d(vp.x * 0.5f - 70.0f, vp.y * 0.72f, 20.0f, DD_WHITE, "[E] enter wagon");
-    } else if (player_can_exit(&s_player, &s_phys, &s_vehicle)) {
-        dd_text_2d(vp.x * 0.5f - 50.0f, vp.y * 0.72f, 20.0f, DD_GRAY, "[E] get out");
+    f32 cx = vp.x * 0.5f;
+    f32 y = vp.y * 0.72f;
+    if (s_interact.action != ACTION_NONE) {
+        u32 color = s_interact.action == ACTION_INFO ? DD_GRAY : DD_WHITE;
+        dd_text_2d(cx - 90.0f, y, 20.0f, color, "%s", s_interact.prompt);
+        if (s_interact.hold_progress > 0.0f) {
+            dd_rect_2d(cx - 80.0f, y + 10.0f, cx + 80.0f, y + 20.0f, dd_rgba(90, 100, 110, 255));
+            dd_rect_2d_filled(cx - 79.0f, y + 11.0f, cx - 79.0f + 158.0f * s_interact.hold_progress,
+                              y + 19.0f, dd_rgba(90, 200, 120, 255));
+        }
     }
+    if (s_player.state == PLAYER_ON_FOOT && s_interact.hands.kind != ITEM_NONE) {
+        dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN, "hands: %s (%.0f%%) | [G] drop",
+                   item_name(s_interact.hands.kind), (f64)(s_interact.hands.condition * 100.0f));
+    }
+    if (s_player.state == PLAYER_DRIVING && !s_carsys.engine_on) {
+        dd_text_2d(cx - 90.0f, y + 34.0f, 18.0f, DD_ORANGE,
+                   s_carsys.crank_timer > 0.0f ? "cranking..." : "[F] start engine");
+    }
+}
+
+static void draw_interact_highlights(f32 alpha)
+{
+    if (s_free_cam || (s_player.state != PLAYER_ON_FOOT && s_player.state != PLAYER_DRIVING)) {
+        return;
+    }
+    RigidBody* body = phys_body(&s_phys, s_vehicle.body);
+    if (!body) {
+        return;
+    }
+    Vec3 body_pos = vec3_lerp(body->prev_pos, body->pos, alpha);
+    Quat body_rot = quat_slerp(body->prev_rot, body->rot, alpha);
+    f32 wave = 0.5f + 0.5f * sinf((f32)s_game.tick_count * 0.1f);
+    u8 v = (u8)(160 + 80.0f * wave);
+    u32 target_color = dd_rgba(v, v, 255, 255);
+    u32 slot_color = dd_rgba(90, (u8)(170 + 70.0f * wave), 100, 255);
+
+    if (s_interact.action == ACTION_PICKUP) {
+        Entity* entity = world_entity(&s_world, s_interact.target_entity);
+        if (entity && entity->mesh) {
+            Vec3 center = vec3_scale(vec3_add(entity->mesh->bounds.min, entity->mesh->bounds.max),
+                                     0.5f * entity->scale);
+            Vec3 half = vec3_scale(vec3_sub(entity->mesh->bounds.max, entity->mesh->bounds.min),
+                                   0.5f * entity->scale);
+            dd_obb(vec3_add(entity->pos, quat_rotate_vec3(entity->rot, center)), entity->rot,
+                   half, target_color);
+        }
+    } else if (s_interact.action != ACTION_NONE) {
+        dd_obb(vec3_add(body_pos, quat_rotate_vec3(body_rot, s_interact.target_center)), body_rot,
+               s_interact.target_half, target_color);
+    }
+
+    if (s_interact.hands.kind != ITEM_NONE && s_player.state == PLAYER_ON_FOOT) {
+        for (u32 k = 0; k < PART_COUNT; k++) {
+            const PartDef* def = part_def((PartKind)k);
+            if (s_carsys.parts[k].installed || item_for_part((PartKind)k) != s_interact.hands.kind) {
+                continue;
+            }
+            if (def->engine_bay && s_carsys.hood_open < 0.8f) {
+                continue;
+            }
+            if (s_interact.action == ACTION_INSTALL_PART && s_interact.target_part == (PartKind)k) {
+                continue;
+            }
+            Vec3 local = vec3_sub(def->socket_pos, s_vehicle.cfg.com_offset);
+            dd_obb(vec3_add(body_pos, quat_rotate_vec3(body_rot, local)), body_rot,
+                   def->socket_half, slot_color);
+        }
+    }
+}
+
+static void draw_cargo_preview(f32 alpha)
+{
+    if (s_interact.action != ACTION_PLACE_CARGO || s_free_cam) {
+        return;
+    }
+    RigidBody* body = phys_body(&s_phys, s_vehicle.body);
+    if (!body) {
+        return;
+    }
+    Vec3 pos = vec3_lerp(body->prev_pos, body->pos, alpha);
+    Quat rot = quat_slerp(body->prev_rot, body->rot, alpha);
+    Vec3 local = vec3_sub(s_interact.place_pos, s_vehicle.cfg.com_offset);
+    Mat4 base = mat4_trs(pos, rot, v3(1.0f, 1.0f, 1.0f));
+    Mat4 model = mat4_mul(base, mat4_trs(vec3_add(local, v3(0.0f, 0.02f, 0.0f)),
+                                         item_cargo_rot(s_interact.hands.kind),
+                                         v3(1.0f, 1.0f, 1.0f)));
+    r_draw_mesh(asset_mesh(item_mesh(s_interact.hands.kind)), model);
+}
+
+static void draw_viewmodel(void)
+{
+    if (s_player.state != PLAYER_ON_FOOT || s_interact.hands.kind == ITEM_NONE || s_free_cam) {
+        return;
+    }
+    if (s_interact.action == ACTION_PLACE_CARGO) {
+        return;
+    }
+    Vec3 fwd = camera_forward(&s_camera);
+    Vec3 right = camera_right(&s_camera);
+    Vec3 pos = vec3_add(s_camera.pos, vec3_add(vec3_scale(fwd, 0.62f), vec3_scale(right, 0.30f)));
+    pos.y -= 0.34f;
+    f32 scale = s_interact.hands.kind == ITEM_TIRE ? 0.45f : 0.85f;
+    Quat rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), -s_camera.yaw);
+    r_draw_mesh(asset_mesh(item_mesh(s_interact.hands.kind)),
+                mat4_trs(pos, rot, v3(scale, scale, scale)));
+}
+
+static void spawn_spare(ItemKind kind, f32 condition, Vec3 offset)
+{
+    Quat place_rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), s_zone_spawn.car_yaw);
+    Quat rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), s_zone_spawn.car_yaw + offset.x * 2.0f);
+    Vec3 pos = vec3_add(s_zone_spawn.car_pos, quat_rotate_vec3(place_rot, offset));
+    f32 lift = kind == ITEM_TIRE ? 0.28f : 0.16f;
+    pos.y = heightfield_sample(&s_terrain.hf, pos.x, pos.z) + lift;
+    EntityHandle handle = world_spawn(&s_world, ENTITY_PART_PICKUP, pos, rot, 1.0f,
+                                      item_mesh(kind), 0);
+    Entity* entity = world_entity(&s_world, handle);
+    if (entity) {
+        entity->aux_kind = (u32)kind;
+        entity->aux_value = condition;
+    }
+}
+
+static void spawn_spares(void)
+{
+    spawn_spare(ITEM_BATTERY, 0.9f, v3(2.6f, 0.0f, -1.0f));
+    spawn_spare(ITEM_TIRE, 1.0f, v3(3.3f, 0.0f, -0.2f));
+    spawn_spare(ITEM_TIRE, 0.65f, v3(3.4f, 0.0f, 0.9f));
+    spawn_spare(ITEM_RADIATOR, 0.85f, v3(2.8f, 0.0f, 1.8f));
+    spawn_spare(ITEM_ALTERNATOR, 0.8f, v3(3.9f, 0.0f, 1.5f));
+    spawn_spare(ITEM_JERRYCAN, 1.0f, v3(2.4f, 0.0f, 2.6f));
+    spawn_spare(ITEM_OILCAN, 1.0f, v3(3.1f, 0.0f, 2.8f));
 }
 
 static void draw_telemetry_panel(void)
@@ -352,7 +561,14 @@ static void game_render(f32 alpha, const GameInput* input)
 
     terrain_render_draw();
     world_render(&s_world);
-    vehicle_debug_draw(&s_vehicle, &s_phys, alpha, s_show_phys_debug);
+    vehicle_render(&s_vehicle, &s_phys, alpha);
+    carsys_render(&s_carsys, &s_vehicle, &s_phys, alpha);
+    draw_interact_highlights(alpha);
+    draw_cargo_preview(alpha);
+    draw_viewmodel();
+    if (s_show_phys_debug) {
+        vehicle_debug_draw(&s_vehicle, &s_phys, alpha, 1);
+    }
     draw_phys_debug(alpha);
     if (s_show_collision) {
         draw_collision_wireframe();
@@ -366,6 +582,9 @@ static void game_render(f32 alpha, const GameInput* input)
         draw_drive_hud();
     }
     draw_interact_prompt();
+    if (s_show_carsys) {
+        draw_carsys_panel();
+    }
     if (s_show_telemetry) {
         draw_telemetry_panel();
     }
@@ -534,7 +753,7 @@ static CarTestReport car_test_run(b32 verbose)
         PhysWorld* world = arena_push(&g_perm_arena, PhysWorld);
         phys_init(world, &g_perm_arena, hf);
         Vehicle* veh = arena_push(&g_perm_arena, Vehicle);
-        if (!vehicle_init(veh, world, WAGON_CFG_PATH, v3(-150.0f, 0.9f, 0.0f), -PI32 * 0.5f)) {
+        if (!vehicle_init(veh, world, CAR_CFG_PATH, v3(-150.0f, 0.9f, 0.0f), -PI32 * 0.5f)) {
             report.pass = 0;
             arena_temp_end(temp);
             return report;
@@ -594,7 +813,7 @@ static CarTestReport car_test_run(b32 verbose)
         PhysWorld* world = arena_push(&g_perm_arena, PhysWorld);
         phys_init(world, &g_perm_arena, hf);
         Vehicle* veh = arena_push(&g_perm_arena, Vehicle);
-        vehicle_init(veh, world, WAGON_CFG_PATH, v3(-150.0f, 0.9f, 0.0f), -PI32 * 0.5f);
+        vehicle_init(veh, world, CAR_CFG_PATH, v3(-150.0f, 0.9f, 0.0f), -PI32 * 0.5f);
         RigidBody* body = phys_body(world, veh->body);
 
         car_run_ticks(world, veh, idle, 240);
@@ -638,7 +857,7 @@ static CarTestReport car_test_run(b32 verbose)
         phys_init(world, &g_perm_arena, hf);
         Vehicle* veh = arena_push(&g_perm_arena, Vehicle);
         f32 spawn_x = 20.0f;
-        vehicle_init(veh, world, WAGON_CFG_PATH,
+        vehicle_init(veh, world, CAR_CFG_PATH,
                      v3(spawn_x, spawn_x * 0.28f + 0.9f, 0.0f), -PI32 * 0.5f);
         RigidBody* body = phys_body(world, veh->body);
 
@@ -667,7 +886,7 @@ static CarTestReport car_test_run(b32 verbose)
 
 static int run_scene_car_test(void)
 {
-    log_info("scene car_test: scripted maneuvers at dt=%.5f, car %s", (f64)FIXED_DT, WAGON_CFG_PATH);
+    log_info("scene car_test: scripted maneuvers at dt=%.5f, car %s", (f64)FIXED_DT, CAR_CFG_PATH);
     CarTestReport a = car_test_run(1);
     CarTestReport b = car_test_run(0);
     b32 deterministic = a.checksum == b.checksum;
@@ -719,7 +938,7 @@ static ZoneCheckResult zone_check_run(void)
     }
 
     Vehicle* veh = arena_push(&g_perm_arena, Vehicle);
-    if (!vehicle_init(veh, phys, WAGON_CFG_PATH, spawn.car_pos, spawn.car_yaw)) {
+    if (!vehicle_init(veh, phys, CAR_CFG_PATH, spawn.car_pos, spawn.car_yaw)) {
         arena_temp_end(temp);
         return result;
     }
@@ -909,7 +1128,7 @@ static WalkTestReport walk_test_run(b32 verbose)
         phys_init(world, &g_perm_arena, hf);
         Vehicle* veh = arena_push(&g_perm_arena, Vehicle);
         f32 car_x = 20.0f;
-        if (!vehicle_init(veh, world, WAGON_CFG_PATH,
+        if (!vehicle_init(veh, world, CAR_CFG_PATH,
                           v3(car_x, car_x * 0.28f + 0.9f, 0.0f), -PI32 * 0.5f)) {
             report.pass = 0;
             arena_temp_end(temp);
@@ -956,7 +1175,7 @@ static WalkTestReport walk_test_run(b32 verbose)
         walk_add_wall(world, v3(-2.0f, 0.0f, 3.1f), v3(2.0f, 0.0f, 3.1f), 2.5f);
         phys_statics_build(world, &g_perm_arena);
         Vehicle* veh = arena_push(&g_perm_arena, Vehicle);
-        if (!vehicle_init(veh, world, WAGON_CFG_PATH, v3(0.0f, 0.9f, 0.0f), 0.0f)) {
+        if (!vehicle_init(veh, world, CAR_CFG_PATH, v3(0.0f, 0.9f, 0.0f), 0.0f)) {
             report.pass = 0;
             arena_temp_end(temp);
             return report;
@@ -981,6 +1200,266 @@ static WalkTestReport walk_test_run(b32 verbose)
     }
 
     return report;
+}
+
+typedef struct FailRig {
+    PhysWorld* world;
+    Vehicle* veh;
+    CarSys* sys;
+    RigidBody* body;
+} FailRig;
+
+static b32 fail_rig_init(FailRig* rig)
+{
+    Heightfield* hf = arena_push(&g_perm_arena, Heightfield);
+    heightfield_init_procedural(hf, &g_perm_arena, 400, 2.0f, 3u, 0.0f);
+    rig->world = arena_push(&g_perm_arena, PhysWorld);
+    phys_init(rig->world, &g_perm_arena, hf);
+    rig->veh = arena_push(&g_perm_arena, Vehicle);
+    if (!vehicle_init(rig->veh, rig->world, CAR_CFG_PATH, v3(0.0f, 0.9f, 0.0f), -PI32 * 0.5f)) {
+        return 0;
+    }
+    rig->sys = arena_push(&g_perm_arena, CarSys);
+    carsys_init(rig->sys);
+    rig->body = phys_body(rig->world, rig->veh->body);
+    return 1;
+}
+
+static void fail_run(FailRig* rig, VehicleInput input, u32 ticks)
+{
+    for (u32 i = 0; i < ticks; i++) {
+        vehicle_set_input(rig->veh, input);
+        carsys_tick(rig->sys, rig->veh, rig->world, FIXED_DT);
+        vehicle_tick(rig->veh, rig->world, FIXED_DT);
+        phys_tick(rig->world, FIXED_DT);
+    }
+}
+
+static b32 fail_start_engine(FailRig* rig)
+{
+    VehicleInput idle = {0};
+    fail_run(rig, idle, 240);
+    carsys_try_start(rig->sys, rig->veh);
+    fail_run(rig, idle, 150);
+    return rig->sys->engine_on;
+}
+
+static void fail_checksum(u64* hash, const FailRig* rig)
+{
+    for (u32 i = 0; i < PART_COUNT; i++) {
+        checksum_bytes(hash, &rig->sys->parts[i].condition, sizeof(f32));
+        checksum_bytes(hash, &rig->sys->parts[i].installed, sizeof(b32));
+    }
+    checksum_bytes(hash, &rig->sys->elec.battery_charge, sizeof(f32));
+    checksum_bytes(hash, &rig->sys->fluids, sizeof(Fluids));
+    checksum_bytes(hash, &rig->sys->engine_on, sizeof(b32));
+    checksum_bytes(hash, &rig->body->pos, sizeof(Vec3));
+    checksum_bytes(hash, &rig->body->vel, sizeof(Vec3));
+}
+
+typedef struct FailReport {
+    b32 pass;
+    u64 checksum;
+} FailReport;
+
+static b32 fail_check(FailReport* report, b32 ok, b32 verbose, const char* name, const char* detail)
+{
+    if (verbose) {
+        log_info("failure_matrix %-18s %s | %s", name, ok ? "PASS" : "FAIL", detail);
+    }
+    report->pass &= ok;
+    return ok;
+}
+
+static FailReport failure_matrix_run(b32 verbose)
+{
+    FailReport report;
+    report.pass = 1;
+    report.checksum = 14695981039346656037ull;
+    VehicleInput idle = {0};
+    VehicleInput full = {0};
+    full.throttle = 1.0f;
+    char detail[128];
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        FailRig rig;
+        if (!fail_rig_init(&rig)) {
+            report.pass = 0;
+            arena_temp_end(temp);
+            return report;
+        }
+        b32 started = fail_start_engine(&rig);
+        fail_run(&rig, full, 480);
+        f32 speed = f_abs(vehicle_forward_speed(rig.veh, rig.world));
+        snprintf(detail, sizeof(detail), "started %d, speed %.1f m/s > 10", started, (f64)speed);
+        fail_check(&report, started && speed > 10.0f, verbose, "baseline", detail);
+        fail_checksum(&report.checksum, &rig);
+        arena_temp_end(temp);
+    }
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        FailRig rig;
+        fail_rig_init(&rig);
+        fail_start_engine(&rig);
+        rig.sys->parts[PART_ENGINE].condition = 0.0f;
+        fail_run(&rig, idle, 60);
+        b32 stalled = !rig.sys->engine_on;
+        carsys_try_start(rig.sys, rig.veh);
+        fail_run(&rig, idle, 150);
+        snprintf(detail, sizeof(detail), "stalled %d, restart blocked %d", stalled, !rig.sys->engine_on);
+        fail_check(&report, stalled && !rig.sys->engine_on, verbose, "engine dead", detail);
+        fail_checksum(&report.checksum, &rig);
+        arena_temp_end(temp);
+    }
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        FailRig rig;
+        fail_rig_init(&rig);
+        rig.sys->elec.battery_charge = 0.0f;
+        VehicleInput quiet = {0};
+        fail_run(&rig, quiet, 240);
+        carsys_try_start(rig.sys, rig.veh);
+        fail_run(&rig, quiet, 150);
+        b32 no_crank = !rig.sys->engine_on;
+
+        FailRig rig2;
+        fail_rig_init(&rig2);
+        b32 started = fail_start_engine(&rig2);
+        rig2.sys->elec.battery_charge = 0.0f;
+        fail_run(&rig2, idle, 240);
+        b32 kept_running = rig2.sys->engine_on;
+        snprintf(detail, sizeof(detail), "dead battery no crank %d, alternator keeps engine %d",
+                 no_crank, started && kept_running);
+        fail_check(&report, no_crank && started && kept_running, verbose, "battery", detail);
+        fail_checksum(&report.checksum, &rig);
+        fail_checksum(&report.checksum, &rig2);
+        arena_temp_end(temp);
+    }
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        FailRig rig;
+        fail_rig_init(&rig);
+        fail_start_engine(&rig);
+        rig.sys->parts[PART_ALTERNATOR].condition = 0.0f;
+        rig.sys->headlight_switch = 1;
+        f32 charge_before = rig.sys->elec.battery_charge;
+        fail_run(&rig, idle, 1200);
+        f32 drained = charge_before - rig.sys->elec.battery_charge;
+        snprintf(detail, sizeof(detail), "drained %.4f > 0.0008 in 10 s", (f64)drained);
+        fail_check(&report, drained > 0.0008f, verbose, "alternator dead", detail);
+        fail_checksum(&report.checksum, &rig);
+        arena_temp_end(temp);
+    }
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        FailRig rig;
+        fail_rig_init(&rig);
+        fail_start_engine(&rig);
+        rig.sys->parts[PART_RADIATOR].condition = 0.0f;
+        fail_run(&rig, full, 3600);
+        f32 temp_c = rig.sys->fluids.coolant_temp;
+        f32 power = rig.veh->effects.engine_power_mul;
+        f32 engine_cond = rig.sys->parts[PART_ENGINE].condition;
+        snprintf(detail, sizeof(detail), "temp %.0fC > 112, power_mul %.2f < 0.95, engine cond %.2f < 1",
+                 (f64)temp_c, (f64)power, (f64)engine_cond);
+        fail_check(&report, temp_c > COOLANT_OVERHEAT_C && power < 0.95f && engine_cond < 1.0f,
+                   verbose, "radiator dead", detail);
+        fail_checksum(&report.checksum, &rig);
+        arena_temp_end(temp);
+    }
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        FailRig rig;
+        fail_rig_init(&rig);
+        fail_start_engine(&rig);
+        rig.sys->fluids.fuel = 0.0015f;
+        fail_run(&rig, full, 1200);
+        b32 stalled = !rig.sys->engine_on && rig.sys->fluids.fuel <= 0.0f;
+        carsys_try_start(rig.sys, rig.veh);
+        fail_run(&rig, idle, 150);
+        snprintf(detail, sizeof(detail), "ran dry and stalled %d, restart blocked %d",
+                 stalled, !rig.sys->engine_on);
+        fail_check(&report, stalled && !rig.sys->engine_on, verbose, "fuel empty", detail);
+        fail_checksum(&report.checksum, &rig);
+        arena_temp_end(temp);
+    }
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        FailRig rig;
+        fail_rig_init(&rig);
+        fail_start_engine(&rig);
+        rig.sys->parts[PART_TIRE_FL].condition = 0.0f;
+        rig.sys->parts[PART_TIRE_RR].installed = 0;
+        fail_run(&rig, idle, 2);
+        f32 flat_radius = rig.veh->effects.tire_radius_mul[WHEEL_FL];
+        f32 flat_grip = rig.veh->effects.tire_grip_mul[WHEEL_FL];
+        f32 rim_radius = rig.veh->effects.tire_radius_mul[WHEEL_RR];
+        snprintf(detail, sizeof(detail), "flat radius %.2f < 0.9, flat grip %.2f < 0.6, rim radius %.2f < 0.7",
+                 (f64)flat_radius, (f64)flat_grip, (f64)rim_radius);
+        fail_check(&report, flat_radius < 0.9f && flat_grip < 0.6f && rim_radius < 0.7f,
+                   verbose, "tires", detail);
+        fail_checksum(&report.checksum, &rig);
+        arena_temp_end(temp);
+    }
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        FailRig rig;
+        fail_rig_init(&rig);
+        fail_start_engine(&rig);
+        rig.sys->headlight_switch = 1;
+        fail_run(&rig, idle, 2);
+        b32 lights_on = rig.veh->effects.headlights_on;
+        rig.sys->elec.fuse_ok[CONSUMER_HEADLIGHTS] = 0;
+        fail_run(&rig, idle, 2);
+        b32 lights_off = !rig.veh->effects.headlights_on;
+        snprintf(detail, sizeof(detail), "on with fuse %d, off when blown %d", lights_on, lights_off);
+        fail_check(&report, lights_on && lights_off, verbose, "headlight fuse", detail);
+        fail_checksum(&report.checksum, &rig);
+        arena_temp_end(temp);
+    }
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        FailRig rig;
+        fail_rig_init(&rig);
+        phys_statics_reserve(rig.world, &g_perm_arena, 16);
+        walk_add_wall(rig.world, v3(26.0f, 0.0f, 6.0f), v3(26.0f, 0.0f, -6.0f), 3.0f);
+        phys_statics_build(rig.world, &g_perm_arena);
+        fail_start_engine(&rig);
+        fail_run(&rig, full, 720);
+        f32 radiator_cond = rig.sys->parts[PART_RADIATOR].condition;
+        f32 speed = vec3_length(rig.body->vel);
+        snprintf(detail, sizeof(detail), "crashed to %.1f m/s, radiator cond %.2f < 0.9, severity %.2f",
+                 (f64)speed, (f64)radiator_cond, (f64)rig.sys->last_impact_severity);
+        fail_check(&report, radiator_cond < 0.9f && rig.sys->last_impact_severity > 0.0f,
+                   verbose, "crash damage", detail);
+        fail_checksum(&report.checksum, &rig);
+        arena_temp_end(temp);
+    }
+
+    return report;
+}
+
+static int run_scene_failure_matrix(void)
+{
+    log_info("scene failure_matrix: carsys parts/electrics/fluids at dt=%.5f", (f64)FIXED_DT);
+    FailReport a = failure_matrix_run(1);
+    FailReport b = failure_matrix_run(0);
+    b32 deterministic = a.checksum == b.checksum;
+    log_info("failure_matrix determinism: run1 %016llx run2 %016llx | %s",
+             (unsigned long long)a.checksum, (unsigned long long)b.checksum,
+             deterministic ? "PASS" : "FAIL");
+    b32 pass = a.pass && b.pass && deterministic;
+    log_info("scene failure_matrix: %s", pass ? "PASS" : "FAIL");
+    return pass ? 0 : 1;
 }
 
 static int run_scene_walk_test(void)
@@ -1027,6 +1506,9 @@ int main(int argc, char** argv)
         if (strcmp(scene, "walk_test") == 0) {
             return run_scene_walk_test();
         }
+        if (strcmp(scene, "failure_matrix") == 0) {
+            return run_scene_failure_matrix();
+        }
         log_error("unknown scene: %s", scene);
         return 1;
     }
@@ -1050,12 +1532,15 @@ int main(int argc, char** argv)
         platform_shutdown();
         return 1;
     }
-    if (!vehicle_init(&s_vehicle, &s_phys, WAGON_CFG_PATH, s_zone_spawn.car_pos, s_zone_spawn.car_yaw)) {
+    if (!vehicle_init(&s_vehicle, &s_phys, CAR_CFG_PATH, s_zone_spawn.car_pos, s_zone_spawn.car_yaw)) {
         platform_shutdown();
         return 1;
     }
 
     player_init(&s_player, s_zone_spawn.player_pos, s_zone_spawn.player_yaw);
+    carsys_init(&s_carsys);
+    interact_init(&s_interact);
+    spawn_spares();
 
     camera_init(&s_camera, vec3_add(s_zone_spawn.car_pos, v3(-8.0f, 5.0f, 10.0f)));
     camera_look_at(&s_camera, s_zone_spawn.car_pos);
@@ -1093,6 +1578,9 @@ int main(int argc, char** argv)
         if (input->key_pressed[KEY_F3]) {
             s_show_collision = !s_show_collision;
         }
+        if (input->key_pressed[KEY_F4]) {
+            s_show_carsys = !s_show_carsys;
+        }
         if (input->key_pressed[KEY_F5]) {
             s_slow_mo = !s_slow_mo;
         }
@@ -1122,11 +1610,21 @@ int main(int argc, char** argv)
                 f32 forward_intent = input->key_down[KEY_W] ? 1.0f : 0.0f;
                 f32 reverse_intent = input->key_down[KEY_S] ? 1.0f : 0.0f;
                 f32 steer = (input->key_down[KEY_D] ? 1.0f : 0.0f) - (input->key_down[KEY_A] ? 1.0f : 0.0f);
-                b32 handbrake = input->key_down[KEY_SPACE];
+                b32 handbrake = input->key_down[KEY_SPACE] || s_carsys.handbrake_latched;
                 vehicle_driver_input(&s_vehicle, &s_phys, forward_intent, reverse_intent, steer, handbrake);
+                if (input->key_pressed[KEY_F]) {
+                    if (s_carsys.engine_on) {
+                        carsys_stop_engine(&s_carsys);
+                    } else {
+                        carsys_try_start(&s_carsys, &s_vehicle);
+                    }
+                }
+                if (input->key_pressed[KEY_L]) {
+                    s_carsys.headlight_switch = !s_carsys.headlight_switch;
+                }
             } else {
                 VehicleInput parked = {0};
-                parked.handbrake = 1;
+                parked.handbrake = s_carsys.handbrake_latched;
                 vehicle_set_input(&s_vehicle, parked);
                 frame_cmd.move_x = (input->key_down[KEY_D] ? 1.0f : 0.0f) - (input->key_down[KEY_A] ? 1.0f : 0.0f);
                 frame_cmd.move_z = (input->key_down[KEY_W] ? 1.0f : 0.0f) - (input->key_down[KEY_S] ? 1.0f : 0.0f);
@@ -1134,9 +1632,24 @@ int main(int argc, char** argv)
                 if (input->key_pressed[KEY_SPACE]) {
                     s_pending_jump = 1;
                 }
+                if (input->key_pressed[KEY_G]) {
+                    interact_drop(&s_interact, &s_world, &s_phys, s_player.pos, s_player.yaw);
+                }
             }
+            Ray view_ray;
+            view_ray.origin = s_camera.pos;
+            view_ray.dir = camera_forward(&s_camera);
+            interact_update(&s_interact, &s_player, &s_vehicle, &s_carsys, &s_world, &s_phys,
+                            view_ray, input->key_down[KEY_E], input->key_pressed[KEY_E],
+                            (f32)frame_dt);
+            s_player.speed_mul = f_max(1.0f - item_mass(s_interact.hands.kind) * 0.012f, 0.6f);
             if (input->key_pressed[KEY_E]) {
-                s_pending_interact = 1;
+                if (s_interact.action == ACTION_ENTER_CAR) {
+                    s_pending_interact = 1;
+                } else if (s_interact.action == ACTION_EXIT_CAR) {
+                    s_player.exit_pref = s_interact.target_side == 0 ? -1 : 1;
+                    s_pending_interact = 1;
+                }
             }
         }
 
@@ -1174,6 +1687,7 @@ int main(int argc, char** argv)
                 player_camera(&s_player, &s_phys, &s_vehicle, alpha, (f32)frame_dt, &s_camera);
             }
         }
+        update_headlights(alpha);
         game_render(alpha, input);
         platform_swap_buffers();
 

@@ -39,6 +39,8 @@ typedef struct Player {
     b32 cockpit_eye_valid;
     f32 look_yaw;
     f32 look_pitch;
+    f32 speed_mul;
+    i32 exit_pref;
 } Player;
 
 void player_init(Player* p, Vec3 pos, f32 yaw);
