@@ -112,6 +112,8 @@ b32 vehicle_config_load(VehicleConfig* out, const char* path)
     out->steer_high_speed = config_get_f32(&cfg, "steering.high_speed", 40.0f);
     out->steer_rate_deg = config_get_f32(&cfg, "steering.rate_deg", 240.0f);
 
+    out->seat_eye = config_get_vec3(&cfg, "cabin.seat_eye", v3(-0.4f, 0.35f, -0.3f));
+
     arena_temp_end(temp);
     return 1;
 }

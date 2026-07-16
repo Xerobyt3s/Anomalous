@@ -97,6 +97,7 @@
     <ClCompile Include="src\math\vmath.c" />
     <ClCompile Include="src\platform\gl_loader.c" />
     <ClCompile Include="src\platform\platform.c" />
+    <ClCompile Include="src\player\player.c" />
     <ClCompile Include="src\render\camera.c" />
     <ClCompile Include="src\render\debug_draw.c" />
     <ClCompile Include="src\render\render.c" />
@@ -126,6 +127,7 @@
     <ClInclude Include="src\math\vmath.h" />
     <ClInclude Include="src\platform\gl_loader.h" />
     <ClInclude Include="src\platform\platform.h" />
+    <ClInclude Include="src\player\player.h" />
     <ClInclude Include="src\render\camera.h" />
     <ClInclude Include="src\render\debug_draw.h" />
     <ClInclude Include="src\render\render.h" />

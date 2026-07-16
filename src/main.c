@@ -17,6 +17,7 @@
 #include "world/world.h"
 #include "world/terrain.h"
 #include "world/zone.h"
+#include "player/player.h"
 #include "ui/ui.h"
 
 #include <stdio.h>
@@ -47,6 +48,7 @@ static Terrain s_terrain;
 static World s_world;
 static PhysWorld s_phys;
 static Vehicle s_vehicle;
+static Player s_player;
 static ZoneSpawn s_zone_spawn;
 static Camera s_camera;
 static f32 s_fps;
@@ -56,6 +58,9 @@ static b32 s_show_collision;
 static b32 s_show_tuning;
 static b32 s_slow_mo;
 static b32 s_free_cam;
+static b32 s_chase_cam;
+static b32 s_pending_jump;
+static b32 s_pending_interact;
 static Telem s_telem_rpm;
 static Telem s_telem_slip;
 static Telem s_telem_load;
@@ -95,10 +100,11 @@ static void reset_car(void)
     vehicle_teleport(&s_vehicle, &s_phys, s_zone_spawn.car_pos, s_zone_spawn.car_yaw);
 }
 
-static void game_tick(f32 dt)
+static void game_tick(f32 dt, PlayerCommand cmd)
 {
     vehicle_tick(&s_vehicle, &s_phys, dt);
     phys_tick(&s_phys, dt);
+    player_tick(&s_player, &s_phys, &s_vehicle, cmd, dt);
 
     telem_push(&s_telem_rpm, drivetrain_rpm(&s_vehicle.train));
     telem_push(&s_telem_slip, (s_vehicle.wheels[WHEEL_RL].slip_ratio + s_vehicle.wheels[WHEEL_RR].slip_ratio) * 0.5f);
@@ -249,8 +255,23 @@ static void draw_status_hud(void)
                s_slow_mo ? " | SLOW-MO 0.1x" : "",
                s_free_cam ? " | FREE CAM" : "");
     y += line_height;
-    dd_text_2d(12.0f, y, 16.0f, DD_GRAY,
-               "wasd drive | space handbrake | r reset | f1 telemetry | f2 forces | f3 collision | f5 slow-mo | f6 free cam | f7 tuning");
+    if (player_driving(&s_player)) {
+        dd_text_2d(12.0f, y, 16.0f, DD_GRAY,
+                   "wasd drive | space handbrake | e exit | c camera | r reset | f1 telemetry | f2 forces | f3 collision | f5 slow-mo | f6 free cam | f7 tuning");
+    } else {
+        dd_text_2d(12.0f, y, 16.0f, DD_GRAY,
+                   "wasd walk | shift run | space jump | e enter car | r reset car | f1-f7 debug");
+    }
+}
+
+static void draw_interact_prompt(void)
+{
+    Vec2 vp = r_viewport_size();
+    if (player_can_enter(&s_player, &s_phys, &s_vehicle)) {
+        dd_text_2d(vp.x * 0.5f - 70.0f, vp.y * 0.72f, 20.0f, DD_WHITE, "[E] enter wagon");
+    } else if (player_can_exit(&s_player, &s_phys, &s_vehicle)) {
+        dd_text_2d(vp.x * 0.5f - 50.0f, vp.y * 0.72f, 20.0f, DD_GRAY, "[E] get out");
+    }
 }
 
 static void draw_telemetry_panel(void)
@@ -336,9 +357,15 @@ static void game_render(f32 alpha, const GameInput* input)
     if (s_show_collision) {
         draw_collision_wireframe();
     }
+    if (s_free_cam) {
+        player_debug_draw(&s_player, alpha);
+    }
     draw_mouse_ray(input);
     draw_status_hud();
-    draw_drive_hud();
+    if (player_driving(&s_player)) {
+        draw_drive_hud();
+    }
+    draw_interact_prompt();
     if (s_show_telemetry) {
         draw_telemetry_panel();
     }
@@ -728,6 +755,248 @@ static int run_scene_zone_check(void)
     return pass ? 0 : 1;
 }
 
+static void walk_add_quad(PhysWorld* world, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3)
+{
+    phys_add_static_tri(world, p0, p1, p2);
+    phys_add_static_tri(world, p0, p2, p3);
+}
+
+static void walk_add_wall(PhysWorld* world, Vec3 a, Vec3 b, f32 height)
+{
+    walk_add_quad(world, a, b, vec3_add(b, v3(0.0f, height, 0.0f)), vec3_add(a, v3(0.0f, height, 0.0f)));
+}
+
+static void walk_run_ticks(PhysWorld* world, Player* p, Vehicle* veh, PlayerCommand cmd, u32 ticks)
+{
+    for (u32 i = 0; i < ticks; i++) {
+        if (veh) {
+            VehicleInput parked = {0};
+            parked.handbrake = 1;
+            vehicle_set_input(veh, parked);
+            vehicle_tick(veh, world, FIXED_DT);
+        }
+        phys_tick(world, FIXED_DT);
+        player_tick(p, world, veh, cmd, FIXED_DT);
+        cmd.jump = 0;
+        cmd.interact = 0;
+    }
+}
+
+static void walk_checksum(u64* hash, const Player* p)
+{
+    checksum_bytes(hash, &p->pos, sizeof(p->pos));
+    checksum_bytes(hash, &p->vel, sizeof(p->vel));
+    u32 state = (u32)p->state;
+    checksum_bytes(hash, &state, sizeof(state));
+}
+
+typedef struct WalkTestReport {
+    b32 pass;
+    u64 checksum;
+} WalkTestReport;
+
+static WalkTestReport walk_test_run(b32 verbose)
+{
+    WalkTestReport report;
+    report.pass = 1;
+    report.checksum = 14695981039346656037ull;
+    PlayerCommand idle = {0};
+    PlayerCommand forward = {0};
+    forward.move_z = 1.0f;
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        Heightfield* hf = arena_push(&g_perm_arena, Heightfield);
+        heightfield_init_procedural(hf, &g_perm_arena, 96, 1.0f, 5u, 0.0f);
+        PhysWorld* world = arena_push(&g_perm_arena, PhysWorld);
+        phys_init(world, &g_perm_arena, hf);
+        phys_statics_reserve(world, &g_perm_arena, 64);
+        walk_add_wall(world, v3(-6.0f, 0.0f, -6.0f), v3(6.0f, 0.0f, -6.0f), 3.0f);
+        phys_statics_build(world, &g_perm_arena);
+
+        Player* p = arena_push(&g_perm_arena, Player);
+        player_init(p, v3(0.0f, 0.0f, 10.0f), 0.0f);
+        walk_run_ticks(world, p, 0, forward, 240);
+        f32 walked = 10.0f - p->pos.z;
+        b32 walk_ok = walked >= 7.0f && walked <= 8.8f && p->grounded && f_abs(p->pos.y) < 0.2f;
+        if (verbose) {
+            log_info("walk_test walk: %.2f m in 2 s in [7.0,8.8] | grounded %d | %s",
+                     (f64)walked, p->grounded, walk_ok ? "PASS" : "FAIL");
+        }
+        report.pass &= walk_ok;
+
+        PlayerCommand jump = {0};
+        jump.jump = 1;
+        walk_run_ticks(world, p, 0, jump, 30);
+        f32 jump_peak = p->pos.y;
+        walk_run_ticks(world, p, 0, idle, 150);
+        b32 jump_ok = jump_peak > 0.35f && p->grounded && f_abs(p->pos.y) < 0.1f;
+        if (verbose) {
+            log_info("walk_test jump: height %.2f m > 0.35 | landed grounded %d | %s",
+                     (f64)jump_peak, p->grounded, jump_ok ? "PASS" : "FAIL");
+        }
+        report.pass &= jump_ok;
+
+        walk_run_ticks(world, p, 0, forward, 600);
+        b32 wall_ok = p->pos.z > -6.01f && p->pos.z < -5.2f && f_abs(p->pos.x) < 0.5f;
+        if (verbose) {
+            log_info("walk_test wall: stopped at z %.2f in (-6.01,-5.2) | %s",
+                     (f64)p->pos.z, wall_ok ? "PASS" : "FAIL");
+        }
+        report.pass &= wall_ok;
+        walk_checksum(&report.checksum, p);
+        arena_temp_end(temp);
+    }
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        Heightfield* hf = arena_push(&g_perm_arena, Heightfield);
+        heightfield_init_procedural(hf, &g_perm_arena, 96, 1.0f, 5u, 0.0f);
+        PhysWorld* world = arena_push(&g_perm_arena, PhysWorld);
+        phys_init(world, &g_perm_arena, hf);
+        phys_statics_reserve(world, &g_perm_arena, 64);
+        walk_add_quad(world, v3(-4.0f, 0.25f, -4.0f), v3(4.0f, 0.25f, -4.0f),
+                      v3(4.0f, 0.25f, -14.0f), v3(-4.0f, 0.25f, -14.0f));
+        phys_statics_build(world, &g_perm_arena);
+
+        Player* p = arena_push(&g_perm_arena, Player);
+        player_init(p, v3(0.0f, 0.0f, 0.0f), 0.0f);
+        walk_run_ticks(world, p, 0, forward, 300);
+        f32 on_step_y = p->pos.y;
+        f32 on_step_z = p->pos.z;
+        walk_run_ticks(world, p, 0, forward, 180);
+        b32 step_ok = on_step_y >= 0.2f && on_step_y <= 0.35f && on_step_z < -6.0f
+                    && p->pos.z < -14.5f && f_abs(p->pos.y) < 0.1f;
+        if (verbose) {
+            log_info("walk_test step: on step y %.2f at z %.1f | off step y %.2f at z %.1f | %s",
+                     (f64)on_step_y, (f64)on_step_z, (f64)p->pos.y, (f64)p->pos.z,
+                     step_ok ? "PASS" : "FAIL");
+        }
+        report.pass &= step_ok;
+        walk_checksum(&report.checksum, p);
+        arena_temp_end(temp);
+    }
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        Heightfield* hf = arena_push(&g_perm_arena, Heightfield);
+        heightfield_init_slope(hf, &g_perm_arena, 120, 1.0f, 0.28f);
+        PhysWorld* world = arena_push(&g_perm_arena, PhysWorld);
+        phys_init(world, &g_perm_arena, hf);
+
+        Player* p = arena_push(&g_perm_arena, Player);
+        Vec3 start = v3(10.0f, heightfield_sample(hf, 10.0f, 0.0f), 0.0f);
+        player_init(p, start, PI32 * 0.5f);
+        walk_run_ticks(world, p, 0, idle, 360);
+        f32 drift = vec3_distance(p->pos, start);
+        walk_run_ticks(world, p, 0, forward, 360);
+        f32 climb = p->pos.y - start.y;
+        b32 slope_ok = drift < 0.05f && climb > 2.0f && p->grounded;
+        if (verbose) {
+            log_info("walk_test slope: stand drift %.3f m < 0.05 | climbed %.2f m > 2.0 | %s",
+                     (f64)drift, (f64)climb, slope_ok ? "PASS" : "FAIL");
+        }
+        report.pass &= slope_ok;
+        walk_checksum(&report.checksum, p);
+        arena_temp_end(temp);
+    }
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        Heightfield* hf = arena_push(&g_perm_arena, Heightfield);
+        heightfield_init_slope(hf, &g_perm_arena, 120, 1.0f, 0.28f);
+        PhysWorld* world = arena_push(&g_perm_arena, PhysWorld);
+        phys_init(world, &g_perm_arena, hf);
+        Vehicle* veh = arena_push(&g_perm_arena, Vehicle);
+        f32 car_x = 20.0f;
+        if (!vehicle_init(veh, world, WAGON_CFG_PATH,
+                          v3(car_x, car_x * 0.28f + 0.9f, 0.0f), -PI32 * 0.5f)) {
+            report.pass = 0;
+            arena_temp_end(temp);
+            return report;
+        }
+        Player* p = arena_push(&g_perm_arena, Player);
+        player_init(p, v3(10.0f, heightfield_sample(hf, 10.0f, 0.0f), 6.0f), 0.0f);
+        walk_run_ticks(world, p, veh, idle, 360);
+
+        RigidBody* body = phys_body(world, veh->body);
+        Vec3 door = vec3_add(body->pos, quat_rotate_vec3(body->rot, v3(-2.0f, 0.0f, -0.3f)));
+        p->pos = v3(door.x, heightfield_sample(hf, door.x, door.z), door.z);
+        p->prev_pos = p->pos;
+        p->vel = vec3_zero();
+
+        PlayerCommand interact = {0};
+        interact.interact = 1;
+        walk_run_ticks(world, p, veh, interact, 120);
+        b32 entered = p->state == PLAYER_DRIVING;
+        walk_run_ticks(world, p, veh, interact, 120);
+        f32 horiz_dist = vec3_length(v3(p->pos.x - body->pos.x, 0.0f, p->pos.z - body->pos.z));
+        f32 ground_err = f_abs(p->pos.y - heightfield_sample(hf, p->pos.x, p->pos.z));
+        b32 exited = p->state == PLAYER_ON_FOOT && p->grounded && horiz_dist > 1.2f && ground_err < 0.4f;
+        b32 cycle_ok = entered && exited;
+        if (verbose) {
+            log_info("walk_test enter/exit slope: entered %d | exited %d at %.2f m from car, ground err %.2f | %s",
+                     entered, exited, (f64)horiz_dist, (f64)ground_err, cycle_ok ? "PASS" : "FAIL");
+        }
+        report.pass &= cycle_ok;
+        walk_checksum(&report.checksum, p);
+        arena_temp_end(temp);
+    }
+
+    {
+        ArenaTemp temp = arena_temp_begin(&g_perm_arena);
+        Heightfield* hf = arena_push(&g_perm_arena, Heightfield);
+        heightfield_init_procedural(hf, &g_perm_arena, 96, 1.0f, 5u, 0.0f);
+        PhysWorld* world = arena_push(&g_perm_arena, PhysWorld);
+        phys_init(world, &g_perm_arena, hf);
+        phys_statics_reserve(world, &g_perm_arena, 64);
+        walk_add_wall(world, v3(-1.95f, 0.0f, -3.5f), v3(-1.95f, 0.0f, 3.5f), 2.5f);
+        walk_add_wall(world, v3(1.95f, 0.0f, -3.5f), v3(1.95f, 0.0f, 3.5f), 2.5f);
+        walk_add_wall(world, v3(-2.0f, 0.0f, -3.1f), v3(2.0f, 0.0f, -3.1f), 2.5f);
+        walk_add_wall(world, v3(-2.0f, 0.0f, 3.1f), v3(2.0f, 0.0f, 3.1f), 2.5f);
+        phys_statics_build(world, &g_perm_arena);
+        Vehicle* veh = arena_push(&g_perm_arena, Vehicle);
+        if (!vehicle_init(veh, world, WAGON_CFG_PATH, v3(0.0f, 0.9f, 0.0f), 0.0f)) {
+            report.pass = 0;
+            arena_temp_end(temp);
+            return report;
+        }
+        Player* p = arena_push(&g_perm_arena, Player);
+        player_init(p, v3(1.45f, 0.0f, 0.5f), 0.0f);
+        walk_run_ticks(world, p, veh, idle, 240);
+
+        PlayerCommand interact = {0};
+        interact.interact = 1;
+        walk_run_ticks(world, p, veh, interact, 120);
+        b32 entered = p->state == PLAYER_DRIVING;
+        walk_run_ticks(world, p, veh, interact, 120);
+        b32 blocked_ok = entered && p->state == PLAYER_DRIVING;
+        if (verbose) {
+            log_info("walk_test blocked exit: entered %d | still driving %d | %s",
+                     entered, p->state == PLAYER_DRIVING, blocked_ok ? "PASS" : "FAIL");
+        }
+        report.pass &= blocked_ok;
+        walk_checksum(&report.checksum, p);
+        arena_temp_end(temp);
+    }
+
+    return report;
+}
+
+static int run_scene_walk_test(void)
+{
+    log_info("scene walk_test: capsule controller + enter/exit at dt=%.5f", (f64)FIXED_DT);
+    WalkTestReport a = walk_test_run(1);
+    WalkTestReport b = walk_test_run(0);
+    b32 deterministic = a.checksum == b.checksum;
+    log_info("walk_test determinism: run1 %016llx run2 %016llx | %s",
+             (unsigned long long)a.checksum, (unsigned long long)b.checksum,
+             deterministic ? "PASS" : "FAIL");
+    b32 pass = a.pass && b.pass && deterministic;
+    log_info("scene walk_test: %s", pass ? "PASS" : "FAIL");
+    return pass ? 0 : 1;
+}
+
 int main(int argc, char** argv)
 {
     arena_init(&g_perm_arena, GIGABYTES(1));
@@ -754,6 +1023,9 @@ int main(int argc, char** argv)
         }
         if (strcmp(scene, "zone_check") == 0) {
             return run_scene_zone_check();
+        }
+        if (strcmp(scene, "walk_test") == 0) {
+            return run_scene_walk_test();
         }
         log_error("unknown scene: %s", scene);
         return 1;
@@ -782,6 +1054,8 @@ int main(int argc, char** argv)
         platform_shutdown();
         return 1;
     }
+
+    player_init(&s_player, s_zone_spawn.player_pos, s_zone_spawn.player_yaw);
 
     camera_init(&s_camera, vec3_add(s_zone_spawn.car_pos, v3(-8.0f, 5.0f, 10.0f)));
     camera_look_at(&s_camera, s_zone_spawn.car_pos);
@@ -828,17 +1102,42 @@ int main(int argc, char** argv)
         if (input->key_pressed[KEY_F7]) {
             s_show_tuning = !s_show_tuning;
         }
+        if (input->key_pressed[KEY_C]) {
+            s_chase_cam = !s_chase_cam;
+        }
 
+        PlayerCommand frame_cmd = {0};
         if (s_free_cam) {
             camera_fly_update(&s_camera, input, (f32)frame_dt);
             VehicleInput coast = {0};
             vehicle_set_input(&s_vehicle, coast);
+            s_pending_jump = 0;
+            s_pending_interact = 0;
         } else {
-            f32 forward_intent = input->key_down[KEY_W] ? 1.0f : 0.0f;
-            f32 reverse_intent = input->key_down[KEY_S] ? 1.0f : 0.0f;
-            f32 steer = (input->key_down[KEY_D] ? 1.0f : 0.0f) - (input->key_down[KEY_A] ? 1.0f : 0.0f);
-            b32 handbrake = input->key_down[KEY_SPACE];
-            vehicle_driver_input(&s_vehicle, &s_phys, forward_intent, reverse_intent, steer, handbrake);
+            platform_set_cursor_captured(!s_show_tuning);
+            if (platform_cursor_captured()) {
+                player_look(&s_player, input->mouse_dx, input->mouse_dy);
+            }
+            if (player_driving(&s_player)) {
+                f32 forward_intent = input->key_down[KEY_W] ? 1.0f : 0.0f;
+                f32 reverse_intent = input->key_down[KEY_S] ? 1.0f : 0.0f;
+                f32 steer = (input->key_down[KEY_D] ? 1.0f : 0.0f) - (input->key_down[KEY_A] ? 1.0f : 0.0f);
+                b32 handbrake = input->key_down[KEY_SPACE];
+                vehicle_driver_input(&s_vehicle, &s_phys, forward_intent, reverse_intent, steer, handbrake);
+            } else {
+                VehicleInput parked = {0};
+                parked.handbrake = 1;
+                vehicle_set_input(&s_vehicle, parked);
+                frame_cmd.move_x = (input->key_down[KEY_D] ? 1.0f : 0.0f) - (input->key_down[KEY_A] ? 1.0f : 0.0f);
+                frame_cmd.move_z = (input->key_down[KEY_W] ? 1.0f : 0.0f) - (input->key_down[KEY_S] ? 1.0f : 0.0f);
+                frame_cmd.run = input->key_down[KEY_LEFT_SHIFT];
+                if (input->key_pressed[KEY_SPACE]) {
+                    s_pending_jump = 1;
+                }
+            }
+            if (input->key_pressed[KEY_E]) {
+                s_pending_interact = 1;
+            }
         }
 
         r_hot_reload_poll(now);
@@ -850,7 +1149,12 @@ int main(int argc, char** argv)
 
         accumulator += frame_dt * (s_slow_mo ? 0.1 : 1.0);
         while (accumulator >= FIXED_DT) {
-            game_tick(FIXED_DT);
+            PlayerCommand cmd = frame_cmd;
+            cmd.jump = s_pending_jump;
+            cmd.interact = s_pending_interact;
+            s_pending_jump = 0;
+            s_pending_interact = 0;
+            game_tick(FIXED_DT, cmd);
             accumulator -= FIXED_DT;
         }
 
@@ -858,10 +1162,17 @@ int main(int argc, char** argv)
         if (car_body && (car_body->pos.y < s_terrain.hf.min_height - 15.0f || !body_state_valid(car_body))) {
             reset_car();
         }
+        if (s_player.state == PLAYER_ON_FOOT && s_player.pos.y < s_terrain.hf.min_height - 15.0f) {
+            player_init(&s_player, s_zone_spawn.player_pos, s_zone_spawn.player_yaw);
+        }
 
         f32 alpha = (f32)(accumulator / FIXED_DT);
         if (!s_free_cam) {
-            update_chase_camera((f32)frame_dt, alpha);
+            if (s_chase_cam && player_driving(&s_player)) {
+                update_chase_camera((f32)frame_dt, alpha);
+            } else {
+                player_camera(&s_player, &s_phys, &s_vehicle, alpha, (f32)frame_dt, &s_camera);
+            }
         }
         game_render(alpha, input);
         platform_swap_buffers();

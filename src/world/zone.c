@@ -108,6 +108,13 @@ b32 zone_load(const char* zone_dir, struct Arena* arena, struct World* world,
     out_spawn->car_pos = v3(car_xz.x, heightfield_sample(&terrain->hf, car_xz.x, car_xz.y) + 1.0f, car_xz.y);
     out_spawn->car_yaw = config_get_f32(&cfg, "spawn.car_yaw_deg", 0.0f) * DEG_TO_RAD;
 
+    Quat car_rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), out_spawn->car_yaw);
+    Vec3 beside_door = vec3_add(out_spawn->car_pos, quat_rotate_vec3(car_rot, v3(-2.6f, 0.0f, -0.3f)));
+    Vec3 player_xz = config_get_vec3(&cfg, "spawn.player_pos", v3(beside_door.x, beside_door.z, 0.0f));
+    out_spawn->player_pos = v3(player_xz.x, heightfield_sample(&terrain->hf, player_xz.x, player_xz.y), player_xz.y);
+    Vec3 to_car = vec3_sub(out_spawn->car_pos, out_spawn->player_pos);
+    out_spawn->player_yaw = config_get_f32(&cfg, "spawn.player_yaw_deg", atan2f(to_car.x, -to_car.z) * RAD_TO_DEG) * DEG_TO_RAD;
+
     log_info("zone: loaded %s | %u entities | %u static tris", zone_dir, entity_count,
              phys->statics.tri_count);
     arena_temp_end(temp);

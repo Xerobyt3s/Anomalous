@@ -9,6 +9,7 @@ struct Arena;
 
 #define KEY_SPACE 32
 #define KEY_A 65
+#define KEY_C 67
 #define KEY_D 68
 #define KEY_E 69
 #define KEY_F 70
