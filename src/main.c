@@ -22,6 +22,7 @@
 #include "player/interact.h"
 #include "carsys/carsys.h"
 #include "carsys/carsys_render.h"
+#include "audio/audio.h"
 #include "ui/ui.h"
 
 #include <stdio.h>
@@ -68,6 +69,18 @@ static b32 s_free_cam;
 static b32 s_chase_cam;
 static b32 s_pending_jump;
 static b32 s_pending_interact;
+
+typedef enum MissionStage {
+    MISSION_FIX,
+    MISSION_DRIVE_OUT,
+    MISSION_RETURN,
+    MISSION_DONE,
+} MissionStage;
+
+static MissionStage s_mission;
+static f64 s_mission_t0;
+static f64 s_mission_time;
+static Vec3 s_mission_out;
 static Telem s_telem_rpm;
 static Telem s_telem_slip;
 static Telem s_telem_load;
@@ -472,6 +485,180 @@ static void spawn_spare(ItemKind kind, f32 condition, Vec3 offset)
     }
 }
 
+static void update_audio(f32 frame_dt)
+{
+    static b32 prev_door[2];
+    static b32 prev_hood;
+    static b32 prev_trunk;
+    static b32 prev_engine_on;
+    static b32 prev_handbrake;
+    static f32 prev_impact_cooldown = 2.0f;
+    static u32 prev_installed = 0xFFFFFFFFu;
+    static u32 prev_cargo;
+    static ItemKind prev_hands;
+
+    for (u32 i = 0; i < 2; i++) {
+        if (s_carsys.door_target[i] != prev_door[i]) {
+            audio_play(s_carsys.door_target[i] ? SFX_DOOR_OPEN : SFX_DOOR_CLOSE, 0.8f,
+                       i == 0 ? 1.0f : 0.96f);
+            prev_door[i] = s_carsys.door_target[i];
+        }
+    }
+    if (s_carsys.hood_target != prev_hood) {
+        audio_play(SFX_HOOD, 0.7f, 1.0f);
+        prev_hood = s_carsys.hood_target;
+    }
+    if (s_carsys.trunk_target != prev_trunk) {
+        audio_play(SFX_HOOD, 0.6f, 0.85f);
+        prev_trunk = s_carsys.trunk_target;
+    }
+    prev_engine_on = s_carsys.engine_on;
+    if (s_carsys.handbrake_latched != prev_handbrake) {
+        audio_play(SFX_THUMP, 0.4f, 1.5f);
+        prev_handbrake = s_carsys.handbrake_latched;
+    }
+
+    u32 installed = 0;
+    for (u32 k = 0; k < PART_COUNT; k++) {
+        installed += s_carsys.parts[k].installed ? 1u : 0u;
+    }
+    if (prev_installed != 0xFFFFFFFFu && installed != prev_installed) {
+        audio_play(SFX_RATCHET, 0.8f, installed > prev_installed ? 1.0f : 1.12f);
+    }
+    prev_installed = installed;
+
+    u32 cargo = carsys_cargo_count(&s_carsys);
+    if (cargo != prev_cargo) {
+        audio_play(SFX_THUMP, 0.7f, 1.0f);
+        prev_cargo = cargo;
+    }
+    if (s_interact.hands.kind != prev_hands) {
+        if (s_interact.hands.kind != ITEM_NONE && prev_hands == ITEM_NONE) {
+            audio_play(SFX_THUMP, 0.5f, 1.15f);
+        }
+        prev_hands = s_interact.hands.kind;
+    }
+
+    if (s_carsys.impact_cooldown > prev_impact_cooldown + 0.05f) {
+        f32 vol = f_clamp(0.45f + s_carsys.last_impact_severity * 0.6f, 0.0f, 1.2f);
+        audio_play(SFX_IMPACT, vol, f_clamp(1.05f - s_carsys.last_impact_severity * 0.2f, 0.8f, 1.1f));
+    }
+    prev_impact_cooldown = s_carsys.impact_cooldown;
+
+    RigidBody* body = phys_body(&s_phys, s_vehicle.body);
+    f32 speed = body ? vec3_length(body->vel) : 0.0f;
+    f32 load = s_carsys.engine_on ? s_vehicle.input.throttle : 0.0f;
+    audio_engine_set(drivetrain_rpm(&s_vehicle.train), load, s_carsys.engine_on,
+                     s_carsys.crank_timer > 0.0f, frame_dt);
+
+    b32 grounded = 0;
+    f32 max_slip = 0.0f;
+    for (u32 i = 0; i < VEHICLE_WHEEL_COUNT; i++) {
+        const Wheel* w = &s_vehicle.wheels[i];
+        if (!w->grounded) {
+            continue;
+        }
+        grounded = 1;
+        f32 slip = f_max(f_abs(w->slip_ratio) - 0.40f, 0.0f)
+                 + f_max(f_abs(w->slip_angle) - 0.35f, 0.0f);
+        max_slip = f_max(max_slip, slip);
+    }
+    audio_skid_set(f_clamp01(max_slip * 1.6f) * f_clamp01(speed / 8.0f), frame_dt);
+    f32 road = body ? terrain_road_amount(&s_terrain, body->pos.x, body->pos.z) : 0.0f;
+    audio_rolling_set(speed, road, grounded, frame_dt);
+}
+
+static void mission_init(void)
+{
+    s_carsys.parts[PART_TIRE_FL].condition = 0.08f;
+    s_carsys.parts[PART_BATTERY].condition = 0.5f;
+    s_carsys.parts[PART_RADIATOR].condition = 0.55f;
+    s_carsys.parts[PART_ALTERNATOR].condition = 0.7f;
+    s_carsys.parts[PART_ENGINE].condition = 0.85f;
+    s_carsys.elec.battery_charge = 0.35f;
+    s_carsys.fluids.fuel = 0.22f;
+    s_carsys.fluids.oil = 0.45f;
+    s_mission = MISSION_FIX;
+    s_mission_t0 = platform_time_now();
+    s_mission_out = v3(-250.0f, 0.0f, -240.0f);
+    s_mission_out.y = heightfield_sample(&s_terrain.hf, s_mission_out.x, s_mission_out.z);
+}
+
+static f32 mission_target_dist(Vec3 target)
+{
+    RigidBody* body = phys_body(&s_phys, s_vehicle.body);
+    Vec3 from = s_player.state == PLAYER_ON_FOOT || !body ? s_player.pos : body->pos;
+    f32 dx = from.x - target.x;
+    f32 dz = from.z - target.z;
+    return sqrtf(dx * dx + dz * dz);
+}
+
+static void mission_update(void)
+{
+    RigidBody* body = phys_body(&s_phys, s_vehicle.body);
+    f32 speed = body ? vec3_length(body->vel) : 0.0f;
+    switch (s_mission) {
+    case MISSION_FIX:
+        if (s_carsys.engine_on && speed > 3.0f) {
+            s_mission = MISSION_DRIVE_OUT;
+            audio_play(SFX_THUMP, 0.8f, 1.3f);
+        }
+        break;
+    case MISSION_DRIVE_OUT:
+        if (mission_target_dist(s_mission_out) < 25.0f) {
+            s_mission = MISSION_RETURN;
+            audio_play(SFX_THUMP, 0.8f, 1.3f);
+        }
+        break;
+    case MISSION_RETURN:
+        if (mission_target_dist(s_zone_spawn.car_pos) < 20.0f && speed < 3.0f) {
+            s_mission = MISSION_DONE;
+            s_mission_time = platform_time_now() - s_mission_t0;
+            audio_play(SFX_RATCHET, 0.9f, 0.9f);
+        }
+        break;
+    case MISSION_DONE:
+        break;
+    }
+}
+
+static void mission_draw(void)
+{
+    Vec2 vp = r_viewport_size();
+    f32 x = vp.x * 0.5f - 210.0f;
+    f32 y = 30.0f;
+    Vec3 target = s_mission == MISSION_DRIVE_OUT ? s_mission_out : s_zone_spawn.car_pos;
+    switch (s_mission) {
+    case MISSION_FIX:
+        dd_text_2d(x, y, 18.0f, DD_YELLOW,
+                   "the excel won't make it like this — fix her up and get moving");
+        break;
+    case MISSION_DRIVE_OUT:
+        dd_text_2d(x, y, 18.0f, DD_YELLOW, "shake-down run: reach the marker (%.0f m)",
+                   (f64)mission_target_dist(target));
+        break;
+    case MISSION_RETURN:
+        dd_text_2d(x, y, 18.0f, DD_YELLOW, "bring her home (%.0f m)",
+                   (f64)mission_target_dist(target));
+        break;
+    case MISSION_DONE: {
+        i32 minutes = (i32)(s_mission_time / 60.0);
+        i32 seconds = (i32)s_mission_time % 60;
+        dd_text_2d(x, y, 18.0f, DD_CYAN, "loop complete in %d:%02d — the excel lives",
+                   minutes, seconds);
+        break;
+    }
+    }
+    if (s_mission == MISSION_DRIVE_OUT || s_mission == MISSION_RETURN) {
+        f32 pulse = 4.0f + 2.0f * sinf((f32)s_game.tick_count * 0.05f);
+        u32 color = dd_rgba(120, 220, 255, 255);
+        dd_line(target, vec3_add(target, v3(0.0f, 70.0f, 0.0f)), color);
+        dd_line(vec3_add(target, v3(1.0f, 0.0f, 0.0f)), vec3_add(target, v3(1.0f, 70.0f, 0.0f)), color);
+        dd_line(vec3_add(target, v3(0.0f, 0.0f, 1.0f)), vec3_add(target, v3(0.0f, 70.0f, 1.0f)), color);
+        dd_sphere(vec3_add(target, v3(0.0f, pulse, 0.0f)), 1.6f, color);
+    }
+}
+
 static void spawn_spares(void)
 {
     spawn_spare(ITEM_BATTERY, 0.9f, v3(2.6f, 0.0f, -1.0f));
@@ -582,6 +769,7 @@ static void game_render(f32 alpha, const GameInput* input)
         draw_drive_hud();
     }
     draw_interact_prompt();
+    mission_draw();
     if (s_show_carsys) {
         draw_carsys_panel();
     }
@@ -1541,6 +1729,8 @@ int main(int argc, char** argv)
     carsys_init(&s_carsys);
     interact_init(&s_interact);
     spawn_spares();
+    audio_init();
+    mission_init();
 
     camera_init(&s_camera, vec3_add(s_zone_spawn.car_pos, v3(-8.0f, 5.0f, 10.0f)));
     camera_look_at(&s_camera, s_zone_spawn.car_pos);
@@ -1687,6 +1877,8 @@ int main(int argc, char** argv)
                 player_camera(&s_player, &s_phys, &s_vehicle, alpha, (f32)frame_dt, &s_camera);
             }
         }
+        mission_update();
+        update_audio((f32)frame_dt);
         update_headlights(alpha);
         game_render(alpha, input);
         platform_swap_buffers();
@@ -1704,6 +1896,7 @@ int main(int argc, char** argv)
         }
     }
 
+    audio_shutdown();
     terrain_render_shutdown();
     assets_shutdown();
     text_shutdown();

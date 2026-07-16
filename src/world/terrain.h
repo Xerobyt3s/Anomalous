@@ -13,3 +13,4 @@ typedef struct Terrain {
 } Terrain;
 
 b32 terrain_load(Terrain* terrain, struct Arena* arena, const char* zone_dir, const struct Config* cfg);
+f32 terrain_road_amount(const Terrain* terrain, f32 x, f32 z);

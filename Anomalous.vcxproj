@@ -87,6 +87,7 @@
   <ItemGroup>
     <ClCompile Include="src\main.c" />
     <ClCompile Include="src\assets\assets.c" />
+    <ClCompile Include="src\audio\audio.c" />
     <ClCompile Include="src\core\arena.c" />
     <ClCompile Include="src\core\log.c" />
     <ClCompile Include="src\core\config.c" />
@@ -122,6 +123,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\assets\assets.h" />
+    <ClInclude Include="src\audio\audio.h" />
     <ClInclude Include="src\assets\mesh_format.h" />
     <ClInclude Include="src\core\types.h" />
     <ClInclude Include="src\core\arena.h" />

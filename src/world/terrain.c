@@ -54,3 +54,18 @@ b32 terrain_load(Terrain* terrain, struct Arena* arena, const char* zone_dir, co
              (f64)hf->min_height, (f64)hf->max_height);
     return 1;
 }
+
+f32 terrain_road_amount(const Terrain* terrain, f32 x, f32 z)
+{
+    if (!terrain->roadmask || terrain->mask_size == 0) {
+        return 0.0f;
+    }
+    const Heightfield* hf = &terrain->hf;
+    f32 span_x = (f32)(hf->size_x - 1) * hf->cell_size;
+    f32 span_z = (f32)(hf->size_z - 1) * hf->cell_size;
+    f32 u = f_clamp01((x - hf->origin.x) / span_x);
+    f32 v = f_clamp01((z - hf->origin.z) / span_z);
+    u32 ix = (u32)(u * (f32)(terrain->mask_size - 1));
+    u32 iz = (u32)(v * (f32)(terrain->mask_size - 1));
+    return (f32)terrain->roadmask[iz * terrain->mask_size + ix] / 255.0f;
+}
