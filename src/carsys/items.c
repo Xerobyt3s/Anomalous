@@ -14,6 +14,7 @@ static const struct {
     { "tire",       "excel_wheel",     16.0f, { 0.28f, 0.09f, 0.28f }, 0.5f },
     { "jerry can",  "part_jerrycan",   12.0f, { 0.16f, 0.19f, 0.07f }, 0.0f },
     { "oil can",    "part_oilcan",     5.0f,  { 0.06f, 0.12f, 0.06f }, 0.0f },
+    { "car key",    "part_key",        0.2f,  { 0.04f, 0.015f, 0.07f }, 0.0f },
 };
 
 const char* item_name(ItemKind kind)

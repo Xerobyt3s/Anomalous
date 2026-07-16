@@ -24,6 +24,11 @@ f32 drivetrain_rpm(const Drivetrain* train)
     return train->engine_omega * RAD_TO_RPM;
 }
 
+void drivetrain_request_shift(Drivetrain* train, i32 dir)
+{
+    train->shift_request = dir;
+}
+
 f32 drivetrain_ratio(const Drivetrain* train, const VehicleConfig* cfg)
 {
     if (train->gear >= 1 && train->gear <= (i32)cfg->gear_count) {
@@ -81,9 +86,20 @@ void drivetrain_tick(Drivetrain* train, const VehicleConfig* cfg, struct Wheel* 
         if (train->shift_timer <= 0.0f) {
             train->shifting = 0;
         }
+    } else if (train->manual) {
+        if (train->shift_request != 0) {
+            i32 next = train->gear + train->shift_request;
+            if (next >= -1 && next <= (i32)cfg->gear_count && next != train->gear) {
+                train->gear = next;
+                train->shifting = 1;
+                train->shift_timer = cfg->shift_time * 0.7f;
+            }
+            train->shift_request = 0;
+        }
     } else if (train->gear >= 1 && train->shift_lockout <= 0.0f) {
         f32 synced_rpm = avg_driven_omega * drivetrain_ratio(train, cfg) * RAD_TO_RPM;
-        if (synced_rpm > cfg->shift_up_rpm && train->gear < (i32)cfg->gear_count
+        f32 up_rpm = f_lerp(cfg->shift_up_rpm * 0.55f, cfg->shift_up_rpm, throttle);
+        if (synced_rpm > up_rpm && train->gear < (i32)cfg->gear_count
             && avg_driven_slip < SHIFT_SLIP_GATE) {
             train->gear++;
             train->shifting = 1;
@@ -94,7 +110,15 @@ void drivetrain_tick(Drivetrain* train, const VehicleConfig* cfg, struct Wheel* 
             train->shifting = 1;
             train->shift_timer = cfg->shift_time;
             train->shift_lockout = SHIFT_LOCKOUT_TIME;
+        } else if (throttle > 0.85f && train->gear > 1
+                   && synced_rpm < cfg->shift_down_rpm * 1.9f) {
+            train->gear--;
+            train->shifting = 1;
+            train->shift_timer = cfg->shift_time;
+            train->shift_lockout = SHIFT_LOCKOUT_TIME;
         }
+    } else {
+        train->shift_request = 0;
     }
 
     f32 engine_torque = drivetrain_torque_curve(cfg, rpm) * throttle * power_mul;

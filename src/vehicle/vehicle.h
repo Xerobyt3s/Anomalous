@@ -34,6 +34,8 @@ typedef struct Wheel {
     f32 load;
     f32 slip_ratio;
     f32 slip_angle;
+    f32 slide_long;
+    f32 slide_lat;
     f32 drive_torque;
     f32 reaction_torque;
     b32 grounded;

@@ -12,6 +12,7 @@ typedef enum ItemKind {
     ITEM_TIRE,
     ITEM_JERRYCAN,
     ITEM_OILCAN,
+    ITEM_KEY,
     ITEM_KIND_COUNT,
 } ItemKind;
 

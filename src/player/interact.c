@@ -128,6 +128,26 @@ static void resolve_in_car(Candidate* best, Interact* it, struct Player* player,
                            sys->handbrake_latched ? "[E] release handbrake" : "[E] set handbrake");
     }
 
+    Vec3 ignition_center = vec3_sub(v3(-0.22f, 0.05f, -0.28f), com);
+    Vec3 ignition_half = v3(0.07f, 0.06f, 0.08f);
+    if (ray_vs_local_box(local, ignition_center, ignition_half, &t)) {
+        if (!sys->key_inserted) {
+            if (it->has_key) {
+                candidate_consider(best, t, ACTION_INSERT_KEY, ignition_center, ignition_half, 0,
+                                   "[E] insert key");
+            } else {
+                candidate_consider(best, t, ACTION_INFO, ignition_center, ignition_half, 0,
+                                   "ignition — no key");
+            }
+        } else if (sys->engine_on) {
+            candidate_consider(best, t, ACTION_ENGINE_OFF, ignition_center, ignition_half, 0,
+                               "[E] switch off");
+        } else {
+            candidate_consider(best, t, ACTION_CRANK, ignition_center, ignition_half, 0,
+                               "hold [E] turn key | [G] take key");
+        }
+    }
+
     for (i32 side = 0; side < 2; side++) {
         f32 sign = side == 0 ? -1.0f : 1.0f;
         if (sys->door_open[side] < DOOR_OPEN_FOR_USE) {
@@ -281,20 +301,31 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
 
     Vec3 filler_half = v3(0.10f, 0.10f, 0.14f);
     Vec3 filler_center = vec3_sub(v3(0.80f, 0.10f, 1.30f), com);
-    if (it->hands.kind == ITEM_JERRYCAN && ray_vs_local_box(local, filler_center, filler_half, &t)) {
-        candidate_consider(best, t, ACTION_REFUEL, filler_center, filler_half, 1, "hold [E] refuel");
+    if (ray_vs_local_box(local, filler_center, filler_half, &t)) {
+        if (it->hands.kind == ITEM_JERRYCAN) {
+            if (sys->fuel_cap_open) {
+                candidate_consider(best, t, ACTION_REFUEL, filler_center, filler_half, 1,
+                                   "hold [E] refuel");
+            } else {
+                candidate_consider(best, t, ACTION_INFO, filler_center, filler_half, 0,
+                                   "fuel cap is closed");
+            }
+        } else {
+            candidate_consider(best, t, ACTION_FUEL_CAP, filler_center, filler_half, 0,
+                               sys->fuel_cap_open ? "[E] close fuel cap" : "[E] open fuel cap");
+        }
     }
 }
 
 static void resolve_pickups(Candidate* best, const Interact* it, World* world, Ray view_ray)
 {
-    if (it->hands.kind != ITEM_NONE) {
-        return;
-    }
     char prompt[96];
     for (u32 idx = 0; idx < world->entities.capacity; idx++) {
         Entity* entity = pool_at(&world->entities, idx);
         if (!entity || entity->kind != ENTITY_PART_PICKUP) {
+            continue;
+        }
+        if (it->hands.kind != ITEM_NONE && (ItemKind)entity->aux_kind != ITEM_KEY) {
             continue;
         }
         Sphere sphere;
@@ -313,7 +344,7 @@ static void resolve_pickups(Candidate* best, const Interact* it, World* world, R
     }
 }
 
-static void interact_perform(Interact* it, CarSys* sys, World* world)
+static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld* phys)
 {
     switch (it->action) {
     case ACTION_OPEN_DOOR:
@@ -324,6 +355,16 @@ static void interact_perform(Interact* it, CarSys* sys, World* world)
         break;
     case ACTION_HANDBRAKE:
         sys->handbrake_latched = !sys->handbrake_latched;
+        break;
+    case ACTION_INSERT_KEY:
+        sys->key_inserted = 1;
+        it->has_key = 0;
+        break;
+    case ACTION_ENGINE_OFF:
+        carsys_stop_engine(sys);
+        break;
+    case ACTION_FUEL_CAP:
+        sys->fuel_cap_open = !sys->fuel_cap_open;
         break;
     case ACTION_REMOVE_PART: {
         PartSlot* slot = &sys->parts[it->target_part];
@@ -356,8 +397,15 @@ static void interact_perform(Interact* it, CarSys* sys, World* world)
     case ACTION_PICKUP: {
         Entity* entity = world_entity(world, it->target_entity);
         if (entity) {
-            it->hands.kind = (ItemKind)entity->aux_kind;
-            it->hands.condition = entity->aux_value;
+            if ((ItemKind)entity->aux_kind == ITEM_KEY) {
+                it->has_key = 1;
+            } else {
+                it->hands.kind = (ItemKind)entity->aux_kind;
+                it->hands.condition = entity->aux_value;
+            }
+            if (handle_valid(entity->body)) {
+                phys_body_destroy(phys, entity->body);
+            }
             world_despawn(world, it->target_entity);
         }
         break;
@@ -417,8 +465,21 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
         it->hold_time = 0.0f;
     }
 
+    if (best.action == ACTION_CRANK) {
+        if (e_pressed) {
+            it->crank_latch = 1;
+        }
+        if (!e_down) {
+            it->crank_latch = 0;
+        }
+    } else {
+        it->crank_latch = 0;
+    }
+    sys->crank_request = it->crank_latch;
+
     if (best.action == ACTION_NONE || best.action == ACTION_INFO
-        || best.action == ACTION_ENTER_CAR || best.action == ACTION_EXIT_CAR) {
+        || best.action == ACTION_ENTER_CAR || best.action == ACTION_EXIT_CAR
+        || best.action == ACTION_CRANK) {
         it->hold_time = 0.0f;
         it->hold_progress = 0.0f;
         return;
@@ -428,7 +489,7 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
         if (e_down) {
             it->hold_time += dt;
             if (it->hold_time >= INTERACT_HOLD_TIME) {
-                interact_perform(it, sys, world);
+                interact_perform(it, sys, world, phys);
                 it->hold_time = 0.0f;
             }
         } else {
@@ -438,28 +499,43 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
     } else {
         it->hold_progress = 0.0f;
         if (e_pressed) {
-            interact_perform(it, sys, world);
+            interact_perform(it, sys, world, phys);
         }
     }
 }
 
-b32 interact_drop(Interact* it, struct World* world, struct PhysWorld* phys, Vec3 pos, f32 yaw)
+Handle interact_spawn_pickup(struct World* world, struct PhysWorld* phys, Item item,
+                             Vec3 pos, f32 yaw, Vec3 vel)
+{
+    Quat rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), yaw);
+    EntityHandle handle = world_spawn(world, ENTITY_PART_PICKUP, pos,
+                                      quat_mul(rot, item_cargo_rot(item.kind)), 1.0f,
+                                      item_mesh(item.kind), 0);
+    Entity* entity = world_entity(world, handle);
+    if (!entity) {
+        return handle;
+    }
+    entity->aux_kind = (u32)item.kind;
+    entity->aux_value = item.condition;
+    if (item.kind != ITEM_KEY) {
+        entity->body = phys_body_create_box(phys, pos, rot, item_cargo_half(item.kind),
+                                            f_max(item_mass(item.kind), 1.0f));
+        RigidBody* body = phys_body(phys, entity->body);
+        if (body) {
+            body->vel = vel;
+        }
+    }
+    return handle;
+}
+
+b32 interact_drop(Interact* it, struct World* world, struct PhysWorld* phys, Vec3 origin, Vec3 dir)
 {
     if (it->hands.kind == ITEM_NONE) {
         return 0;
     }
-    Vec3 fwd = v3(sinf(yaw), 0.0f, -cosf(yaw));
-    Vec3 spot = vec3_add(pos, vec3_scale(fwd, 1.1f));
-    spot.y = heightfield_sample(phys->hf, spot.x, spot.z) + 0.18f;
-    EntityHandle handle = world_spawn(world, ENTITY_PART_PICKUP, spot,
-                                      quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), yaw), 1.0f,
-                                      item_mesh(it->hands.kind), 0);
-    Entity* entity = world_entity(world, handle);
-    if (!entity) {
-        return 0;
-    }
-    entity->aux_kind = (u32)it->hands.kind;
-    entity->aux_value = it->hands.condition;
+    Vec3 spot = vec3_add(origin, vec3_scale(dir, 0.8f));
+    Vec3 vel = vec3_add(vec3_scale(dir, 5.5f), v3(0.0f, 1.5f, 0.0f));
+    interact_spawn_pickup(world, phys, it->hands, spot, atan2f(dir.x, -dir.z), vel);
     it->hands.kind = ITEM_NONE;
     return 1;
 }

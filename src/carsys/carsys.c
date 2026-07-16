@@ -3,7 +3,9 @@
 #include "vehicle/drivetrain.h"
 #include "physics/physics.h"
 
-#define IMPACT_ACCEL_THRESHOLD 60.0f
+#define BUMP_START_SPEED 2.5f
+#define COLD_CRANK_EXTRA 1.1f
+#define IMPACT_ACCEL_THRESHOLD 110.0f
 #define IMPACT_SEVERITY_SCALE 0.0022f
 #define IMPACT_COOLDOWN 0.25f
 #define OVERREV_DMG_PER_S 0.02f
@@ -187,16 +189,23 @@ static b32 carsys_can_run(const CarSys* sys)
         && sys->fluids.fuel > 0.0f;
 }
 
+static f32 carsys_crank_time(const CarSys* sys)
+{
+    f32 cold = f_clamp01((45.0f - sys->fluids.coolant_temp) / 45.0f);
+    return CARSYS_CRANK_TIME + COLD_CRANK_EXTRA * cold;
+}
+
 b32 carsys_try_start(CarSys* sys, struct Vehicle* veh)
 {
     if (sys->engine_on || sys->crank_timer > 0.0f || !carsys_can_run(sys)) {
         return 0;
     }
+    sys->key_inserted = 1;
     if (drivetrain_rpm(&veh->train) > BUMP_START_RPM && sys->elec.powered[CONSUMER_IGNITION]) {
         sys->engine_on = 1;
         return 1;
     }
-    sys->crank_timer = CARSYS_CRANK_TIME;
+    sys->crank_timer = carsys_crank_time(sys);
     return 1;
 }
 
@@ -242,7 +251,8 @@ void carsys_tick(CarSys* sys, struct Vehicle* veh, struct PhysWorld* world, f32 
 
     f32 rpm = drivetrain_rpm(&veh->train);
     f32 idle_rpm = veh->cfg.idle_rpm;
-    b32 cranking = sys->crank_timer > 0.0f;
+    b32 cranking = sys->crank_timer > 0.0f
+                || (sys->key_inserted && sys->crank_request && !sys->engine_on);
 
     electrics_tick(&sys->elec, sys->parts, rpm, idle_rpm, sys->engine_on, cranking,
                    sys->headlight_switch, dt);
@@ -260,6 +270,27 @@ void carsys_tick(CarSys* sys, struct Vehicle* veh, struct PhysWorld* world, f32 
                 }
             }
         }
+    }
+
+    sys->crank_active = 0;
+    if (sys->key_inserted && !sys->engine_on && sys->crank_request && carsys_can_run(sys)) {
+        f32 roll_speed = vec3_length(body->vel);
+        if (roll_speed > BUMP_START_SPEED && sys->elec.powered[CONSUMER_IGNITION]
+            && sys->elec.powered[CONSUMER_FUEL_PUMP]) {
+            sys->engine_on = 1;
+        } else if (sys->elec.powered[CONSUMER_STARTER]) {
+            sys->crank_active = 1;
+            veh->train.engine_omega = f_max(veh->train.engine_omega, CRANK_RPM * RPM_TO_RAD);
+            sys->crank_hold += dt;
+            if (sys->crank_hold >= carsys_crank_time(sys)
+                && sys->elec.powered[CONSUMER_FUEL_PUMP] && sys->elec.powered[CONSUMER_IGNITION]) {
+                sys->engine_on = 1;
+                sys->crank_hold = 0.0f;
+            }
+        }
+    }
+    if (!sys->crank_request || sys->engine_on) {
+        sys->crank_hold = 0.0f;
     }
 
     if (sys->engine_on) {
@@ -286,6 +317,7 @@ void carsys_tick(CarSys* sys, struct Vehicle* veh, struct PhysWorld* world, f32 
     }
     sys->lever_anim = f_approach_exp(sys->lever_anim, sys->handbrake_latched ? 1.0f : 0.0f,
                                      14.0f, dt);
+    sys->cap_anim = f_approach_exp(sys->cap_anim, sys->fuel_cap_open ? 1.0f : 0.0f, 10.0f, dt);
 
     VehicleEffects* fx = &veh->effects;
     f32 engine_cond = sys->parts[PART_ENGINE].condition;
@@ -305,4 +337,5 @@ void carsys_tick(CarSys* sys, struct Vehicle* veh, struct PhysWorld* world, f32 
     fx->brake_mul = 1.0f;
     fx->headlights_on = sys->headlight_switch && sys->elec.powered[CONSUMER_HEADLIGHTS]
                      && sys->parts[PART_HEADLIGHTS].condition > 0.1f;
+    sys->popup_anim = f_approach_exp(sys->popup_anim, fx->headlights_on ? 1.0f : 0.0f, 6.0f, dt);
 }

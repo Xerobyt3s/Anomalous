@@ -71,7 +71,9 @@ static ma_sound s_starter;
 static ma_sound s_skid;
 static ma_sound s_roll_road;
 static ma_sound s_roll_grass;
+static ma_sound s_horn;
 static b32 s_loops_loaded;
+static f32 s_horn_vol;
 static f32 s_skid_vol;
 static f32 s_roll_road_vol;
 static f32 s_roll_grass_vol;
@@ -191,6 +193,7 @@ static const char* s_sfx_paths[SFX_KIND_COUNT] = {
     "assets/audio/ratchet.wav",
     "assets/audio/impact.wav",
     "assets/audio/thump.wav",
+    "assets/audio/flap.wav",
     "assets/audio/engine_start.wav",
 };
 
@@ -230,7 +233,8 @@ b32 audio_init(void)
     s_loops_loaded = load_loop(&s_starter, "assets/audio/starter.wav")
                    && load_loop(&s_skid, "assets/audio/skid.wav")
                    && load_loop(&s_roll_road, "assets/audio/roll_road.wav")
-                   && load_loop(&s_roll_grass, "assets/audio/roll_grass.wav");
+                   && load_loop(&s_roll_grass, "assets/audio/roll_grass.wav")
+                   && load_loop(&s_horn, "assets/audio/horn.wav");
 
     ArenaTemp temp = arena_temp_begin(&g_frame_arena);
     FileData set_file = platform_read_entire_file(&g_frame_arena, "assets/audio/engine_set.cfg");
@@ -308,6 +312,7 @@ void audio_shutdown(void)
         ma_sound_uninit(&s_skid);
         ma_sound_uninit(&s_roll_road);
         ma_sound_uninit(&s_roll_grass);
+        ma_sound_uninit(&s_horn);
     }
     for (u32 k = 0; k < SFX_KIND_COUNT; k++) {
         if (!s_sfx[k].loaded) {
@@ -400,6 +405,15 @@ void audio_rolling_set(f32 speed, f32 road_amount, b32 grounded, f32 dt)
     f32 pitch = 0.8f + f_clamp01(speed / 35.0f) * 0.5f;
     ma_sound_set_pitch(&s_roll_road, pitch);
     ma_sound_set_pitch(&s_roll_grass, pitch);
+}
+
+void audio_horn_set(b32 on, f32 dt)
+{
+    if (!s_ok || !s_loops_loaded) {
+        return;
+    }
+    s_horn_vol = f_approach_exp(s_horn_vol, on ? 0.5f : 0.0f, 40.0f, dt);
+    ma_sound_set_volume(&s_horn, s_horn_vol);
 }
 
 void audio_skid_set(f32 intensity, f32 dt)

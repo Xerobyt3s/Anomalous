@@ -157,6 +157,13 @@ void vehicle_driver_input(Vehicle* v, struct PhysWorld* world, f32 forward_inten
     in.steer = steer;
     in.handbrake = handbrake;
 
+    if (v->train.manual) {
+        in.throttle = forward_intent;
+        in.brake = reverse_intent;
+        v->input = in;
+        return;
+    }
+
     if (forward_intent > 0.01f) {
         if (v->train.gear == -1) {
             if (speed > -0.5f) {
@@ -258,6 +265,8 @@ void vehicle_tick(Vehicle* v, struct PhysWorld* world, f32 dt)
             w->load = 0.0f;
             w->slip_ratio *= 0.9f;
             w->slip_angle *= 0.9f;
+            w->slide_long *= 0.9f;
+            w->slide_lat *= 0.9f;
             w->reaction_torque = 0.0f;
             w->stick_active = 0;
             continue;
@@ -290,6 +299,8 @@ void vehicle_tick(Vehicle* v, struct PhysWorld* world, f32 dt)
         f32 slip_vel = v_wheel - v_long;
         w->slip_ratio = slip_vel / f_max(f_abs(v_long), VEHICLE_SLIP_DENOM_MIN);
         w->slip_angle = atan2f(v_lat, f_max(f_abs(v_long), VEHICLE_SLIP_ANGLE_DENOM_MIN));
+        w->slide_long = slip_vel;
+        w->slide_lat = v_lat;
         f32 patch_speed = sqrtf(v_long * v_long + v_lat * v_lat);
 
         f32 tire_load = f_min(susp_force, tire_load_clamp);

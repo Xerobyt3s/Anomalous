@@ -21,8 +21,92 @@
 #define LEVER_ANGLE_REST 0.12f
 #define LEVER_ANGLE_SET 0.55f
 
+#define MAX_PUFFS 96
+
+typedef struct Puff {
+    Vec3 pos;
+    Vec3 vel;
+    f32 life;
+    f32 max_life;
+    f32 size;
+    b32 spark;
+    b32 used;
+} Puff;
+
+static Puff s_puffs[MAX_PUFFS];
+static u32 s_puff_next;
+static f32 s_smoke_accum;
+static u32 s_fx_rng = 0x9E3779B9u;
+
+static f32 fx_rand(void)
+{
+    s_fx_rng ^= s_fx_rng << 13;
+    s_fx_rng ^= s_fx_rng >> 17;
+    s_fx_rng ^= s_fx_rng << 5;
+    return (f32)(s_fx_rng >> 8) / 16777216.0f;
+}
+
+static void puff_spawn(Vec3 pos, Vec3 vel, f32 life, f32 size, b32 spark)
+{
+    Puff* p = &s_puffs[s_puff_next];
+    s_puff_next = (s_puff_next + 1) % MAX_PUFFS;
+    p->pos = pos;
+    p->vel = vel;
+    p->life = life;
+    p->max_life = life;
+    p->size = size;
+    p->spark = spark;
+    p->used = 1;
+}
+
+static void carsys_render_effects(const struct CarSys* sys, const struct Vehicle* veh,
+                                  Mat4 base, f32 dt)
+{
+    if (sys && sys->fluids.coolant_temp > 105.0f && sys->engine_on) {
+        f32 rate = (sys->fluids.coolant_temp - 105.0f) * 0.6f;
+        s_smoke_accum += rate * dt;
+        while (s_smoke_accum >= 1.0f) {
+            s_smoke_accum -= 1.0f;
+            Vec3 local = vec3_sub(v3((fx_rand() - 0.5f) * 0.5f, 0.08f, -1.35f + fx_rand() * 0.4f),
+                                  veh->cfg.com_offset);
+            Vec3 pos = mat4_transform_point(base, local);
+            puff_spawn(pos, v3((fx_rand() - 0.5f) * 0.5f, 0.9f + fx_rand() * 0.6f,
+                               (fx_rand() - 0.5f) * 0.5f),
+                       1.1f + fx_rand() * 0.6f, 0.05f + fx_rand() * 0.05f, 0);
+        }
+    }
+
+    for (u32 i = 0; i < MAX_PUFFS; i++) {
+        Puff* p = &s_puffs[i];
+        if (!p->used) {
+            continue;
+        }
+        p->life -= dt;
+        if (p->life <= 0.0f) {
+            p->used = 0;
+            continue;
+        }
+        p->vel.y += (p->spark ? -9.8f : 0.6f) * dt;
+        p->pos = vec3_add(p->pos, vec3_scale(p->vel, dt));
+        f32 t = 1.0f - p->life / p->max_life;
+        f32 scale = p->spark ? p->size * (1.0f - t)
+                  : p->size * (0.6f + 2.2f * t) * f_clamp01(p->life * 5.0f);
+        r_draw_mesh(asset_mesh(p->spark ? "warn_amber" : "puff"),
+                    mat4_trs(p->pos, quat_identity(), v3(scale, scale, scale)));
+    }
+}
+
+void carsys_spawn_sparks(Vec3 pos, u32 count)
+{
+    for (u32 i = 0; i < count; i++) {
+        puff_spawn(pos, v3((fx_rand() - 0.5f) * 3.0f, 1.0f + fx_rand() * 2.0f,
+                           (fx_rand() - 0.5f) * 3.0f),
+                   0.2f + fx_rand() * 0.15f, 0.025f, 1);
+    }
+}
+
 void carsys_render(const struct CarSys* sys, const struct Vehicle* veh,
-                   struct PhysWorld* world, f32 alpha)
+                   struct PhysWorld* world, f32 alpha, f32 dt)
 {
     RigidBody* body = phys_body(world, veh->body);
     if (!body || !veh->cfg.body_mesh[0]) {
@@ -38,6 +122,15 @@ void carsys_render(const struct CarSys* sys, const struct Vehicle* veh,
     Mat4 hood = mat4_mul(base, mat4_trs(hinge_local,
                                         quat_from_axis_angle(v3(1.0f, 0.0f, 0.0f), angle), one));
     r_draw_mesh(asset_mesh("excel_hood"), hood);
+
+    f32 popup = sys ? sys->popup_anim : 0.0f;
+    for (u32 p = 0; p < 2; p++) {
+        f32 sign = p == 0 ? -1.0f : 1.0f;
+        Mat4 pop = mat4_mul(hood, mat4_trs(v3(sign * 0.40f, -0.0934f, -0.88f),
+                                           quat_from_axis_angle(v3(1.0f, 0.0f, 0.0f),
+                                                                popup * 0.7f), one));
+        r_draw_mesh(asset_mesh("excel_popup"), pop);
+    }
 
     static const PartKind bay_parts[4] = { PART_ENGINE, PART_BATTERY, PART_ALTERNATOR, PART_RADIATOR };
     for (u32 i = 0; i < 4; i++) {
@@ -85,5 +178,65 @@ void carsys_render(const struct CarSys* sys, const struct Vehicle* veh,
             Mat4 model = mat4_mul(base, mat4_trs(local, item_cargo_rot(c->item.kind), one));
             r_draw_mesh(asset_mesh(item_mesh(c->item.kind)), model);
         }
+
+        Mat4 cap = mat4_mul(base, mat4_trs(vec3_sub(v3(0.80f, 0.145f, 1.30f), com),
+                                           quat_from_axis_angle(v3(0.0f, 0.0f, 1.0f),
+                                                                sys->cap_anim * 1.3f), one));
+        r_draw_mesh(asset_mesh("excel_fuelcap"), cap);
+
+        if (sys->key_inserted) {
+            Mat4 key = mat4_mul(base, mat4_trs(vec3_sub(v3(-0.22f, 0.05f, -0.25f), com),
+                                               quat_identity(), one));
+            r_draw_mesh(asset_mesh("part_key"), key);
+        }
+
+        f32 speed_norm = f_clamp01(f_abs(vehicle_forward_speed((Vehicle*)veh, world)) * 3.6f / 200.0f);
+        f32 rpm_norm = f_clamp01(drivetrain_rpm(&veh->train) / 7000.0f);
+        f32 fuel_norm = f_clamp01(sys->fluids.fuel);
+        f32 temp_norm = f_clamp01((sys->fluids.coolant_temp - 20.0f) / 106.0f);
+        static const f32 dial_x[4] = { -0.44f, -0.30f, -0.405f, -0.335f };
+        static const f32 dial_y[4] = { 0.064f, 0.064f, 0.006f, 0.006f };
+        static const f32 dial_scale[4] = { 1.0f, 1.0f, 0.5f, 0.5f };
+        f32 dial_val[4];
+        dial_val[0] = speed_norm;
+        dial_val[1] = rpm_norm;
+        dial_val[2] = fuel_norm;
+        dial_val[3] = temp_norm;
+        for (u32 d = 0; d < 4; d++) {
+            f32 needle_angle = 2.27f - dial_val[d] * 4.54f;
+            Vec3 local = vec3_sub(v3(dial_x[d], dial_y[d], -0.305f), com);
+            Mat4 needle = mat4_mul(base, mat4_trs(local,
+                                                  quat_from_axis_angle(v3(0.0f, 0.0f, 1.0f),
+                                                                       needle_angle),
+                                                  v3(dial_scale[d], dial_scale[d], dial_scale[d])));
+            r_draw_mesh(asset_mesh("excel_needle"), needle);
+        }
+
+        b32 warn_on[4];
+        warn_on[0] = sys->fluids.coolant_temp > COOLANT_OVERHEAT_C;
+        warn_on[1] = sys->fluids.oil < 0.3f;
+        warn_on[2] = sys->elec.battery_charge < 0.15f;
+        warn_on[3] = sys->handbrake_latched;
+        static const b32 warn_amber[4] = { 0, 0, 1, 0 };
+        for (u32 wn = 0; wn < 4; wn++) {
+            if (!warn_on[wn]) {
+                continue;
+            }
+            Vec3 local = vec3_sub(v3(-0.418f + 0.028f * (f32)wn, 0.030f, -0.304f), com);
+            Mat4 model = mat4_mul(base, mat4_trs(local, quat_identity(),
+                                                 v3(0.014f, 0.014f, 0.008f)));
+            r_draw_mesh(asset_mesh(warn_amber[wn] ? "warn_amber" : "warn_red"), model);
+        }
+
+        if (veh->input.brake > 0.05f) {
+            r_draw_mesh(asset_mesh("excel_brakelight"),
+                        mat4_mul(base, mat4_trs(vec3_negate(com), quat_identity(), one)));
+        }
+        if (veh->train.gear == -1) {
+            r_draw_mesh(asset_mesh("excel_revlight"),
+                        mat4_mul(base, mat4_trs(vec3_negate(com), quat_identity(), one)));
+        }
     }
+
+    carsys_render_effects(sys, veh, base, dt);
 }

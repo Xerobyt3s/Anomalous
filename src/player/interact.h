@@ -23,6 +23,10 @@ typedef enum InteractAction {
     ACTION_ENTER_CAR,
     ACTION_EXIT_CAR,
     ACTION_HANDBRAKE,
+    ACTION_INSERT_KEY,
+    ACTION_CRANK,
+    ACTION_ENGINE_OFF,
+    ACTION_FUEL_CAP,
     ACTION_REMOVE_PART,
     ACTION_INSTALL_PART,
     ACTION_TOGGLE_HOOD,
@@ -36,6 +40,7 @@ typedef enum InteractAction {
 
 typedef struct Interact {
     Item hands;
+    b32 has_key;
     InteractAction action;
     PartKind target_part;
     Handle target_entity;
@@ -47,6 +52,7 @@ typedef struct Interact {
     f32 hold_time;
     f32 hold_progress;
     b32 action_is_hold;
+    b32 crank_latch;
     char prompt[96];
 } Interact;
 
@@ -55,4 +61,6 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
                      struct CarSys* sys, struct World* world, struct PhysWorld* phys,
                      Ray view_ray, b32 e_down, b32 e_pressed, f32 dt);
 b32  interact_drop(Interact* it, struct World* world, struct PhysWorld* phys,
-                   Vec3 pos, f32 yaw);
+                   Vec3 origin, Vec3 dir);
+Handle interact_spawn_pickup(struct World* world, struct PhysWorld* phys, Item item,
+                             Vec3 pos, f32 yaw, Vec3 vel);

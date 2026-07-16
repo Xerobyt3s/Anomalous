@@ -25,7 +25,9 @@ void vehicle_render(const struct Vehicle* v, struct PhysWorld* world, f32 alpha)
     for (u32 i = 0; i < VEHICLE_WHEEL_COUNT; i++) {
         const Wheel* w = &v->wheels[i];
         f32 drop = v->cfg.wheels[i].travel - w->compression;
-        Vec3 local = vec3_sub(w->attach_local, v3(0.0f, drop, 0.0f));
+        f32 mul_flat = v->effects.tire_radius_mul[i];
+        f32 wobble = mul_flat < 0.95f ? sinf(w->spin_angle) * (1.0f - mul_flat) * 0.10f : 0.0f;
+        Vec3 local = vec3_sub(w->attach_local, v3(0.0f, drop - wobble, 0.0f));
         Vec3 center = vec3_add(pos, quat_rotate_vec3(rot, local));
         Quat q = quat_mul(rot, quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), w->steer_rad));
         q = quat_mul(q, quat_from_axis_angle(v3(1.0f, 0.0f, 0.0f), w->spin_angle));

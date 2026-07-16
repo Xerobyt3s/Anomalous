@@ -151,8 +151,34 @@ def make_squeak(name, f_start, f_end, dur, seed=31):
     write_wav(name, samples)
 
 
+def make_horn():
+    n = RATE
+    samples = []
+    for i in range(n):
+        t = i / RATE
+        s = math.sin(2.0 * math.pi * 400.0 * t) + 0.9 * math.sin(2.0 * math.pi * 500.0 * t)
+        s += 0.25 * math.sin(2.0 * math.pi * 800.0 * t) + 0.2 * math.sin(2.0 * math.pi * 1000.0 * t)
+        samples.append(s)
+    write_wav("horn.wav", samples)
+
+
+def make_flap():
+    n = int(RATE * 0.10)
+    rng = random.Random(53)
+    samples = []
+    for i in range(n):
+        t = i / RATE
+        env = math.exp(-t * 45.0) * min(1.0, t / 0.004)
+        s = math.sin(2.0 * math.pi * 48.0 * t) * env
+        s += rng.uniform(-1, 1) * 0.12 * math.exp(-t * 90.0)
+        samples.append(s)
+    write_wav("flap.wav", lowpass(samples, 0.08))
+
+
 def main():
     os.makedirs(AUDIO_DIR, exist_ok=True)
+    make_horn()
+    make_flap()
     engine_loop("engine_lo.wav", 55.0,
                 [(1, 1.0), (2, 0.55), (3, 0.38), (4, 0.22), (5, 0.13), (6, 0.09), (8, 0.05)], 0.35)
     engine_loop("engine_hi.wav", 165.0,

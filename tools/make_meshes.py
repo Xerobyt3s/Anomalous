@@ -559,6 +559,12 @@ def make_excel_body():
     b.begin_material("car_dash")
     b.box((0.0, 0.01, -0.44), (0.68, 0.09, 0.15))
     b.box((-0.37, 0.115, -0.38), (0.17, 0.035, 0.07))
+    b.begin_material("dial")
+    disc_z(b, (-0.44, 0.12, -0.309), 0.048, 14)
+    disc_z(b, (-0.30, 0.12, -0.309), 0.048, 14)
+    disc_z(b, (-0.405, 0.062, -0.309), 0.022, 10)
+    disc_z(b, (-0.335, 0.062, -0.309), 0.022, 10)
+    b.begin_material("car_dash")
     wheel_center = (-0.37, 0.13, -0.20)
     wheel_axis = normalize((0.0, 0.42, 1.0))
     _, ws, wt = basis_from_axis(wheel_axis)
@@ -611,9 +617,6 @@ def make_excel_hood():
     front_y = excel_belt_y(EXCEL_HOOD_Z0) + rise
     quad_auto(b, (-w, front_y - 0.06, EXCEL_HOOD_Z0), (w, front_y - 0.06, EXCEL_HOOD_Z0),
               (w, front_y, EXCEL_HOOD_Z0), (-w, front_y, EXCEL_HOOD_Z0))
-    popup_y = excel_belt_y(-1.70) + rise
-    b.box((0.40, popup_y + 0.012, -1.70), (0.14, 0.018, 0.20))
-    b.box((-0.40, popup_y + 0.012, -1.70), (0.14, 0.018, 0.20))
 
     make_double_sided(b)
     b.vertices = [((p[0] - hinge[0], p[1] - hinge[1], p[2] - hinge[2]), n, uv)
@@ -673,6 +676,78 @@ def make_excel_trunk_lid():
     b.vertices = [((p[0], p[1] - hinge_y, p[2] - EXCEL_TRUNK_Z0), n, uv)
                   for p, n, uv in b.vertices]
     b.write(os.path.join(MESH_DIR, "excel_trunk_lid.amsh"))
+
+
+def disc_z(b, center, radius, sides):
+    cx, cy, cz = center
+    n = (0.0, 0.0, 1.0)
+    mid = b.vertex(center, n, (0.5, 0.5))
+    ring = [b.vertex((cx + math.cos(i / sides * 2.0 * math.pi) * radius,
+                      cy + math.sin(i / sides * 2.0 * math.pi) * radius, cz), n,
+                     (0.5, 0.5)) for i in range(sides)]
+    for i in range(sides):
+        b.triangle(mid, ring[i], ring[(i + 1) % sides])
+
+
+def make_excel_extras():
+    b = MeshBuilder()
+    b.begin_material("excel_paint")
+    b.box((0.0, 0.015, -0.20), (0.14, 0.018, 0.20))
+    b.begin_material("car_light")
+    b.box((0.0, 0.0, -0.33), (0.11, 0.012, 0.05))
+    make_double_sided(b)
+    b.write(os.path.join(MESH_DIR, "excel_popup.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("excel_paint")
+    b.box((0.0, -0.045, 0.0), (0.006, 0.048, 0.048))
+    make_double_sided(b)
+    b.write(os.path.join(MESH_DIR, "excel_fuelcap.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("car_tail")
+    beam(b, (0.0, 0.0, 0.0), (0.0, 0.046, 0.0), 0.004, 0.003)
+    b.begin_material("car_trim")
+    b.box((0.0, 0.0, 0.001), (0.007, 0.007, 0.004))
+    make_double_sided(b)
+    b.write(os.path.join(MESH_DIR, "excel_needle.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("car_tail_lit")
+    b.box((0.47, 0.02, 2.203), (0.26, 0.045, 0.008))
+    b.box((-0.47, 0.02, 2.203), (0.26, 0.045, 0.008))
+    b.vertices = [((p[0], p[1] + EXCEL_Y_SHIFT, p[2]), n, uv) for p, n, uv in b.vertices]
+    b.write(os.path.join(MESH_DIR, "excel_brakelight.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("car_light")
+    b.box((0.18, -0.06, 2.203), (0.09, 0.03, 0.008))
+    b.box((-0.18, -0.06, 2.203), (0.09, 0.03, 0.008))
+    b.vertices = [((p[0], p[1] + EXCEL_Y_SHIFT, p[2]), n, uv) for p, n, uv in b.vertices]
+    b.write(os.path.join(MESH_DIR, "excel_revlight.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("car_tail")
+    b.box((0.0, 0.0, 0.0), (0.5, 0.5, 0.5))
+    b.write(os.path.join(MESH_DIR, "warn_red.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("car_signal")
+    b.box((0.0, 0.0, 0.0), (0.5, 0.5, 0.5))
+    b.write(os.path.join(MESH_DIR, "warn_amber.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("smoke")
+    b.box((0.0, 0.0, 0.0), (0.5, 0.5, 0.5))
+    b.write(os.path.join(MESH_DIR, "puff.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("alloy")
+    beam(b, (0.0, 0.0, 0.02), (0.0, 0.0, -0.055), 0.005, 0.002)
+    b.begin_material("car_trim")
+    b.box((0.0, 0.0, 0.04), (0.016, 0.004, 0.022))
+    make_double_sided(b)
+    b.write(os.path.join(MESH_DIR, "part_key.amsh"))
 
 
 def make_part_meshes():
@@ -766,6 +841,10 @@ def make_car_textures():
     make_texture(os.path.join(tex, "car_carpet.png"), 64, (40, 36, 32), (6, 5, 5), 1.2, None, 27)
     make_texture(os.path.join(tex, "tire.png"), 64, (26, 26, 28), (3, 3, 3), 0.7, None, 28)
     make_texture(os.path.join(tex, "alloy.png"), 64, (168, 170, 175), (8, 8, 8), 0.5, None, 29)
+    make_texture(os.path.join(tex, "car_tail_lit.png"), 64, (242, 60, 54), (6, 4, 4), 0.4, None, 30)
+    make_texture(os.path.join(tex, "car_light.png"), 64, (246, 241, 228), (4, 4, 4), 0.3, None, 31)
+    make_texture(os.path.join(tex, "smoke.png"), 64, (118, 118, 122), (8, 8, 8), 1.0, None, 32)
+    make_texture(os.path.join(tex, "dial.png"), 64, (214, 212, 202), (6, 6, 6), 0.5, None, 33)
 
 
 def main():
@@ -778,6 +857,7 @@ def main():
     make_excel_door(-1)
     make_excel_door(1)
     make_excel_trunk_lid()
+    make_excel_extras()
     make_excel_wheel()
     make_part_meshes()
     make_car_textures()

@@ -26,6 +26,7 @@ EntityHandle world_spawn(World* world, EntityKind kind, Vec3 pos, Quat rot, f32 
     entity->mesh_name[0] = 0;
     entity->aux_kind = 0;
     entity->aux_value = 0.0f;
+    entity->body = HANDLE_INVALID;
     if (mesh_name) {
         snprintf(entity->mesh_name, sizeof(entity->mesh_name), "%s", mesh_name);
         entity->mesh = asset_mesh(mesh_name);

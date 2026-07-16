@@ -42,6 +42,13 @@ typedef struct CarSys {
     b32 trunk_target;
     b32 handbrake_latched;
     f32 lever_anim;
+    b32 key_inserted;
+    b32 crank_request;
+    b32 crank_active;
+    f32 crank_hold;
+    b32 fuel_cap_open;
+    f32 cap_anim;
+    f32 popup_anim;
     CargoItem cargo[CARGO_MAX];
     Vec3 prev_vel;
     f32 impact_cooldown;
