@@ -937,6 +937,60 @@ def make_antenna_meshes():
     b.box((0.105, -0.02, 0.0), (0.012, 0.02, 0.014))
     b.write(os.path.join(MESH_DIR, "part_reel.amsh"))
 
+    make_relay_tower()
+
+
+def make_relay_tower():
+    b = MeshBuilder()
+    height = 11.0
+    base = 0.85
+    top = 0.28
+    legs = 4
+    b.begin_material("alloy")
+    corners = []
+    for i in range(legs):
+        ang = (i + 0.5) * (2.0 * math.pi / legs)
+        corners.append((math.cos(ang), math.sin(ang)))
+    rungs = 11
+    for i in range(legs):
+        cx, cz = corners[i]
+        nx, nz = corners[(i + 1) % legs]
+        for s in range(rungs):
+            f0 = s / float(rungs)
+            f1 = (s + 1) / float(rungs)
+            r0 = base + (top - base) * f0
+            r1 = base + (top - base) * f1
+            beam(b, (cx * r0, f0 * height, cz * r0),
+                 (cx * r1, f1 * height, cz * r1), 0.05, 0.05)
+            beam(b, (cx * r0, f0 * height, cz * r0),
+                 (nx * r0, f0 * height, nz * r0), 0.035, 0.035)
+            if s % 2 == 0:
+                beam(b, (cx * r0, f0 * height, cz * r0),
+                     (nx * r1, f1 * height, nz * r1), 0.028, 0.028)
+    b.box((0.0, height + 0.35, 0.0), (0.10, 0.35, 0.10))
+    b.begin_material("car_signal")
+    b.box((0.0, height + 0.78, 0.0), (0.06, 0.09, 0.06))
+    b.begin_material("alloy")
+    for dish in range(3):
+        ay = height * 0.55 + dish * 1.1
+        beam(b, (0.0, ay, top + 0.2), (0.0, ay, top + 0.9), 0.03, 0.03)
+        b.box((0.0, ay, top + 0.95), (0.32, 0.32, 0.05))
+    b.begin_material("car_trim")
+    b.box((base + 0.55, 0.75, 0.0), (0.42, 0.75, 0.55))
+    b.begin_material("car_dash")
+    b.box((base + 0.55, 0.95, 0.56), (0.30, 0.42, 0.02))
+    b.begin_material("car_signal")
+    b.box((base + 0.86, 0.62, 0.30), (0.05, 0.05, 0.05))
+    b.write(os.path.join(MESH_DIR, "relay_tower.amsh"))
+
+    c = MeshBuilder()
+    c.begin_material("alloy")
+    c.box((0.0, height * 0.5, 0.0), (0.42, height * 0.5, 0.42))
+    c.box((0.0, 0.5, 0.0), (0.95, 0.5, 0.95))
+    c.begin_material("car_trim")
+    c.box((base + 0.55, 0.75, 0.0), (0.42, 0.75, 0.55))
+    c.write(os.path.join(MESH_DIR, "relay_tower_col.amsh"))
+
 
 def make_excel_wheel():
     b = MeshBuilder()

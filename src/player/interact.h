@@ -41,6 +41,7 @@ typedef enum InteractAction {
     ACTION_CABLE_GRAB,
     ACTION_CABLE_PLUG,
     ACTION_CABLE_PLUG_CAMERA,
+    ACTION_CABLE_PLUG_TOWER,
     ACTION_CABLE_ROUTE_REEL,
     ACTION_CABLE_UNPLUG,
     ACTION_DISK_INSERT,
@@ -65,6 +66,8 @@ typedef struct Interact {
     b32 use_terminal_request;
     i32 target_cable;
     i32 cable_drag;
+    b32 tower_present;
+    Vec3 tower_port;
     char prompt[96];
 } Interact;
 

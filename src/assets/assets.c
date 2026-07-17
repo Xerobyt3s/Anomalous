@@ -19,8 +19,8 @@ static void* stbi_arena_realloc(void* old_ptr, u64 old_size, u64 new_size);
 #include <stb_image.h>
 #pragma warning(pop)
 
-#define MAX_TEXTURES 32
-#define MAX_MESHES 32
+#define MAX_TEXTURES 64
+#define MAX_MESHES 64
 #define ASSET_PATH_MAX 128
 #define HOT_RELOAD_INTERVAL 1.0
 

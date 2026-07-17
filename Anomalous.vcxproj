@@ -115,6 +115,7 @@
     <ClCompile Include="src\terminal\comms.c" />
     <ClCompile Include="src\terminal\disks.c" />
     <ClCompile Include="src\terminal\fs.c" />
+    <ClCompile Include="src\terminal\mapdata.c" />
     <ClCompile Include="src\terminal\terminal.c" />
     <ClCompile Include="src\ui\ui.c" />
     <ClCompile Include="src\vehicle\drivetrain.c" />
@@ -157,6 +158,7 @@
     <ClInclude Include="src\render\text.h" />
     <ClInclude Include="src\terminal\disks.h" />
     <ClInclude Include="src\terminal\fs.h" />
+    <ClInclude Include="src\terminal\mapdata.h" />
     <ClInclude Include="src\terminal\terminal.h" />
     <ClInclude Include="src\ui\ui.h" />
     <ClInclude Include="src\vehicle\drivetrain.h" />

@@ -24,6 +24,7 @@
 #include "carsys/carsys_render.h"
 #include "terminal/terminal.h"
 #include "terminal/disks.h"
+#include "terminal/mapdata.h"
 #include "audio/audio.h"
 #include "ui/ui.h"
 
@@ -61,8 +62,18 @@ static Interact s_interact;
 static Terminal s_terminal;
 static b32 s_term_focus;
 static f32 s_term_anim;
+static Vec3 s_tower_pos;
+static Quat s_tower_rot;
+static b32 s_tower_breached;
 static b32 s_viewfinder;
 static b32 s_capture_pending;
+
+#define TOWER_PORT_LOCAL v3(1.4f, 0.9f, 0.62f)
+
+static Vec3 tower_port_pos(void)
+{
+    return vec3_add(s_tower_pos, quat_rotate_vec3(s_tower_rot, TOWER_PORT_LOCAL));
+}
 static f32 s_capture_flash;
 static char s_capture_msg[48];
 static f32 s_capture_msg_until;
@@ -155,6 +166,11 @@ static void game_tick(f32 dt, PlayerCommand cmd)
             entity->pos = vec3_sub(body->pos,
                                    quat_rotate_vec3(entity->rot, item_mesh_center(kind)));
         }
+    }
+
+    RigidBody* survey_body = phys_body(&s_phys, s_vehicle.body);
+    if (survey_body) {
+        mapdata_visit(survey_body->pos);
     }
 
     telem_push(&s_telem_rpm, drivetrain_rpm(&s_vehicle.train));
@@ -1028,6 +1044,8 @@ static void update_cables(f32 dt)
                 cable_reset(&s_carsys.cables[k]);
             }
         }
+        s_carsys.coax_target = COAX_TARGET_ANTENNA;
+        s_carsys.bus_target = BUS_TARGET_CAR;
         s_interact.cable_drag = -1;
         return;
     }
@@ -1064,6 +1082,9 @@ static void update_cables(f32 dt)
             if (k == CABLE_COAX) {
                 s_carsys.coax_target = COAX_TARGET_ANTENNA;
             }
+            if (k == CABLE_BUS) {
+                s_carsys.bus_target = BUS_TARGET_CAR;
+            }
             if (s_interact.cable_drag == (i32)k) {
                 s_interact.cable_drag = -1;
             }
@@ -1086,6 +1107,8 @@ static void update_cables(f32 dt)
                     }
                     end = vec3_add(cam->pos, quat_rotate_vec3(cam->rot, v3(-0.13f, 0.0f, 0.0f)));
                 }
+            } else if (k == CABLE_BUS && s_carsys.bus_target == BUS_TARGET_TOWER) {
+                end = tower_port_pos();
             } else {
                 end = vec3_add(car_origin, quat_rotate_vec3(body->rot, jacks[k]));
             }
@@ -1103,6 +1126,9 @@ static void update_cables(f32 dt)
             cable_reset(cable);
             if (k == CABLE_COAX) {
                 s_carsys.coax_target = COAX_TARGET_ANTENNA;
+            }
+            if (k == CABLE_BUS) {
+                s_carsys.bus_target = BUS_TARGET_CAR;
             }
             if (s_interact.cable_drag == (i32)k) {
                 s_interact.cable_drag = -1;
@@ -2239,6 +2265,11 @@ int main(int argc, char** argv)
         platform_shutdown();
         return 1;
     }
+    mapdata_init(&s_terrain.hf);
+    s_tower_pos = v3(258.0f, 0.0f, 82.0f);
+    s_tower_pos.y = heightfield_sample(&s_terrain.hf, s_tower_pos.x, s_tower_pos.z);
+    s_tower_rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), 20.0f * DEG_TO_RAD);
+    s_tower_breached = 0;
     if (!vehicle_init(&s_vehicle, &s_phys, CAR_CFG_PATH, s_zone_spawn.car_pos, s_zone_spawn.car_yaw)) {
         platform_shutdown();
         return 1;
@@ -2440,6 +2471,8 @@ int main(int argc, char** argv)
             Ray view_ray;
             view_ray.origin = s_camera.pos;
             view_ray.dir = camera_forward(&s_camera);
+            s_interact.tower_present = 1;
+            s_interact.tower_port = tower_port_pos();
             interact_update(&s_interact, &s_player, &s_vehicle, &s_carsys, &s_world, &s_phys,
                             view_ray, !s_term_focus && input->key_down[KEY_E],
                             !s_term_focus && input->key_pressed[KEY_E], (f32)frame_dt);
@@ -2553,8 +2586,16 @@ int main(int argc, char** argv)
             view.coax_camera = s_carsys.coax_target == COAX_TARGET_CAMERA;
             view.antenna_tier = !view.coax_camera && s_carsys.parts[PART_ANTENNA].installed
                                 ? s_carsys.parts[PART_ANTENNA].variant : -1;
+            view.bus_tower = s_carsys.bus_target == BUS_TARGET_TOWER;
+            view.tower_breached = s_tower_breached;
+            view.tower_pos = s_tower_pos;
             terminal_disk_set(&s_terminal, s_carsys.floppy_disk);
             terminal_update(&s_terminal, &view, (f32)frame_dt);
+            if (s_terminal.breach_request) {
+                s_terminal.breach_request = 0;
+                s_tower_breached = 1;
+                audio_play(SFX_RATCHET, 0.4f, 1.4f);
+            }
             for (u32 lk = 0; lk < 2; lk++) {
                 if (s_terminal.link_request[lk]) {
                     s_terminal.link_request[lk] = 0;

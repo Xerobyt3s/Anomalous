@@ -234,6 +234,9 @@ void cable_sim(Cable* cable, Vec3 root, const Vec3* end, const Vec3* anchor,
             cable->p[i] = vec3_add(cable->p[i], vec3_scale(delta, diff * wa));
             cable->p[i + 1] = vec3_sub(cable->p[i + 1], vec3_scale(delta, diff * wb));
         }
+        if (iter + 2 < CABLE_ITERS) {
+            continue;
+        }
         for (u32 i = 1; i < CABLE_POINTS; i++) {
             if ((end && i == CABLE_POINTS - 1) || (aidx >= 0 && (i32)i == aidx)) {
                 continue;

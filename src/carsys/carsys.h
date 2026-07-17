@@ -15,6 +15,8 @@ struct PhysWorld;
 #define CARGO_MAX 8
 #define COAX_TARGET_ANTENNA 0
 #define COAX_TARGET_CAMERA 1
+#define BUS_TARGET_CAR 0
+#define BUS_TARGET_TOWER 1
 #define TRUNK_MIN_X -0.50f
 #define TRUNK_MAX_X 0.50f
 #define TRUNK_FLOOR_Y -0.20f
@@ -56,6 +58,7 @@ typedef struct CarSys {
     i32 floppy_disk;
     f32 floppy_cond;
     i32 coax_target;
+    i32 bus_target;
     Cable cables[CABLE_KIND_COUNT];
     CargoItem cargo[CARGO_MAX];
     Vec3 prev_vel;

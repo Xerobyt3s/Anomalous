@@ -30,9 +30,20 @@ static void zone_add_mesh_collision(struct PhysWorld* phys, const char* mesh_nam
 {
     ArenaTemp temp = arena_temp_begin(&g_frame_arena);
     char path[256];
-    snprintf(path, sizeof(path), "assets/meshes/%s.amsh", mesh_name);
-    MeshData data;
-    if (assets_load_mesh_data(&g_frame_arena, path, &data)) {
+    MeshData data = {0};
+    b32 loaded = 0;
+    snprintf(path, sizeof(path), "assets/meshes/%s_col.amsh", mesh_name);
+    if (platform_file_mtime(path) != 0) {
+        loaded = assets_load_mesh_data(&g_frame_arena, path, &data);
+        if (loaded) {
+            kind = ENTITY_BUILDING;
+        }
+    }
+    if (!loaded) {
+        snprintf(path, sizeof(path), "assets/meshes/%s.amsh", mesh_name);
+        loaded = assets_load_mesh_data(&g_frame_arena, path, &data);
+    }
+    if (loaded) {
         Mat3 rotation = quat_to_mat3(rot);
         for (u32 s = 0; s < data.submesh_count; s++) {
             const AmshSubmesh* sub = &data.submeshes[s];

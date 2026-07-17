@@ -2,6 +2,7 @@
 #include "terminal/comms.h"
 #include "terminal/fs.h"
 #include "terminal/disks.h"
+#include "terminal/mapdata.h"
 #include "core/log.h"
 #include "carsys/carsys.h"
 #include "vehicle/vehicle.h"
@@ -31,9 +32,11 @@
 #define FONT_BLOCK 95
 
 #define LIDAR_N 112
-#define LIDAR_SPACING 3.0f
-#define LIDAR_MAX_POINTS (LIDAR_N * LIDAR_N + 64)
+#define LIDAR_SPACING 3.6f
+#define LIDAR_MAX_POINTS 36928
 #define LIDAR_REVEAL_SPEED 95.0f
+#define LIDAR_WIDE_REVEAL_SPEED 950.0f
+#define MAP_WIDE_REFRESH 10.0f
 
 #define SURVEY_SETTLE_TIME 1.4f
 #define SURVEY_PITCH 0.82f
@@ -875,6 +878,48 @@ static Comms s_comms;
 static Fs s_fs;
 static i32 s_disk_inserted = -1;
 static u32 s_video_src_tex;
+static u32 s_map_saved_count;
+static b32 s_map_file_created;
+
+#define MAP_FILE_BASE 256
+#define MAP_FILE_CELL_BYTES 24
+
+static void map_sync_file(Terminal* term)
+{
+    if (!fs_drive_mounted(&s_fs, FS_DRIVE_A)) {
+        return;
+    }
+    u32 count = mapdata_count();
+    FsRef root = fs_root(FS_DRIVE_A);
+    FsRef ref = fs_resolve(&s_fs, root, "MAP.DAT");
+    if (!fs_ref_valid(&s_fs, ref)) {
+        if (s_map_file_created) {
+            mapdata_reset();
+            count = 0;
+        }
+        ref = fs_mkfile_rom(&s_fs, root, "MAP.DAT", 0, MAP_FILE_BASE, FS_EXE_NONE);
+        if (!fs_ref_valid(&s_fs, ref)) {
+            s_map_saved_count = 0;
+            term->map_disk_full = 1;
+            term->map_corrupt = 0;
+            return;
+        }
+        s_map_file_created = 1;
+    }
+    FsNode* node = fs_node_mut(&s_fs, ref);
+    u32 desired = MAP_FILE_BASE + count * MAP_FILE_CELL_BYTES;
+    if (desired > node->size) {
+        u32 room = node->size + fs_free_bytes(&s_fs, FS_DRIVE_A);
+        node->size = desired < room ? desired : room;
+    }
+    s_map_saved_count = node->size > MAP_FILE_BASE
+                        ? (node->size - MAP_FILE_BASE) / MAP_FILE_CELL_BYTES : 0;
+    if (s_map_saved_count > count) {
+        s_map_saved_count = count;
+    }
+    term->map_disk_full = node->size < desired;
+    term->map_corrupt = node->corrupted;
+}
 
 typedef struct Virus {
     b32 active;
@@ -1082,6 +1127,27 @@ static void terminal_camera_mount(Terminal* term, b32 want)
         }
         if (term->mode == TERM_SHELL) {
             term_print(term, "DRIVE C: DISCONNECTED\n");
+        }
+    }
+}
+
+static void terminal_tower_mount(Terminal* term, b32 want)
+{
+    b32 mounted = s_fs.drives[FS_DRIVE_D].mounted;
+    if (want && !mounted) {
+        disks_tower_load(&s_fs.drives[FS_DRIVE_D]);
+        if (term->mode == TERM_SHELL) {
+            term_print(term, "DRIVE D: RELAY R-4 LINKED\n");
+            term_print(term, "RUN MAP TO PULL THE SURVEY CACHE.\n");
+        }
+    } else if (!want && mounted) {
+        fs_unmount(&s_fs, FS_DRIVE_D);
+        if (term->cwd_drive == FS_DRIVE_D) {
+            term->cwd_drive = FS_DRIVE_A;
+            term->cwd_node = 0;
+        }
+        if (term->mode == TERM_SHELL) {
+            term_print(term, "DRIVE D: DISCONNECTED\n");
         }
     }
 }
@@ -1615,6 +1681,273 @@ static void term_av_scan(Terminal* term)
     }
 }
 
+#define BREACH_GRID 5
+#define BREACH_BUF 7
+#define BREACH_TARGET 3
+#define BREACH_TIME 30.0f
+
+static const u8 BREACH_BYTES[6] = { 0x1C, 0x55, 0xBD, 0xE9, 0x7A, 0xFF };
+
+typedef struct Breach {
+    u8 grid[BREACH_GRID][BREACH_GRID];
+    b32 used[BREACH_GRID][BREACH_GRID];
+    u8 buffer[BREACH_BUF];
+    u8 target[BREACH_TARGET];
+    u32 buf_len;
+    i32 axis;
+    i32 line;
+    i32 cursor;
+    f32 timer;
+    i32 result;
+    f32 result_time;
+    u32 rng;
+} Breach;
+
+static Breach s_breach;
+static u32 s_breach_seed = 0x1337C0DEu;
+
+static u32 breach_rand(void)
+{
+    s_breach.rng = s_breach.rng * 1664525u + 1013904223u;
+    return s_breach.rng >> 8;
+}
+
+static void breach_cell(i32 slot, i32* out_r, i32* out_c)
+{
+    if (s_breach.axis == 0) {
+        *out_r = s_breach.line;
+        *out_c = slot;
+    } else {
+        *out_r = slot;
+        *out_c = s_breach.line;
+    }
+}
+
+static b32 breach_line_unused(i32* out_first)
+{
+    b32 any = 0;
+    for (i32 s = 0; s < BREACH_GRID; s++) {
+        i32 r, c;
+        breach_cell(s, &r, &c);
+        if (!s_breach.used[r][c]) {
+            if (!any && out_first) {
+                *out_first = s;
+            }
+            any = 1;
+        }
+    }
+    return any;
+}
+
+static b32 breach_target_hit(void)
+{
+    if (s_breach.buf_len < BREACH_TARGET) {
+        return 0;
+    }
+    for (u32 start = 0; start + BREACH_TARGET <= s_breach.buf_len; start++) {
+        b32 ok = 1;
+        for (u32 k = 0; k < BREACH_TARGET; k++) {
+            if (s_breach.buffer[start + k] != s_breach.target[k]) {
+                ok = 0;
+                break;
+            }
+        }
+        if (ok) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void breach_start(void)
+{
+    Breach zero = {0};
+    s_breach = zero;
+    s_breach_seed = s_breach_seed * 2654435761u + 40503u;
+    s_breach.rng = s_breach_seed;
+    for (i32 r = 0; r < BREACH_GRID; r++) {
+        for (i32 c = 0; c < BREACH_GRID; c++) {
+            s_breach.grid[r][c] = BREACH_BYTES[breach_rand() % 6];
+        }
+    }
+    b32 sim_used[BREACH_GRID][BREACH_GRID] = {0};
+    i32 axis = 0;
+    i32 line = 0;
+    for (u32 t = 0; t < BREACH_TARGET; t++) {
+        i32 choices[BREACH_GRID];
+        i32 n = 0;
+        for (i32 s = 0; s < BREACH_GRID; s++) {
+            i32 r = axis == 0 ? line : s;
+            i32 c = axis == 0 ? s : line;
+            if (!sim_used[r][c]) {
+                choices[n++] = s;
+            }
+        }
+        if (n == 0) {
+            s_breach.target[t] = BREACH_BYTES[breach_rand() % 6];
+            continue;
+        }
+        i32 pick = choices[breach_rand() % (u32)n];
+        i32 r = axis == 0 ? line : pick;
+        i32 c = axis == 0 ? pick : line;
+        s_breach.target[t] = s_breach.grid[r][c];
+        sim_used[r][c] = 1;
+        if (axis == 0) {
+            axis = 1;
+            line = c;
+        } else {
+            axis = 0;
+            line = r;
+        }
+    }
+    s_breach.axis = 0;
+    s_breach.line = 0;
+    s_breach.cursor = 0;
+    s_breach.timer = BREACH_TIME;
+    s_breach.result = 0;
+}
+
+static void breach_move(i32 dir)
+{
+    if (s_breach.result != 0) {
+        return;
+    }
+    s_breach.cursor += dir;
+    if (s_breach.cursor < 0) {
+        s_breach.cursor = 0;
+    }
+    if (s_breach.cursor >= BREACH_GRID) {
+        s_breach.cursor = BREACH_GRID - 1;
+    }
+}
+
+static void breach_pick(Terminal* term)
+{
+    if (s_breach.result != 0) {
+        return;
+    }
+    i32 r, c;
+    breach_cell(s_breach.cursor, &r, &c);
+    if (s_breach.used[r][c]) {
+        term->click_pending = 1;
+        return;
+    }
+    if (s_breach.buf_len < BREACH_BUF) {
+        s_breach.buffer[s_breach.buf_len++] = s_breach.grid[r][c];
+    }
+    s_breach.used[r][c] = 1;
+    term->click_pending = 1;
+    if (breach_target_hit()) {
+        s_breach.result = 1;
+        s_breach.result_time = 0.0f;
+        term->breach_request = 1;
+        return;
+    }
+    if (s_breach.axis == 0) {
+        s_breach.axis = 1;
+        s_breach.line = c;
+    } else {
+        s_breach.axis = 0;
+        s_breach.line = r;
+    }
+    i32 first = 0;
+    b32 any = breach_line_unused(&first);
+    s_breach.cursor = first;
+    if (!any || s_breach.buf_len >= BREACH_BUF) {
+        s_breach.result = -1;
+        s_breach.result_time = 0.0f;
+    }
+}
+
+static void breach_hex(u8 v, char* out)
+{
+    static const char* H = "0123456789ABCDEF";
+    out[0] = H[(v >> 4) & 0xF];
+    out[1] = H[v & 0xF];
+    out[2] = 0;
+}
+
+static void draw_breach(Terminal* term, f32 dt)
+{
+    if (s_breach.result == 0) {
+        s_breach.timer -= dt;
+        if (s_breach.timer <= 0.0f) {
+            s_breach.timer = 0.0f;
+            s_breach.result = -1;
+            s_breach.result_time = 0.0f;
+        }
+    } else {
+        s_breach.result_time += dt;
+    }
+
+    grid_clear(term);
+    grid_title(term, "ICE BREAK -- RELAY R-4");
+
+    char hex[3];
+    grid_text(term, 2, 2, TC_BRIGHT, "REQUIRED SEQUENCE");
+    for (u32 i = 0; i < BREACH_TARGET; i++) {
+        breach_hex(s_breach.target[i], hex);
+        grid_text(term, 2, 22 + (i32)i * 4, TC_AMBER, "%s", hex);
+    }
+    grid_text(term, 3, 2, TC_DIM, "BUFFER");
+    for (u32 i = 0; i < BREACH_BUF; i++) {
+        if (i < s_breach.buf_len) {
+            breach_hex(s_breach.buffer[i], hex);
+            grid_text(term, 3, 22 + (i32)i * 4, TC_GREEN, "%s", hex);
+        } else {
+            grid_text(term, 3, 22 + (i32)i * 4, TC_DIM, "--");
+        }
+    }
+
+    i32 gr0 = 6;
+    i32 gc0 = 20;
+    for (i32 r = 0; r < BREACH_GRID; r++) {
+        for (i32 c = 0; c < BREACH_GRID; c++) {
+            b32 on_line = s_breach.axis == 0 ? (r == s_breach.line) : (c == s_breach.line);
+            b32 is_cursor = (s_breach.axis == 0 ? r == s_breach.line && c == s_breach.cursor
+                                                : c == s_breach.line && r == s_breach.cursor);
+            i32 row = gr0 + r * 2;
+            i32 col = gc0 + c * 5;
+            if (s_breach.used[r][c]) {
+                grid_text(term, row, col, TC_DIM, "##");
+                continue;
+            }
+            breach_hex(s_breach.grid[r][c], hex);
+            u8 color = on_line ? TC_GREEN : TC_DIM;
+            if (is_cursor && s_breach.result == 0) {
+                if (fmodf(term->blink, 0.5f) < 0.28f) {
+                    grid_text(term, row, col - 1, TC_BRIGHT, "[%s]", hex);
+                    continue;
+                }
+                color = TC_BRIGHT;
+            }
+            grid_text(term, row, col, color, "%s", hex);
+        }
+    }
+
+    if (s_breach.result == 0) {
+        i32 bar = (i32)(s_breach.timer / BREACH_TIME * 30.0f);
+        u8 tcol = s_breach.timer < 8.0f ? TC_RED : TC_AMBER;
+        grid_text(term, 5, 2, tcol, "TRACE");
+        for (i32 i = 0; i < 30; i++) {
+            term->glyphs[5][10 + i] = i < bar ? '=' : '.';
+            term->colors[5][10 + i] = i < bar ? tcol : TC_DIM;
+        }
+        grid_text(term, TERM_ROWS - 1, 1, TC_DIM,
+                  s_breach.axis == 0 ? "< > MOVE   ENTER SELECT   Q ABORT"
+                                     : "^ v MOVE   ENTER SELECT   Q ABORT");
+    } else if (s_breach.result == 1) {
+        if (fmodf(term->blink, 0.6f) < 0.4f) {
+            grid_text(term, TERM_ROWS - 4, TERM_COLS / 2 - 8, TC_BRIGHT, "ACCESS GRANTED");
+        }
+        grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "LOCK DISENGAGED   ENTER / Q TO EXIT");
+    } else {
+        grid_text(term, TERM_ROWS - 4, TERM_COLS / 2 - 12, TC_RED,
+                  "TRACE DETECTED -- LOCKED OUT");
+        grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "RUN BREACH TO RETRY   ENTER / Q TO EXIT");
+    }
+}
+
 static void term_launch_exe(Terminal* term, const FsNode* node)
 {
     if (node->corrupted) {
@@ -1624,7 +1957,9 @@ static void term_launch_exe(Terminal* term, const FsNode* node)
     i32 exe = node->exe;
     switch (exe) {
     case FS_EXE_STATUS:
-        if (term->bus_state != 2) {
+        if (term->bus_tower) {
+            term_print(term, "BUS FEED IS RELAY NODE. NO VEHICLE DIAGNOSTICS.\n");
+        } else if (term->bus_state != 2) {
             term_print(term, term->bus_state == 1 ? "BUS PORT NOT INITIALIZED. RUN LINK.\n"
                                                   : "NO VEHICLE BUS CABLE.\n");
         } else {
@@ -1644,7 +1979,13 @@ static void term_launch_exe(Terminal* term, const FsNode* node)
             term->map_materialize = 0.0f;
             term->map_auto = 1;
             term->map_zoom = 1.0f;
+            term->map_wide = 0;
+            term->map_refresh = 0.0f;
+            map_sync_file(term);
             s_lidar_count = 0;
+            term->map_downloading = term->bus_state == 2 && term->bus_tower
+                                    && term->tower_breached && !term->tower_download_done;
+            term->map_dl_t = 0.0f;
         }
         break;
     case FS_EXE_LINK:
@@ -1678,6 +2019,19 @@ static void term_launch_exe(Terminal* term, const FsNode* node)
         break;
     case FS_EXE_TOY:
         term_printf(term, "%s\n", node->run_text ? node->run_text : "OUT OF MEMORY");
+        break;
+    case FS_EXE_BREACH:
+        if (!(term->bus_state >= 1 && term->bus_tower)) {
+            term_print(term, "NO SECURED PORT ON BUS. NOTHING TO BREACH.\n");
+        } else if (term->tower_breached) {
+            term_print(term, "PORT ALREADY OPEN.\n");
+        } else {
+            term->mode = TERM_BREACH;
+            breach_start();
+        }
+        break;
+    case FS_EXE_GATE:
+        term_print(term, "GATE ACTUATOR: NO BARRIER WIRED TO THIS NODE.\n");
         break;
     default:
         term_print(term, "PROGRAM DAMAGED. CANNOT EXECUTE.\n");
@@ -1848,6 +2202,18 @@ void terminal_key_char(Terminal* term, char c)
         }
         return;
     }
+    if (term->mode == TERM_MAP) {
+        if (c == 'M' && !term->map_downloading) {
+            term->map_wide = !term->map_wide;
+            term->map_materialize = 0.0f;
+            term->map_refresh = 0.0f;
+            term->map_zoom = 1.0f;
+            term->map_auto = 1;
+            s_lidar_count = 0;
+            term->click_pending = 1;
+        }
+        return;
+    }
     if (term->mode != TERM_SHELL) {
         return;
     }
@@ -1875,6 +2241,33 @@ void terminal_key_special(Terminal* term, i32 key)
             } else {
                 term->mode = TERM_SHELL;
             }
+        }
+        return;
+    }
+    if (term->mode == TERM_BREACH) {
+        if (key == KEY_Q || key == KEY_ESCAPE) {
+            term->mode = TERM_SHELL;
+        } else if (key == KEY_ENTER) {
+            if (s_breach.result != 0) {
+                term->mode = TERM_SHELL;
+                if (s_breach.result == 1) {
+                    term_print(term, "LOCK DISENGAGED. PORT OPEN. RUN LINK.\n");
+                }
+            } else {
+                breach_pick(term);
+            }
+        } else if (key == KEY_LEFT || key == KEY_UP) {
+            breach_move(-1);
+        } else if (key == KEY_RIGHT || key == KEY_DOWN) {
+            breach_move(1);
+        }
+        return;
+    }
+    if (term->mode == TERM_MAP && term->map_downloading) {
+        if (key == KEY_Q || key == KEY_ESCAPE) {
+            term->map_downloading = 0;
+            term->mode = TERM_SHELL;
+            term_print(term, "TRANSFER ABORTED.\n");
         }
         return;
     }
@@ -2227,6 +2620,67 @@ static void lidar_rebuild(const TermView* view)
     s_lidar_dirty = 1;
 }
 
+static void lidar_add_marker_column(const Heightfield* hf, Vec3 mark, f32 kind, u32* n)
+{
+    f32 ground = heightfield_sample(hf, mark.x, mark.z);
+    for (i32 i = 0; i < 14 && *n < LIDAR_MAX_POINTS; i++) {
+        s_lidar_pts[*n][0] = mark.x;
+        s_lidar_pts[*n][1] = ground + 2.0f + (f32)i * 3.4f;
+        s_lidar_pts[*n][2] = mark.z;
+        s_lidar_pts[*n][3] = kind;
+        (*n)++;
+    }
+}
+
+static void lidar_rebuild_wide(const Terminal* term, const TermView* view)
+{
+    const Heightfield* hf = &view->terrain->hf;
+    u32 cells = mapdata_count();
+    if (cells > s_map_saved_count) {
+        cells = s_map_saved_count;
+    }
+    u32 n = 0;
+    u32 noise = 0x51ED2701u;
+    for (u32 i = 0; i < cells && n + 9 < LIDAR_MAX_POINTS - 64; i++) {
+        f32 cx, cz, cs;
+        if (!mapdata_cell(i, &cx, &cz, &cs)) {
+            continue;
+        }
+        f32 sub = cs / 3.0f;
+        for (i32 sr = -1; sr <= 1; sr++) {
+            for (i32 sc = -1; sc <= 1; sc++) {
+                f32 wx = cx + (f32)sc * sub;
+                f32 wz = cz + (f32)sr * sub;
+                f32 wy = heightfield_sample(hf, wx, wz) + 0.4f;
+                f32 kind = s_lidar_tier >= 1
+                           && terrain_road_amount(view->terrain, wx, wz) > 0.4f ? 1.0f : 0.0f;
+                if (term->map_corrupt) {
+                    noise = noise * 1664525u + 1013904223u;
+                    wy += (f32)((noise >> 8) % 61) - 30.0f;
+                    kind = (f32)((noise >> 20) % 4);
+                }
+                s_lidar_pts[n][0] = wx;
+                s_lidar_pts[n][1] = wy;
+                s_lidar_pts[n][2] = wz;
+                s_lidar_pts[n][3] = kind;
+                n++;
+            }
+        }
+    }
+    Vec3 marks[2] = { view->garage_pos, view->mission_pos };
+    f32 kinds[2] = { 2.0f, 3.0f };
+    b32 show[2];
+    show[0] = s_lidar_tier >= 1;
+    show[1] = s_lidar_tier >= 1 && (view->mission_stage == 1 || view->mission_stage == 2);
+    for (u32 m = 0; m < 2; m++) {
+        if (show[m]) {
+            lidar_add_marker_column(hf, marks[m], kinds[m], &n);
+        }
+    }
+    s_lidar_count = n;
+    s_lidar_dirty = 1;
+}
+
 static b32 map_project(const Terminal* term, Vec3 world, i32* out_row, i32* out_col)
 {
     const f32* m = term->vp3d.m;
@@ -2248,59 +2702,169 @@ static b32 map_project(const Terminal* term, Vec3 world, i32* out_row, i32* out_
     return 1;
 }
 
+#define MAP_DOWNLOAD_TIME 26.0f
+#define MAP_DOWNLOAD_BYTES 96256
+
+static b32 update_map_download(Terminal* term, const TermView* view, f32 dt)
+{
+    if (!term->map_downloading) {
+        return 0;
+    }
+    if (term->bus_state != 2 || !term->bus_tower || !term->tower_breached) {
+        term->map_downloading = 0;
+        term->mode = TERM_SHELL;
+        term_print(term, "RELAY LINK LOST. TRANSFER ABORTED.\n");
+        return 1;
+    }
+    term->map_dl_t += dt;
+    f32 frac = f_clamp01(term->map_dl_t / MAP_DOWNLOAD_TIME);
+    if (frac >= 1.0f) {
+        term->map_downloading = 0;
+        map_sync_file(term);
+        mapdata_reveal_radius(term->tower_pos, 620.0f);
+        map_sync_file(term);
+        term->tower_download_done = 1;
+        term->map_materialize = 0.0f;
+        s_lidar_count = 0;
+        return 0;
+    }
+
+    grid_clear(term);
+    grid_title(term, "RELAY LINK -- DATA TRANSFER");
+    grid_text(term, 3, 4, TC_DIM, "SOURCE  RELAY R-4 :: SURVEY CACHE");
+    grid_text(term, 4, 4, TC_DIM, "TARGET  A:\\MAP.DAT");
+    u32 done = (u32)(frac * (f32)MAP_DOWNLOAD_BYTES);
+    grid_text(term, 6, 4, TC_GREEN, "%7u / %7u BYTES", done, (u32)MAP_DOWNLOAD_BYTES);
+    i32 rate = 3200 + (i32)(fmodf(term->blink * 7.3f, 1.0f) * 900.0f);
+    grid_text(term, 6, 40, TC_DIM, "%d B/S", rate);
+
+    i32 width = 46;
+    grid_text(term, 9, 6, TC_DIM, "[");
+    i32 filled = (i32)(frac * (f32)width);
+    for (i32 i = 0; i < width; i++) {
+        term->glyphs[9][7 + i] = i < filled ? '#' : (i == filled ? '>' : '.');
+        term->colors[9][7 + i] = i < filled ? TC_GREEN : TC_DIM;
+    }
+    grid_text(term, 9, 7 + width, TC_DIM, "]");
+    grid_text(term, 10, (TERM_COLS - 4) / 2, TC_BRIGHT, "%3.0f%%", (f64)(frac * 100.0f));
+
+    if (fmodf(term->blink, 0.9f) < 0.55f) {
+        grid_text(term, 13, 4, TC_AMBER, "TRANSFER IN PROGRESS -- DO NOT DISCONNECT");
+    }
+    grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "[Q] ABORT");
+    (void)view;
+    return 1;
+}
+
 static void update_map(Terminal* term, const TermView* view, f32 dt)
 {
+    if (update_map_download(term, view, dt)) {
+        return;
+    }
     f32 sweep_rate = 1.9f;
     if (s_virus.active) {
         sweep_rate = 1.9f + 14.0f * f_max(0.0f, sinf(term->blink * 3.1f) - 0.6f);
     }
     term->sweep_angle = f_wrap_angle(term->sweep_angle + dt * sweep_rate);
     term->map_materialize += dt;
-    if (view->orbit != 0.0f) {
-        term->map_auto = 0;
-        term->map_yaw += view->orbit * 0.9f * dt;
-    } else if (term->map_auto) {
-        term->map_yaw += 0.12f * dt;
+    if (!term->map_wide) {
+        if (view->orbit != 0.0f) {
+            term->map_auto = 0;
+            term->map_yaw += view->orbit * 0.9f * dt;
+        } else if (term->map_auto) {
+            term->map_yaw += 0.12f * dt;
+        }
+        term->map_yaw = f_wrap_angle(term->map_yaw);
     }
-    term->map_yaw = f_wrap_angle(term->map_yaw);
     term->map_zoom = f_clamp(term->map_zoom - view->zoom * 0.8f * dt, 0.45f, 1.9f);
 
-    f32 moved_x = view->car_pos.x - s_lidar_center.x;
-    f32 moved_z = view->car_pos.z - s_lidar_center.z;
-    if (s_lidar_count == 0 || moved_x * moved_x + moved_z * moved_z > 12.0f * 12.0f
-        || s_lidar_tier != term->antenna_tier) {
-        s_lidar_tier = term->antenna_tier;
-        lidar_rebuild(view);
+    const Heightfield* hf = &view->terrain->hf;
+    if (term->map_wide) {
+        term->map_refresh -= dt;
+        if (term->map_refresh <= 0.0f) {
+            term->map_refresh = MAP_WIDE_REFRESH;
+            s_lidar_tier = term->antenna_tier;
+            map_sync_file(term);
+            lidar_rebuild_wide(term, view);
+            term->map_materialize = 0.0f;
+        }
+    } else {
+        f32 moved_x = view->car_pos.x - s_lidar_center.x;
+        f32 moved_z = view->car_pos.z - s_lidar_center.z;
+        if (s_lidar_count == 0 || moved_x * moved_x + moved_z * moved_z > 12.0f * 12.0f
+            || s_lidar_tier != term->antenna_tier) {
+            s_lidar_tier = term->antenna_tier;
+            lidar_rebuild(view);
+        }
     }
 
     f32 settle = ease01(term->map_materialize / SURVEY_SETTLE_TIME);
-    f32 dist = (SURVEY_DIST + 200.0f * (1.0f - settle)) * term->map_zoom;
-    f32 pitch = SURVEY_PITCH + 0.30f * (1.0f - settle);
-    f32 fov = SURVEY_FOV - (13.0f * PI32 / 180.0f) * (1.0f - settle);
-    Vec3 target = vec3_add(view->car_pos, v3(0.0f, 4.0f, 0.0f));
-    Vec3 eye = vec3_add(target, v3(sinf(term->map_yaw) * cosf(pitch) * dist,
+    Vec3 target;
+    f32 dist;
+    f32 pitch;
+    f32 fov;
+    f32 far_plane;
+    f32 cam_yaw = term->map_yaw;
+    if (term->map_wide) {
+        f32 ext_x = (f32)(hf->size_x - 1) * hf->cell_size;
+        f32 ext_z = (f32)(hf->size_z - 1) * hf->cell_size;
+        target = v3(hf->origin.x + ext_x * 0.5f, 0.0f, hf->origin.z + ext_z * 0.5f);
+        target.y = heightfield_sample(hf, target.x, target.z);
+        dist = f_max(ext_x, ext_z) * 0.80f * term->map_zoom;
+        pitch = 1.15f;
+        fov = SURVEY_FOV;
+        far_plane = dist * 2.5f + 500.0f;
+        cam_yaw = 0.0f;
+    } else {
+        target = vec3_add(view->car_pos, v3(0.0f, 4.0f, 0.0f));
+        dist = (SURVEY_DIST + 200.0f * (1.0f - settle)) * term->map_zoom;
+        pitch = SURVEY_PITCH + 0.30f * (1.0f - settle);
+        fov = SURVEY_FOV - (13.0f * PI32 / 180.0f) * (1.0f - settle);
+        far_plane = 3200.0f;
+    }
+    Vec3 eye = vec3_add(target, v3(sinf(cam_yaw) * cosf(pitch) * dist,
                                    sinf(pitch) * dist,
-                                   cosf(term->map_yaw) * cosf(pitch) * dist));
+                                   cosf(cam_yaw) * cosf(pitch) * dist));
     Mat4 vmat = mat4_look_at(eye, target, v3(0.0f, 1.0f, 0.0f));
-    Mat4 proj = mat4_perspective(fov, (f32)TERM_TEX_W / (f32)TERM_TEX_H, 0.5f, 3200.0f);
+    Mat4 proj = mat4_perspective(fov, (f32)TERM_TEX_W / (f32)TERM_TEX_H, 0.5f, far_plane);
     term->vp3d = mat4_mul(proj, vmat);
     term->map_car_pos = view->car_pos;
 
     grid_clear(term);
-    grid_title(term, "TERRAIN SURVEY");
-    grid_text(term, 1, 1, TC_DIM, "GRID %+05.0f/%+05.0f", (f64)view->car_pos.x, (f64)view->car_pos.z);
-    grid_text(term, 1, 22, term->antenna_tier == 0 ? TC_AMBER : TC_DIM, "ANT: %s%s",
-              antenna_variant_name(term->antenna_tier),
-              term->antenna_tier == 0 ? " (TERRAIN ONLY)" : "");
-    f32 span = (f32)(LIDAR_N - 1) * LIDAR_SPACING * 0.5f;
-    grid_text(term, 1, TERM_COLS - 11, TC_DIM, "RANGE %3.0fM", (f64)span);
-    if (term->antenna_tier >= 2) {
-        u8 scan_color = fmodf(term->blink, 1.4f) < 0.9f ? TC_GREEN : TC_DIM;
-        if (s_virus.active) {
-            i32 fake = 1 + (i32)(fmodf(term->blink * 0.37f, 1.0f) * 40.0f);
-            grid_text(term, TERM_ROWS - 2, 1, TC_RED, "ANOMALY SCAN: %d CONTACTS CLOSING", fake);
-        } else {
-            grid_text(term, TERM_ROWS - 2, 1, scan_color, "ANOMALY SCAN: NO CONTACTS");
+    if (term->map_wide) {
+        grid_title(term, "TERRAIN SURVEY -- WIDE RANGE");
+        f32 coverage = 100.0f * (f32)mapdata_count() / (f32)mapdata_total();
+        u32 file_kb = (MAP_FILE_BASE + s_map_saved_count * MAP_FILE_CELL_BYTES + 1023) / 1024;
+        grid_text(term, 1, 1, TC_DIM, "COVERAGE %4.1f%%   MAP.DAT %3uK", (f64)coverage, file_kb);
+        grid_text(term, 1, TERM_COLS - 14, TC_DIM, "NEXT SWEEP %2.0fS",
+                  (f64)f_max(term->map_refresh, 0.0f));
+        if (term->map_corrupt) {
+            if (fmodf(term->blink, 0.8f) < 0.55f) {
+                grid_text(term, TERM_ROWS - 2, 1, TC_RED,
+                          "MAP DATA CORRUPTED - SURVEY UNRELIABLE");
+            }
+        } else if (term->map_disk_full) {
+            grid_text(term, TERM_ROWS - 2, 1, TC_AMBER,
+                      "DISK FULL - NEW SURVEY DATA NOT SAVED");
+        }
+    } else {
+        grid_title(term, "TERRAIN SURVEY -- IMMEDIATE");
+        grid_text(term, 1, 1, TC_DIM, "GRID %+05.0f/%+05.0f", (f64)view->car_pos.x,
+                  (f64)view->car_pos.z);
+        grid_text(term, 1, 22, term->antenna_tier == 0 ? TC_AMBER : TC_DIM, "ANT: %s%s",
+                  antenna_variant_name(term->antenna_tier),
+                  term->antenna_tier == 0 ? " (TERRAIN ONLY)" : "");
+        f32 span = (f32)(LIDAR_N - 1) * LIDAR_SPACING * 0.5f;
+        grid_text(term, 1, TERM_COLS - 11, TC_DIM, "RANGE %3.0fM", (f64)span);
+        if (term->antenna_tier >= 2) {
+            u8 scan_color = fmodf(term->blink, 1.4f) < 0.9f ? TC_GREEN : TC_DIM;
+            if (s_virus.active) {
+                i32 fake = 1 + (i32)(fmodf(term->blink * 0.37f, 1.0f) * 40.0f);
+                grid_text(term, TERM_ROWS - 2, 1, TC_RED, "ANOMALY SCAN: %d CONTACTS CLOSING",
+                          fake);
+            } else {
+                grid_text(term, TERM_ROWS - 2, 1, scan_color, "ANOMALY SCAN: NO CONTACTS");
+            }
         }
     }
 
@@ -2331,7 +2895,6 @@ static void update_map(Terminal* term, const TermView* view, f32 dt)
     show[0] = term->antenna_tier >= 1;
     show[1] = term->antenna_tier >= 1
               && (view->mission_stage == 1 || view->mission_stage == 2);
-    const Heightfield* hf = &view->terrain->hf;
     for (u32 m = 0; m < 2; m++) {
         if (!show[m] || (m == 1 && fmodf(term->blink, 0.7f) > 0.45f)) {
             continue;
@@ -2343,8 +2906,12 @@ static void update_map(Terminal* term, const TermView* view, f32 dt)
         }
     }
 
-    grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "< > ORBIT   ^ v ZOOM   %s",
-              term->map_auto ? "AUTO ROTATE" : "           ");
+    if (term->map_wide) {
+        grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "[M] IMMEDIATE   ^ v ZOOM");
+    } else {
+        grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "[M] WIDE RANGE   < > ORBIT   ^ v ZOOM   %s",
+                  term->map_auto ? "AUTO" : "    ");
+    }
     grid_text(term, TERM_ROWS - 1, TERM_COLS - 20, TC_DIM, "@ CAR  G GAR  X OBJ");
 }
 
@@ -2746,6 +3313,9 @@ static void draw_link_port(Terminal* term, i32 row, const char* label, i32 state
 
 static void update_link(Terminal* term, f32 dt)
 {
+    if (term->link_deny > 0.0f) {
+        term->link_deny -= dt;
+    }
     if (term->link_anim_port >= 0) {
         f32 prev = term->link_anim_t;
         term->link_anim_t += dt;
@@ -2754,8 +3324,13 @@ static void update_link(Terminal* term, f32 dt)
         }
         i32 port = term->link_anim_port;
         i32 state = port == 0 ? term->coax_state : term->bus_state;
+        b32 secured = port == 1 && term->bus_tower && !term->tower_breached;
         if (state != 1) {
             term->link_anim_port = -1;
+        } else if (secured && term->link_anim_t >= 1.1f) {
+            term->link_deny = 3.0f;
+            term->link_anim_port = -1;
+            term->click_pending = 1;
         } else if (term->link_anim_t >= 1.6f) {
             term->link_request[port] = 1;
             term->link_anim_port = -1;
@@ -2774,9 +3349,21 @@ static void update_link(Terminal* term, f32 dt)
     }
     draw_link_port(term, 2, "PORT A   COAX / ANTENNA", term->coax_state,
                    term->coax_camera || term->antenna_tier >= 0 ? coax_desc : "ANTENNA");
-    draw_link_port(term, 5, "PORT B   VEHICLE BUS", term->bus_state, "ENGINE BAY TAP");
+    const char* bus_desc = term->bus_tower
+                           ? (term->tower_breached ? "RELAY R-4 (OPEN)" : "RELAY R-4 (SECURED)")
+                           : "ENGINE BAY TAP";
+    draw_link_port(term, 5, term->bus_tower ? "PORT B   REMOTE NODE" : "PORT B   VEHICLE BUS",
+                   term->bus_state, bus_desc);
+    if (term->bus_state == 2 && term->bus_tower && !term->tower_breached) {
+        grid_text(term, 6, 4, fmodf(term->blink, 0.7f) < 0.45f ? TC_RED : TC_DIM,
+                  "LOCKED - RUN BREACH");
+    }
 
-    if (term->link_anim_port >= 0) {
+    if (term->link_deny > 0.0f) {
+        grid_text(term, 9, 2, fmodf(term->blink, 0.4f) < 0.25f ? TC_RED : TC_DIM,
+                  "ACCESS DENIED - PORT SECURED");
+        grid_text(term, 10, 2, TC_DIM, "RUN BREACH TO CRACK THE LOCK.");
+    } else if (term->link_anim_port >= 0) {
         i32 dots = (i32)(term->link_anim_t * 8.0f);
         if (dots > 12) {
             dots = 12;
@@ -2883,12 +3470,23 @@ void terminal_update(Terminal* term, const TermView* view, f32 dt)
     term->bus_state = view->bus_state;
     term->antenna_tier = view->antenna_tier;
     term->coax_camera = view->coax_camera;
+    term->bus_tower = view->bus_tower;
+    term->tower_breached = view->tower_breached;
+    term->tower_pos = view->tower_pos;
     terminal_camera_mount(term, view->coax_state == 2 && view->coax_camera);
-    if (term->mode == TERM_STATUS && term->bus_state != 2) {
+    terminal_tower_mount(term, view->bus_state == 2 && view->bus_tower && view->tower_breached);
+    if (!(view->bus_tower && view->tower_breached)) {
+        term->tower_download_done = 0;
+    }
+    if (term->mode == TERM_STATUS && (term->bus_state != 2 || term->bus_tower)) {
         term->mode = TERM_SHELL;
     }
     if (term->mode == TERM_MAP && (term->coax_state != 2 || term->antenna_tier < 0)) {
         term->mode = TERM_SHELL;
+    }
+    if (term->mode == TERM_BREACH && !(term->bus_state >= 1 && term->bus_tower)) {
+        term->mode = TERM_SHELL;
+        term_print(term, "PORT CONNECTION LOST. BREACH ABORTED.\n");
     }
     term->mode_timer += dt;
     term->blink += dt;
@@ -2945,6 +3543,9 @@ void terminal_update(Terminal* term, const TermView* view, f32 dt)
             term->map_materialize += dt;
             draw_video(term);
         }
+        break;
+    case TERM_BREACH:
+        draw_breach(term, dt);
         break;
     }
 
@@ -3016,7 +3617,8 @@ void terminal_render(Terminal* term)
             glNamedBufferSubData(s_gpu.point_vbo, 0,
                                  (GLsizeiptr)(s_lidar_count * 4 * sizeof(f32)), s_lidar_pts);
         }
-        f32 reveal = term->map_materialize * LIDAR_REVEAL_SPEED;
+        f32 reveal = term->map_materialize
+                     * (term->map_wide ? LIDAR_WIDE_REVEAL_SPEED : LIDAR_REVEAL_SPEED);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
         glEnable(GL_PROGRAM_POINT_SIZE);

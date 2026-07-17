@@ -31,6 +31,7 @@ typedef enum TermMode {
     TERM_LINK,
     TERM_VIEW,
     TERM_VIDEO,
+    TERM_BREACH,
 } TermMode;
 
 typedef enum CommsPhase {
@@ -57,6 +58,9 @@ typedef struct TermView {
     i32 bus_state;
     i32 antenna_tier;
     b32 coax_camera;
+    b32 bus_tower;
+    b32 tower_breached;
+    Vec3 tower_pos;
 } TermView;
 
 typedef struct Terminal {
@@ -86,6 +90,12 @@ typedef struct Terminal {
     f32 map_zoom;
     f32 map_materialize;
     b32 map_auto;
+    b32 map_wide;
+    f32 map_refresh;
+    b32 map_disk_full;
+    b32 map_corrupt;
+    b32 map_downloading;
+    f32 map_dl_t;
     f32 status_spin;
     Mat4 vp3d;
     Vec3 map_car_pos;
@@ -102,10 +112,16 @@ typedef struct Terminal {
     i32 bus_state;
     i32 antenna_tier;
     b32 coax_camera;
+    b32 bus_tower;
+    b32 tower_breached;
+    Vec3 tower_pos;
+    b32 breach_request;
+    b32 tower_download_done;
     i32 view_pic;
     char view_name[FS_NAME_MAX + 1];
     i32 link_anim_port;
     f32 link_anim_t;
+    f32 link_deny;
     b32 link_request[2];
     i32 cwd_drive;
     i32 cwd_node;

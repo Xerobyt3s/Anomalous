@@ -2,10 +2,11 @@
 
 #include "core/types.h"
 
-#define FS_DRIVE_COUNT 3
+#define FS_DRIVE_COUNT 4
 #define FS_DRIVE_A 0
 #define FS_DRIVE_B 1
 #define FS_DRIVE_C 2
+#define FS_DRIVE_D 3
 #define FS_NAME_MAX 12
 #define FS_DRIVE_NODES 96
 #define FS_POOL_SIZE 24576
@@ -21,6 +22,8 @@ typedef enum FsExe {
     FS_EXE_AV,
     FS_EXE_TOY,
     FS_EXE_VIDEO,
+    FS_EXE_BREACH,
+    FS_EXE_GATE,
 } FsExe;
 
 typedef enum FsError {

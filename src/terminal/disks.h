@@ -25,6 +25,7 @@ void disk_load(i32 disk, struct FsDrive* dst);
 void disk_store(i32 disk, const struct FsDrive* src);
 void disks_camera_load(struct FsDrive* dst);
 void disks_camera_store(const struct FsDrive* src);
+void disks_tower_load(struct FsDrive* dst);
 b32  disks_camera_capture(struct Fs* live_fs, const u8* rgb);
 u32  disks_camera_exposures_left(const struct Fs* live_fs);
 const u8* disk_photo_data(i32 pic);

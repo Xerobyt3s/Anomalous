@@ -346,7 +346,7 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
                                     "antenna");
             }
         }
-        if (sys->hood_open >= HOOD_OPEN_FOR_BAY) {
+        if (sys->hood_open >= HOOD_OPEN_FOR_BAY && sys->bus_target == BUS_TARGET_CAR) {
             center = vec3_sub(BAY_JACK_LOCAL, com);
             if (ray_vs_local_box(local, center, jack_half, &t)) {
                 consider_cable_jack(best, it, sys, CABLE_BUS, t - 0.20f, center, jack_half,
@@ -604,6 +604,35 @@ static void resolve_pickups(Candidate* best, const Interact* it, CarSys* sys, Wo
     }
 }
 
+static void resolve_tower_port(Candidate* best, const Interact* it, CarSys* sys, Ray view_ray)
+{
+    if (!it->tower_present) {
+        return;
+    }
+    Sphere port;
+    port.center = it->tower_port;
+    port.radius = 0.55f;
+    f32 t;
+    if (!ray_vs_sphere(view_ray, port, INTERACT_RANGE, &t)) {
+        return;
+    }
+    Cable* bus = &sys->cables[CABLE_BUS];
+    if (sys->bus_target == BUS_TARGET_TOWER && bus->state == CABLE_PLUGGED) {
+        if (candidate_consider(best, t - 0.30f, ACTION_CABLE_UNPLUG, vec3_zero(), vec3_zero(),
+                               0, "[E] unplug bus from relay port")) {
+            best->cable = (i32)CABLE_BUS;
+        }
+    } else if (it->cable_drag == (i32)CABLE_BUS) {
+        if (candidate_consider(best, t - 0.30f, ACTION_CABLE_PLUG_TOWER, vec3_zero(), vec3_zero(),
+                               0, "[E] connect bus to relay port")) {
+            best->cable = (i32)CABLE_BUS;
+        }
+    } else if (it->cable_drag < 0 && it->hands.kind == ITEM_NONE) {
+        candidate_consider(best, t - 0.30f, ACTION_INFO, vec3_zero(), vec3_zero(), 0,
+                           "relay service port");
+    }
+}
+
 static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld* phys)
 {
     switch (it->action) {
@@ -699,11 +728,19 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
         if (it->target_cable == (i32)CABLE_COAX) {
             sys->coax_target = COAX_TARGET_ANTENNA;
         }
+        if (it->target_cable == (i32)CABLE_BUS) {
+            sys->bus_target = BUS_TARGET_CAR;
+        }
         it->cable_drag = -1;
         break;
     case ACTION_CABLE_PLUG_CAMERA:
         sys->cables[CABLE_COAX].state = CABLE_PLUGGED;
         sys->coax_target = COAX_TARGET_CAMERA;
+        it->cable_drag = -1;
+        break;
+    case ACTION_CABLE_PLUG_TOWER:
+        sys->cables[CABLE_BUS].state = CABLE_PLUGGED;
+        sys->bus_target = BUS_TARGET_TOWER;
         it->cable_drag = -1;
         break;
     case ACTION_CABLE_ROUTE_REEL:
@@ -713,6 +750,9 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
         cable_reset(&sys->cables[it->target_cable]);
         if (it->target_cable == (i32)CABLE_COAX) {
             sys->coax_target = COAX_TARGET_ANTENNA;
+        }
+        if (it->target_cable == (i32)CABLE_BUS) {
+            sys->bus_target = BUS_TARGET_CAR;
         }
         if (it->cable_drag == it->target_cable) {
             it->cable_drag = -1;
@@ -764,6 +804,7 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
     if (player->state == PLAYER_ON_FOOT) {
         resolve_car_targets(&best, it, player, veh, sys, phys, view_ray);
         resolve_pickups(&best, it, sys, world, view_ray);
+        resolve_tower_port(&best, it, sys, view_ray);
     } else if (player->state == PLAYER_DRIVING) {
         resolve_in_car(&best, it, player, veh, sys, phys, view_ray);
     }

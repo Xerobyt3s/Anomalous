@@ -23,7 +23,23 @@ static const char* s_floppy_dirs[DISK_COUNT] = {
 
 #define CAMERA_CAPACITY (24 * PHOTO_FILE_BYTES)
 
+#define TOWER_CAPACITY 131072
+
+static const char* TOWER_LOG =
+    "RELAY TOWER R-4 -- SERVICE NODE\n"
+    "REDLINE INFRASTRUCTURE, FIRMWARE 1.07\n"
+    "\n"
+    "UNAUTHORIZED ACCESS IS LOGGED AND -- WELL. IT USED\n"
+    "TO BE. NO ONE READS THESE LOGS NOW.\n"
+    "\n"
+    "THIS NODE CARRIES A CACHED WIDE-AREA SURVEY. RUN\n"
+    "MAP WHILE LINKED TO PULL IT DOWN TO YOUR UNIT.\n"
+    "\n"
+    "GATE.EXE ACTUATES THE ACCESS ROAD BARRIER. NO\n"
+    "BARRIER IS WIRED TO THIS NODE. IT WILL SAY SO.\n";
+
 static FsDrive s_store[DISK_COUNT];
+static FsDrive s_tower;
 static Fs s_build;
 static Fs s_camfs;
 static u8 s_photo[PHOTO_SLOTS][PHOTO_BYTES];
@@ -52,6 +68,12 @@ static i32 exe_prog(const char* name)
     }
     if (strcmp(name, "video") == 0) {
         return FS_EXE_VIDEO;
+    }
+    if (strcmp(name, "breach") == 0) {
+        return FS_EXE_BREACH;
+    }
+    if (strcmp(name, "gate") == 0) {
+        return FS_EXE_GATE;
     }
     return FS_EXE_NONE;
 }
@@ -196,6 +218,21 @@ void disks_init(Fs* fs)
     memset(&s_camfs, 0, sizeof(s_camfs));
     fs_mount(&s_camfs, FS_DRIVE_C, "CAMERA FILM", CAMERA_CAPACITY);
     memset(s_photo_used, 0, sizeof(s_photo_used));
+
+    memset(&s_build, 0, sizeof(s_build));
+    fs_mount(&s_build, FS_DRIVE_D, "RELAY R-4", TOWER_CAPACITY);
+    FsRef troot = fs_root(FS_DRIVE_D);
+    fs_mkfile_rom(&s_build, troot, "NODELOG.TXT", TOWER_LOG, 0, FS_EXE_NONE);
+    fs_mkfile_rom(&s_build, troot, "GATE.EXE", 0, 6144, FS_EXE_GATE);
+    fs_mkfile_rom(&s_build, troot, "RELAY.DAT", 0, 96256, FS_EXE_NONE);
+    memcpy(&s_tower, &s_build.drives[FS_DRIVE_D], sizeof(FsDrive));
+    fs_unmount(&s_build, FS_DRIVE_D);
+}
+
+void disks_tower_load(FsDrive* dst)
+{
+    memcpy(dst, &s_tower, sizeof(FsDrive));
+    dst->mounted = 1;
 }
 
 static void photo_mark_drive(const FsDrive* d, b32* marked)
