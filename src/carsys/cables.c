@@ -39,7 +39,27 @@ void cable_reset(Cable* cable)
     cable->let_out = 0.0f;
 }
 
-static void cable_collide(Vec3* p, const struct Terrain* terrain, Vec3 car_pos, Quat car_rot)
+static void push_out_of_box(Vec3* local, Vec3 center, Vec3 box_half)
+{
+    Vec3 d = vec3_sub(*local, center);
+    Vec3 half = vec3_add(box_half, v3(CABLE_RADIUS, CABLE_RADIUS, CABLE_RADIUS));
+    if (f_abs(d.x) >= half.x || f_abs(d.y) >= half.y || f_abs(d.z) >= half.z) {
+        return;
+    }
+    f32 px = half.x - f_abs(d.x);
+    f32 py = half.y - f_abs(d.y);
+    f32 pz = half.z - f_abs(d.z);
+    if (px < py && px < pz) {
+        local->x = center.x + (d.x >= 0.0f ? half.x : -half.x);
+    } else if (py < pz) {
+        local->y = center.y + (d.y >= 0.0f ? half.y : -half.y);
+    } else {
+        local->z = center.z + (d.z >= 0.0f ? half.z : -half.z);
+    }
+}
+
+static void cable_collide(Vec3* p, const struct Terrain* terrain, Vec3 car_pos, Quat car_rot,
+                          const CableObstacle* obstacles, u32 obstacle_count)
 {
     f32 floor_y = heightfield_sample(&terrain->hf, p->x, p->z) + CABLE_RADIUS + 0.005f;
     if (p->y < floor_y) {
@@ -48,27 +68,20 @@ static void cable_collide(Vec3* p, const struct Terrain* terrain, Vec3 car_pos, 
     Quat inv = quat_conjugate(car_rot);
     Vec3 local = quat_rotate_vec3(inv, vec3_sub(*p, car_pos));
     for (u32 b = 0; b < CABLE_BOX_COUNT; b++) {
-        Vec3 d = vec3_sub(local, s_car_boxes[b].center);
-        Vec3 half = vec3_add(s_car_boxes[b].half, v3(CABLE_RADIUS, CABLE_RADIUS, CABLE_RADIUS));
-        if (f_abs(d.x) >= half.x || f_abs(d.y) >= half.y || f_abs(d.z) >= half.z) {
-            continue;
-        }
-        f32 px = half.x - f_abs(d.x);
-        f32 py = half.y - f_abs(d.y);
-        f32 pz = half.z - f_abs(d.z);
-        if (px < py && px < pz) {
-            local.x = s_car_boxes[b].center.x + (d.x >= 0.0f ? half.x : -half.x);
-        } else if (py < pz) {
-            local.y = s_car_boxes[b].center.y + (d.y >= 0.0f ? half.y : -half.y);
-        } else {
-            local.z = s_car_boxes[b].center.z + (d.z >= 0.0f ? half.z : -half.z);
-        }
+        push_out_of_box(&local, s_car_boxes[b].center, s_car_boxes[b].half);
     }
     *p = vec3_add(car_pos, quat_rotate_vec3(car_rot, local));
+    for (u32 o = 0; o < obstacle_count; o++) {
+        Quat obs_inv = quat_conjugate(obstacles[o].rot);
+        Vec3 obs_local = quat_rotate_vec3(obs_inv, vec3_sub(*p, obstacles[o].pos));
+        push_out_of_box(&obs_local, obstacles[o].center, obstacles[o].half);
+        *p = vec3_add(obstacles[o].pos, quat_rotate_vec3(obstacles[o].rot, obs_local));
+    }
 }
 
 void cable_sim(Cable* cable, Vec3 root, const Vec3* end, const struct Terrain* terrain,
-               Vec3 car_pos, Quat car_rot, f32 dt)
+               Vec3 car_pos, Quat car_rot, const CableObstacle* obstacles, u32 obstacle_count,
+               f32 dt)
 {
     dt = f_min(dt, 1.0f / 30.0f);
     f32 need = end ? vec3_distance(root, *end) * 1.10f + 0.35f : 1.0f;
@@ -128,7 +141,7 @@ void cable_sim(Cable* cable, Vec3 root, const Vec3* end, const struct Terrain* t
             if (end && i == CABLE_POINTS - 1) {
                 continue;
             }
-            cable_collide(&cable->p[i], terrain, car_pos, car_rot);
+            cable_collide(&cable->p[i], terrain, car_pos, car_rot, obstacles, obstacle_count);
         }
     }
 }

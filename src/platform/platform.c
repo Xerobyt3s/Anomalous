@@ -7,6 +7,8 @@
 #include <GLFW/glfw3.h>
 
 #include <stdio.h>
+#include <string.h>
+#include <io.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -272,4 +274,29 @@ i64 platform_file_mtime(const char* path)
         return 0;
     }
     return (i64)info.st_mtime;
+}
+
+u32 platform_list_dir(const char* path, PlatformDirEntry* out, u32 max_count)
+{
+    char pattern[512];
+    snprintf(pattern, sizeof(pattern), "%s/*", path);
+    struct _finddata_t fd;
+    intptr_t handle = _findfirst(pattern, &fd);
+    if (handle == -1) {
+        return 0;
+    }
+    u32 n = 0;
+    do {
+        if (strcmp(fd.name, ".") == 0 || strcmp(fd.name, "..") == 0) {
+            continue;
+        }
+        if (n >= max_count) {
+            break;
+        }
+        snprintf(out[n].name, sizeof(out[n].name), "%s", fd.name);
+        out[n].is_dir = (fd.attrib & _A_SUBDIR) != 0;
+        n++;
+    } while (_findnext(handle, &fd) == 0);
+    _findclose(handle);
+    return n;
 }

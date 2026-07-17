@@ -51,6 +51,8 @@ typedef struct CarSys {
     f32 cap_anim;
     f32 popup_anim;
     b32 computer_on;
+    i32 floppy_disk;
+    f32 floppy_cond;
     Cable cables[CABLE_KIND_COUNT];
     CargoItem cargo[CARGO_MAX];
     Vec3 prev_vel;

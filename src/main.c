@@ -23,6 +23,7 @@
 #include "carsys/carsys.h"
 #include "carsys/carsys_render.h"
 #include "terminal/terminal.h"
+#include "terminal/disks.h"
 #include "audio/audio.h"
 #include "ui/ui.h"
 
@@ -393,9 +394,16 @@ static void draw_interact_prompt(void)
         }
     }
     if (s_player.state == PLAYER_ON_FOOT && s_interact.hands.kind != ITEM_NONE) {
-        dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN, "hands: %s (%.0f%%) | [G] throw%s",
-                   item_name(s_interact.hands.kind), (f64)(s_interact.hands.condition * 100.0f),
-                   s_interact.has_key ? " | key in pocket" : "");
+        if (s_interact.hands.kind == ITEM_FLOPPY) {
+            dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN, "hands: floppy \"%s\" | [G] throw%s",
+                       disk_label(s_interact.hands.aux),
+                       s_interact.has_key ? " | key in pocket" : "");
+        } else {
+            dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN, "hands: %s (%.0f%%) | [G] throw%s",
+                       item_name(s_interact.hands.kind),
+                       (f64)(s_interact.hands.condition * 100.0f),
+                       s_interact.has_key ? " | key in pocket" : "");
+        }
     } else if (s_player.state == PLAYER_ON_FOOT && s_interact.has_key) {
         dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_GRAY, "key in pocket");
     }
@@ -535,17 +543,31 @@ static void draw_viewmodel(f32 alpha)
                 mat4_trs(pos, rot, v3(scale, scale, scale)));
 }
 
-static void spawn_spare(ItemKind kind, f32 condition, Vec3 offset)
+static void spawn_spare_aux(ItemKind kind, f32 condition, i32 aux, Vec3 offset)
 {
     Quat place_rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), s_zone_spawn.car_yaw);
     Vec3 pos = vec3_add(s_zone_spawn.car_pos, quat_rotate_vec3(place_rot, offset));
     f32 lift = item_cargo_half(kind).y + 0.10f;
-    pos.y = heightfield_sample(&s_terrain.hf, pos.x, pos.z) + lift;
+    f32 ground = heightfield_sample(&s_terrain.hf, pos.x, pos.z);
+    Ray down;
+    down.origin = v3(pos.x, ground + 1.6f, pos.z);
+    down.dir = v3(0.0f, -1.0f, 0.0f);
+    PhysRayHit hit;
+    if (phys_raycast(&s_phys, down, 8.0f, &hit)) {
+        ground = hit.point.y;
+    }
+    pos.y = ground + lift;
     Item item;
     item.kind = kind;
     item.condition = condition;
+    item.aux = aux;
     interact_spawn_pickup(&s_world, &s_phys, item, pos,
                           s_zone_spawn.car_yaw + offset.x * 2.0f, vec3_zero());
+}
+
+static void spawn_spare(ItemKind kind, f32 condition, Vec3 offset)
+{
+    spawn_spare_aux(kind, condition, 0, offset);
 }
 
 static void update_audio(f32 frame_dt)
@@ -754,6 +776,11 @@ static void spawn_spares(void)
     spawn_spare(ITEM_ANTENNA_STD, 0.9f, v3(5.4f, 0.0f, 0.3f));
     spawn_spare(ITEM_ANTENNA_ARRAY, 0.8f, v3(5.8f, 0.0f, -0.9f));
     spawn_spare(ITEM_KEY, 1.0f, v3(2.1f, 0.0f, -0.2f));
+    spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_MASTER, v3(4.3f, 0.0f, 2.4f));
+    spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_FIELD_NOTES, v3(4.6f, 0.0f, 2.7f));
+    spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_SCRATCH, v3(4.9f, 0.0f, 2.35f));
+    spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_RESCUE, v3(5.2f, 0.0f, 2.65f));
+    spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_ARCADE, v3(5.5f, 0.0f, 2.3f));
 }
 
 static void draw_telemetry_panel(void)
@@ -878,6 +905,11 @@ static void update_cables(f32 dt)
                                                 vec3_negate(s_vehicle.cfg.com_offset)));
     Vec3 roots[2] = { CONNECTOR_COAX_LOCAL, CONNECTOR_BUS_LOCAL };
     Vec3 jacks[2] = { ANTENNA_JACK_LOCAL, BAY_JACK_LOCAL };
+    CableObstacle term_obs;
+    term_obs.pos = term_pos;
+    term_obs.rot = term_rot;
+    term_obs.center = v3(0.0f, 0.0f, 0.03f);
+    term_obs.half = v3(0.23f, 0.20f, 0.24f);
     for (u32 k = 0; k < CABLE_KIND_COUNT; k++) {
         Cable* cable = &s_carsys.cables[k];
         if (cable->state == CABLE_STOWED) {
@@ -900,7 +932,7 @@ static void update_cables(f32 dt)
                 continue;
             }
         }
-        cable_sim(cable, root, &end, &s_terrain, car_origin, body->rot, dt);
+        cable_sim(cable, root, &end, &s_terrain, car_origin, body->rot, &term_obs, 1, dt);
     }
 }
 
@@ -922,13 +954,20 @@ static void game_render(f32 alpha, const GameInput* input)
 
     terrain_render_draw();
     world_render(&s_world);
-    if (s_terminal.powered && !s_carsys.parts[PART_COMPUTER].installed) {
+    if (!s_carsys.parts[PART_COMPUTER].installed) {
         Entity* loose = find_loose_computer();
         if (loose) {
             Mat4 base = mat4_trs(loose->pos, loose->rot, v3(1.0f, 1.0f, 1.0f));
-            Mat4 screen = mat4_mul(base, mat4_trs(v3(0.0f, 0.047f, 0.170f), quat_identity(),
-                                                  v3(0.304f, 0.19f, 1.0f)));
-            r_draw_lit_quad(screen, terminal_texture(&s_terminal));
+            if (s_terminal.powered) {
+                Mat4 screen = mat4_mul(base, mat4_trs(v3(0.0f, 0.047f, 0.170f), quat_identity(),
+                                                      v3(0.304f, 0.19f, 1.0f)));
+                r_draw_lit_quad(screen, terminal_texture(&s_terminal));
+            }
+            if (s_carsys.floppy_disk >= 0) {
+                r_draw_mesh(asset_mesh("part_floppy"),
+                            mat4_mul(base, mat4_trs(v3(0.0f, -0.119f, 0.223f),
+                                                    quat_identity(), v3(1.0f, 1.0f, 1.0f))));
+            }
         }
     }
     cable_render(&s_carsys.cables[CABLE_COAX]);
@@ -2184,8 +2223,11 @@ int main(int argc, char** argv)
                 terminal_power(&s_terminal, 0);
             }
         }
-        f32 term_burn = f_max(0.6f - s_carsys.parts[PART_COMPUTER].condition, 0.0f) * 0.5f;
-        r_set_screen_fx(power_elapsed, term_burn, f_min(s_carsys.impact_cooldown * 2.0f, 0.5f),
+        f32 vfx = terminal_virus_fx(&s_terminal);
+        f32 term_burn = f_max(0.6f - s_carsys.parts[PART_COMPUTER].condition, 0.0f) * 0.5f
+                        + 0.35f * vfx;
+        r_set_screen_fx(power_elapsed, term_burn,
+                        f_min(s_carsys.impact_cooldown * 2.0f, 0.5f) + 0.25f * vfx,
                         terminal_pixelate(&s_terminal));
         if (s_terminal.wants_off) {
             s_carsys.computer_on = 0;
@@ -2214,6 +2256,7 @@ int main(int argc, char** argv)
             view.bus_state = bus->state == CABLE_PLUGGED ? (bus->linked ? 2 : 1) : 0;
             view.antenna_tier = s_carsys.parts[PART_ANTENNA].installed
                                 ? s_carsys.parts[PART_ANTENNA].variant : -1;
+            terminal_disk_set(&s_terminal, s_carsys.floppy_disk);
             terminal_update(&s_terminal, &view, (f32)frame_dt);
             for (u32 lk = 0; lk < 2; lk++) {
                 if (s_terminal.link_request[lk]) {

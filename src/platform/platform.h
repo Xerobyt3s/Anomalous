@@ -64,6 +64,11 @@ typedef struct FileData {
     u64 size;
 } FileData;
 
+typedef struct PlatformDirEntry {
+    char name[64];
+    b32 is_dir;
+} PlatformDirEntry;
+
 b32  platform_init(const char* title, i32 width, i32 height);
 void platform_shutdown(void);
 b32  platform_should_close(void);
@@ -82,3 +87,4 @@ b32  platform_cursor_captured(void);
 
 FileData platform_read_entire_file(struct Arena* arena, const char* path);
 i64      platform_file_mtime(const char* path);
+u32      platform_list_dir(const char* path, PlatformDirEntry* out, u32 max_count);

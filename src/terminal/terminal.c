@@ -1,6 +1,7 @@
 #include "terminal/terminal.h"
 #include "terminal/comms.h"
 #include "terminal/fs.h"
+#include "terminal/disks.h"
 #include "core/log.h"
 #include "carsys/carsys.h"
 #include "vehicle/vehicle.h"
@@ -870,10 +871,56 @@ static WireDraw s_wires[12];
 static u32 s_wire_count;
 static Comms s_comms;
 static Fs s_fs;
+static i32 s_disk_inserted = -1;
+
+typedef struct Virus {
+    b32 active;
+    u32 rng;
+    f32 burst;
+    f32 next_beep;
+    f32 next_corrupt;
+} Virus;
+
+static Virus s_virus;
+
+static f32 virus_rand(void)
+{
+    s_virus.rng = s_virus.rng * 1664525u + 1013904223u;
+    return (f32)(s_virus.rng >> 8) / 16777216.0f;
+}
+
+static void virus_infect(void)
+{
+    if (s_virus.active) {
+        return;
+    }
+    s_virus.active = 1;
+    s_virus.rng = 0xBADC0DEu;
+    s_virus.burst = 0.45f;
+    s_virus.next_beep = 5.0f;
+    s_virus.next_corrupt = 70.0f;
+}
+
+static void virus_cure(void)
+{
+    Virus zero = {0};
+    s_virus = zero;
+}
+
+static f32 virus_lie(const Terminal* term, f32 v, f32 salt)
+{
+    if (!s_virus.active) {
+        return v;
+    }
+    f32 w = sinf(term->blink * (1.7f + salt * 0.9f) + salt * 13.7f);
+    return v * (0.25f + 1.3f * f_abs(w));
+}
 
 static void comms_enter_phase(Terminal* term, CommsPhase phase);
 static void comms_key_char(Terminal* term, char c);
 static void comms_key_enter(Terminal* term);
+static void term_print(Terminal* term, const char* text);
+static void term_printf(Terminal* term, const char* fmt, ...);
 
 static u32 font_create_atlas(void)
 {
@@ -915,6 +962,7 @@ b32 terminal_init(Terminal* term)
 
     comms_init(&s_comms);
     fs_init(&s_fs);
+    disks_init(&s_fs);
     s_gpu.atlas = font_create_atlas();
 
     glCreateTextures(GL_TEXTURE_2D, 1, &s_gpu.color_tex);
@@ -980,6 +1028,31 @@ u32 terminal_texture(const Terminal* term)
 {
     (void)term;
     return s_gpu.persist_tex[s_gpu.persist_idx];
+}
+
+void terminal_disk_set(Terminal* term, i32 disk)
+{
+    if (disk == s_disk_inserted) {
+        return;
+    }
+    if (s_disk_inserted >= 0) {
+        disk_store(s_disk_inserted, &s_fs.drives[FS_DRIVE_B]);
+        fs_unmount(&s_fs, FS_DRIVE_B);
+    }
+    s_disk_inserted = disk;
+    if (disk >= 0) {
+        disk_load(disk, &s_fs.drives[FS_DRIVE_B]);
+    } else if (term->cwd_drive == FS_DRIVE_B) {
+        term->cwd_drive = FS_DRIVE_A;
+        term->cwd_node = 0;
+    }
+    if (term->powered && term->mode == TERM_SHELL) {
+        if (disk >= 0) {
+            term_printf(term, "DRIVE B: MEDIA INSERTED (%s)\n", disk_label(disk));
+        } else {
+            term_print(term, "DRIVE B: MEDIA REMOVED\n");
+        }
+    }
 }
 
 static void term_commit_line(Terminal* term)
@@ -1262,7 +1335,7 @@ static void shell_type(Terminal* term, const char* path)
         return;
     }
     const char* text = fs_text(&s_fs, ref);
-    if (!text) {
+    if (!text || n->corrupted) {
         shell_type_binary(term, n->name);
         return;
     }
@@ -1402,8 +1475,51 @@ static void shell_format(Terminal* term, const char* arg)
     term_print(term, "PROCEED WITH FORMAT (Y/N)?\n");
 }
 
-static void term_launch_exe(Terminal* term, i32 exe)
+static void term_av_scan(Terminal* term)
 {
+    u32 scanned = 0;
+    u32 cleaned = 0;
+    u32 damaged = 0;
+    term_print(term, "RC ANTIVIRUS 4.0 (C) ROTCLIFF COMPUTING\n");
+    for (i32 drive = 0; drive < FS_DRIVE_COUNT; drive++) {
+        if (!fs_drive_mounted(&s_fs, drive)) {
+            continue;
+        }
+        FsDrive* d = &s_fs.drives[drive];
+        term_printf(term, "SCANNING DRIVE %c: ...\n", 'A' + drive);
+        for (i32 i = 1; i < FS_DRIVE_NODES; i++) {
+            FsNode* n = &d->nodes[i];
+            if (!n->used || n->is_dir) {
+                continue;
+            }
+            scanned++;
+            if (n->infected) {
+                n->infected = 0;
+                cleaned++;
+                term_printf(term, "  %s -- INFECTED. CLEANED.\n", n->name);
+            }
+            if (n->corrupted) {
+                damaged++;
+                term_printf(term, "  %s -- DAMAGED. CANNOT REPAIR.\n", n->name);
+            }
+        }
+    }
+    term_printf(term, "%u FILES SCANNED. %u CLEANED. %u DAMAGED.\n", scanned, cleaned, damaged);
+    if (s_virus.active) {
+        virus_cure();
+        term_print(term, "MEMORY RESIDENT VIRUS PURGED.\nSYSTEM CLEAN.\n");
+    } else {
+        term_print(term, "NO RESIDENT THREATS.\n");
+    }
+}
+
+static void term_launch_exe(Terminal* term, const FsNode* node)
+{
+    if (node->corrupted) {
+        term_print(term, "PROGRAM DAMAGED. CANNOT EXECUTE.\n");
+        return;
+    }
+    i32 exe = node->exe;
     switch (exe) {
     case FS_EXE_STATUS:
         if (term->bus_state != 2) {
@@ -1439,9 +1555,18 @@ static void term_launch_exe(Terminal* term, i32 exe)
         term->comms_mat = 10.0f;
         comms_enter_phase(term, COMMS_PHASE_CONNECT);
         break;
+    case FS_EXE_AV:
+        term_av_scan(term);
+        break;
+    case FS_EXE_TOY:
+        term_printf(term, "%s\n", node->run_text ? node->run_text : "OUT OF MEMORY");
+        break;
     default:
         term_print(term, "PROGRAM DAMAGED. CANNOT EXECUTE.\n");
         break;
+    }
+    if (node->infected) {
+        virus_infect();
     }
 }
 
@@ -1462,7 +1587,7 @@ static b32 term_try_exe(Terminal* term, const char* name)
     if (!fs_ref_valid(&s_fs, ref) || fs_node(&s_fs, ref)->is_dir) {
         return 0;
     }
-    term_launch_exe(term, fs_node(&s_fs, ref)->exe);
+    term_launch_exe(term, fs_node(&s_fs, ref));
     return 1;
 }
 
@@ -1473,6 +1598,9 @@ static void term_run_command(Terminal* term, const char* cmd)
         term->format_drive = -1;
         if (cmd[0] == 'Y' && cmd[1] == 0) {
             fs_format(&s_fs, drive, 0);
+            if (drive == FS_DRIVE_A) {
+                virus_cure();
+            }
             if (term->cwd_drive == drive) {
                 term->cwd_node = 0;
             }
@@ -1878,8 +2006,9 @@ static void draw_status(Terminal* term, const TermView* view)
     grid_title(term, "VEHICLE DIAGNOSTICS");
 
     grid_text(term, 2, 2, TC_GREEN, "ENGINE %-8s", sys->engine_on ? "RUNNING" : "OFF");
-    grid_text(term, 2, 18, TC_GREEN, "RPM %4.0f", (f64)view->rpm);
-    grid_text(term, 2, 29, TC_GREEN, "SPEED %3.0f KM/H", (f64)view->speed_kmh);
+    grid_text(term, 2, 18, TC_GREEN, "RPM %4.0f", (f64)virus_lie(term, view->rpm, 1.0f));
+    grid_text(term, 2, 29, TC_GREEN, "SPEED %3.0f KM/H",
+              (f64)virus_lie(term, view->speed_kmh, 2.0f));
 
     static const PartKind rows[6] = {
         PART_ENGINE, PART_BATTERY, PART_ALTERNATOR, PART_RADIATOR, PART_FUEL_TANK, PART_HEADLIGHTS,
@@ -1887,6 +2016,7 @@ static void draw_status(Terminal* term, const TermView* view)
     for (i32 i = 0; i < 6; i++) {
         const PartSlot* slot = &sys->parts[rows[i]];
         f32 cond = slot->installed ? slot->condition : 0.0f;
+        cond = f_clamp01(virus_lie(term, cond, 3.0f + (f32)i));
         u8 color = cond > 0.6f ? TC_GREEN : (cond > 0.3f ? TC_AMBER : TC_RED);
         grid_text(term, 4 + i, 2, TC_GREEN, "%-11s", part_def(rows[i])->name);
         grid_bar(term, 4 + i, 14, 20, cond, color);
@@ -1895,6 +2025,7 @@ static void draw_status(Terminal* term, const TermView* view)
     for (i32 i = 0; i < 4; i++) {
         const PartSlot* slot = &sys->parts[PART_TIRE_FL + i];
         f32 cond = slot->installed ? slot->condition : 0.0f;
+        cond = f_clamp01(virus_lie(term, cond, 9.0f + (f32)i));
         u8 color = cond > 0.5f ? TC_GREEN : (cond > 0.2f ? TC_AMBER : TC_RED);
         static const char* names[4] = { "FL", "FR", "RL", "RR" };
         grid_text(term, 11 + i / 2, 2 + (i % 2) * 20, color, "TIRE %s %3.0f%%",
@@ -1902,19 +2033,23 @@ static void draw_status(Terminal* term, const TermView* view)
     }
     build_status_wires(term, view);
 
+    f32 fuel = f_clamp01(virus_lie(term, sys->fluids.fuel, 13.0f));
+    f32 oil = f_clamp01(virus_lie(term, sys->fluids.oil, 14.0f));
     grid_text(term, 13, 2, TC_GREEN, "FUEL");
-    grid_bar(term, 13, 14, 20, sys->fluids.fuel, sys->fluids.fuel > 0.2f ? TC_GREEN : TC_RED);
+    grid_bar(term, 13, 14, 20, fuel, fuel > 0.2f ? TC_GREEN : TC_RED);
     grid_text(term, 14, 2, TC_GREEN, "OIL");
-    grid_bar(term, 14, 14, 20, sys->fluids.oil, sys->fluids.oil > 0.3f ? TC_GREEN : TC_RED);
-    b32 hot = sys->fluids.coolant_temp > COOLANT_OVERHEAT_C;
+    grid_bar(term, 14, 14, 20, oil, oil > 0.3f ? TC_GREEN : TC_RED);
+    f32 coolant = virus_lie(term, sys->fluids.coolant_temp, 15.0f);
+    b32 hot = coolant > COOLANT_OVERHEAT_C;
     grid_text(term, 15, 2, TC_GREEN, "COOLANT");
     grid_text(term, 15, 15, hot ? TC_RED : TC_GREEN, "%3.0f C %s",
-              (f64)sys->fluids.coolant_temp, hot ? "OVERHEAT" : "");
+              (f64)coolant, hot ? "OVERHEAT" : "");
+    f32 charge = f_clamp01(virus_lie(term, sys->elec.battery_charge, 16.0f));
     grid_text(term, 17, 2, TC_GREEN, "BATTERY");
-    grid_bar(term, 17, 14, 20, sys->elec.battery_charge,
-             sys->elec.battery_charge > 0.15f ? TC_GREEN : TC_RED);
+    grid_bar(term, 17, 14, 20, charge, charge > 0.15f ? TC_GREEN : TC_RED);
     grid_text(term, 18, 2, TC_DIM, "ALT %4.1fA   DRAW %4.1fA   %s",
-              (f64)sys->elec.alternator_amps, (f64)sys->elec.draw_amps,
+              (f64)virus_lie(term, sys->elec.alternator_amps, 17.0f),
+              (f64)virus_lie(term, sys->elec.draw_amps, 18.0f),
               sys->handbrake_latched ? "PARK BRAKE SET" : "");
 }
 
@@ -1989,7 +2124,11 @@ static b32 map_project(const Terminal* term, Vec3 world, i32* out_row, i32* out_
 
 static void update_map(Terminal* term, const TermView* view, f32 dt)
 {
-    term->sweep_angle = f_wrap_angle(term->sweep_angle + dt * 1.9f);
+    f32 sweep_rate = 1.9f;
+    if (s_virus.active) {
+        sweep_rate = 1.9f + 14.0f * f_max(0.0f, sinf(term->blink * 3.1f) - 0.6f);
+    }
+    term->sweep_angle = f_wrap_angle(term->sweep_angle + dt * sweep_rate);
     term->map_materialize += dt;
     if (view->orbit != 0.0f) {
         term->map_auto = 0;
@@ -2031,7 +2170,12 @@ static void update_map(Terminal* term, const TermView* view, f32 dt)
     grid_text(term, 1, TERM_COLS - 11, TC_DIM, "RANGE %3.0fM", (f64)span);
     if (term->antenna_tier >= 2) {
         u8 scan_color = fmodf(term->blink, 1.4f) < 0.9f ? TC_GREEN : TC_DIM;
-        grid_text(term, TERM_ROWS - 2, 1, scan_color, "ANOMALY SCAN: NO CONTACTS");
+        if (s_virus.active) {
+            i32 fake = 1 + (i32)(fmodf(term->blink * 0.37f, 1.0f) * 40.0f);
+            grid_text(term, TERM_ROWS - 2, 1, TC_RED, "ANOMALY SCAN: %d CONTACTS CLOSING", fake);
+        } else {
+            grid_text(term, TERM_ROWS - 2, 1, scan_color, "ANOMALY SCAN: NO CONTACTS");
+        }
     }
 
     if (term->map_materialize < 1.6f) {
@@ -2043,6 +2187,17 @@ static void update_map(Terminal* term, const TermView* view, f32 dt)
     i32 row, col;
     if (map_project(term, vec3_add(view->car_pos, v3(0.0f, 3.0f, 0.0f)), &row, &col)) {
         grid_text(term, row, col, TC_BRIGHT, "@");
+    }
+    if (s_virus.active) {
+        for (i32 g = 0; g < 3; g++) {
+            f32 ang = term->blink * (0.31f + 0.17f * (f32)g) + (f32)g * 2.3f;
+            Vec3 ghost = vec3_add(view->car_pos, v3(sinf(ang) * (40.0f + 25.0f * (f32)g), 3.0f,
+                                                    cosf(ang * 1.3f) * (40.0f + 25.0f * (f32)g)));
+            if (fmodf(term->blink * (1.0f + 0.4f * (f32)g), 1.9f) < 0.7f
+                && map_project(term, ghost, &row, &col)) {
+                grid_text(term, row, col, TC_RED, "@");
+            }
+        }
     }
     Vec3 marks[2] = { view->garage_pos, view->mission_pos };
     const char* labels[2] = { "G", "X" };
@@ -2512,10 +2667,74 @@ static void update_link(Terminal* term, f32 dt)
     grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "[1] INIT PORT A   [2] INIT PORT B   [Q] BACK");
 }
 
+static const char* VIRUS_TAUNTS[3] = {
+    "?SYN ?SYN ?SYN CARRIER LOST\n",
+    "I CAN SEE THE ROAD FROM HERE\n",
+    "SECTOR 0 SECTOR 0 SECTOR 0\n",
+};
+
+static void virus_tick(Terminal* term, f32 dt)
+{
+    if (s_virus.burst > 0.0f) {
+        s_virus.burst -= dt;
+        if (term->mode != TERM_BOOT) {
+            i32 n = 8 + (i32)(virus_rand() * 30.0f);
+            for (i32 i = 0; i < n; i++) {
+                i32 r = (i32)(virus_rand() * (f32)TERM_ROWS) % TERM_ROWS;
+                i32 c = (i32)(virus_rand() * (f32)TERM_COLS) % TERM_COLS;
+                term->glyphs[r][c] = (u8)(33 + (i32)(virus_rand() * 91.0f));
+                term->colors[r][c] = virus_rand() < 0.3f ? TC_RED : TC_BRIGHT;
+            }
+        }
+    }
+    s_virus.next_beep -= dt;
+    if (s_virus.next_beep <= 0.0f) {
+        s_virus.next_beep = 1.5f + virus_rand() * 6.0f;
+        term->click_pending = 1;
+    }
+    s_virus.next_corrupt -= dt;
+    if (s_virus.next_corrupt <= 0.0f) {
+        s_virus.next_corrupt = 60.0f + virus_rand() * 60.0f;
+        FsDrive* d = &s_fs.drives[FS_DRIVE_A];
+        i32 candidates[FS_DRIVE_NODES];
+        i32 count = 0;
+        for (i32 i = 1; i < FS_DRIVE_NODES; i++) {
+            if (d->nodes[i].used && !d->nodes[i].is_dir && !d->nodes[i].corrupted) {
+                candidates[count++] = i;
+            }
+        }
+        if (count > 0) {
+            FsNode* victim = &d->nodes[candidates[(i32)(virus_rand() * (f32)count) % count]];
+            victim->corrupted = 1;
+            s_virus.burst = 0.6f + virus_rand() * 0.6f;
+            term->click_pending = 1;
+            if (term->mode == TERM_SHELL) {
+                term_printf(term, "WRITE FAULT ON DRIVE A: -- %s\n", victim->name);
+                if (virus_rand() < 0.35f) {
+                    term_print(term, VIRUS_TAUNTS[(u32)(virus_rand() * 2.999f)]);
+                }
+            }
+        }
+    }
+}
+
+f32 terminal_virus_fx(const Terminal* term)
+{
+    if (!term->powered || !s_virus.active) {
+        return 0.0f;
+    }
+    return s_virus.burst > 0.0f ? 1.0f : 0.0f;
+}
+
 f32 terminal_pixelate(const Terminal* term)
 {
-    if (!term->powered || term->mode != TERM_COMMS
-        || term->comms_phase == COMMS_PHASE_CONNECT) {
+    if (!term->powered) {
+        return 1.0f;
+    }
+    if (s_virus.active && s_virus.burst > 0.0f && fmodf(term->blink * 13.0f, 1.0f) < 0.5f) {
+        return 3.0f;
+    }
+    if (term->mode != TERM_COMMS || term->comms_phase == COMMS_PHASE_CONNECT) {
         return 1.0f;
     }
     if (term->comms_mat >= 1.0f) {
@@ -2582,6 +2801,10 @@ void terminal_update(Terminal* term, const TermView* view, f32 dt)
     case TERM_LINK:
         update_link(term, dt);
         break;
+    }
+
+    if (s_virus.active) {
+        virus_tick(term, dt);
     }
 }
 

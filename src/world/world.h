@@ -33,6 +33,7 @@ typedef struct Entity {
     char mesh_name[32];
     u32 aux_kind;
     f32 aux_value;
+    u32 aux_data;
     Handle body;
 } Entity;
 

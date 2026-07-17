@@ -6,23 +6,6 @@
 #define FS_A_CAPACITY 362496
 #define FS_PATH_DEPTH 16
 
-static const char* README_TEXT =
-    "DR-OS 2.2  (C) REDLINE SYSTEMS 1988\n"
-    "REV C -- BUILD 0219\n"
-    "\n"
-    "FIELD PACKAGE PRELOADED ON DRIVE A:. TO RUN A\n"
-    "PROGRAM, TYPE ITS NAME. TYPE HELP FOR COMMANDS.\n"
-    "\n"
-    "DRIVE A: IS FIXED. 354K. NON-REMOVABLE. WATCH YOUR\n"
-    "FREE SPACE. DELETED DATA IS NOT RECOVERABLE.\n"
-    "\n"
-    "DRIVE B: TAKES 5.25 INCH MEDIA. LABEL UP. SLOT IS\n"
-    "BELOW THE SCREEN.\n"
-    "\n"
-    "REDLINE SYSTEMS ACCEPTS NO LIABILITY FOR DATA LOSS,\n"
-    "RADIO INTERFERENCE, OR EFFECTS OF PROLONGED\n"
-    "EXPOSURE.\n";
-
 static i32 fs_find_child(const FsDrive* d, i32 dir, const char* name)
 {
     for (i32 i = 1; i < FS_DRIVE_NODES; i++) {
@@ -123,6 +106,11 @@ b32 fs_ref_valid(const Fs* fs, FsRef ref)
 }
 
 const FsNode* fs_node(const Fs* fs, FsRef ref)
+{
+    return &fs->drives[ref.drive].nodes[ref.node];
+}
+
+FsNode* fs_node_mut(Fs* fs, FsRef ref)
 {
     return &fs->drives[ref.drive].nodes[ref.node];
 }
@@ -437,6 +425,9 @@ FsError fs_copy(Fs* fs, FsRef src, FsRef dst_dir, const char* dst_name)
     dn->parent = dst_dir.node;
     dn->size = sn->size;
     dn->exe = sn->exe;
+    dn->infected = sn->infected;
+    dn->corrupted = sn->corrupted;
+    dn->run_text = sn->run_text;
     dn->rom_text = sn->rom_text;
     snprintf(dn->name, sizeof(dn->name), "%s", dst_name);
     if (sn->pool_len > 0) {
@@ -452,10 +443,4 @@ void fs_init(Fs* fs)
 {
     memset(fs, 0, sizeof(*fs));
     fs_mount(fs, FS_DRIVE_A, "DR-OS SYSTEM", FS_A_CAPACITY);
-    FsRef root = fs_root(FS_DRIVE_A);
-    fs_mkfile_rom(fs, root, "STATUS.EXE", 0, 24576, FS_EXE_STATUS);
-    fs_mkfile_rom(fs, root, "MAP.EXE", 0, 30208, FS_EXE_MAP);
-    fs_mkfile_rom(fs, root, "LINK.EXE", 0, 9216, FS_EXE_LINK);
-    fs_mkfile_rom(fs, root, "COMMS.EXE", 0, 26624, FS_EXE_COMMS);
-    fs_mkfile_rom(fs, root, "README.TXT", README_TEXT, 0, FS_EXE_NONE);
 }

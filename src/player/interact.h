@@ -41,6 +41,8 @@ typedef enum InteractAction {
     ACTION_CABLE_GRAB,
     ACTION_CABLE_PLUG,
     ACTION_CABLE_UNPLUG,
+    ACTION_DISK_INSERT,
+    ACTION_DISK_EJECT,
 } InteractAction;
 
 typedef struct Interact {

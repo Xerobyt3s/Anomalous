@@ -762,6 +762,10 @@ def make_excel_extras():
     b.box((0.052, -0.015, -0.187), (0.016, 0.016, 0.011))
     b.begin_material("alloy")
     b.box((-0.052, -0.015, -0.187), (0.016, 0.016, 0.011))
+    b.begin_material("car_dash")
+    b.box((0.0, -0.088, 0.196), (0.052, 0.007, 0.004))
+    b.begin_material("alloy")
+    b.box((0.072, -0.088, 0.196), (0.008, 0.005, 0.004))
     b.vertices = [(tuple(c * 1.35 for c in p), n, uv) for p, n, uv in b.vertices]
     b.write(os.path.join(MESH_DIR, "part_computer.amsh"))
 
@@ -895,6 +899,16 @@ def make_antenna_meshes():
     b.begin_material("car_tail")
     b.box((0.0, 0.046, 0.0), (0.028, 0.005, 0.019))
     b.write(os.path.join(MESH_DIR, "jack_bus.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("car_dash")
+    b.box((0.0, 0.0, 0.0), (0.067, 0.0025, 0.067))
+    b.begin_material("car_signal")
+    b.box((0.0, 0.0032, 0.038), (0.048, 0.0008, 0.024))
+    b.begin_material("alloy")
+    b.box((0.0, -0.0032, -0.008), (0.019, 0.0008, 0.019))
+    b.box((0.0, 0.0032, -0.045), (0.012, 0.0008, 0.016))
+    b.write(os.path.join(MESH_DIR, "part_floppy.amsh"))
 
 
 def make_excel_wheel():

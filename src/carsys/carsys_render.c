@@ -216,6 +216,11 @@ void carsys_render(const struct CarSys* sys, const struct Vehicle* veh,
             Mat4 term = mat4_mul(base, mat4_trs(vec3_sub(cdef->socket_pos, com),
                                                 part_computer_rest_rot(), one));
             r_draw_mesh(asset_mesh("part_computer"), term);
+            if (sys->floppy_disk >= 0) {
+                r_draw_mesh(asset_mesh("part_floppy"),
+                            mat4_mul(term, mat4_trs(v3(0.0f, -0.119f, 0.223f),
+                                                    quat_identity(), one)));
+            }
             if (screen_texture) {
                 Mat4 screen = mat4_mul(term, mat4_trs(v3(0.0f, 0.047f, 0.170f),
                                                       quat_identity(),

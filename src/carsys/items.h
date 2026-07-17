@@ -17,12 +17,14 @@ typedef enum ItemKind {
     ITEM_ANTENNA_STD,
     ITEM_ANTENNA_ARRAY,
     ITEM_KEY,
+    ITEM_FLOPPY,
     ITEM_KIND_COUNT,
 } ItemKind;
 
 typedef struct Item {
     ItemKind kind;
     f32 condition;
+    i32 aux;
 } Item;
 
 const char* item_name(ItemKind kind);

@@ -17,6 +17,8 @@ typedef enum FsExe {
     FS_EXE_MAP,
     FS_EXE_LINK,
     FS_EXE_COMMS,
+    FS_EXE_AV,
+    FS_EXE_TOY,
 } FsExe;
 
 typedef enum FsError {
@@ -37,6 +39,9 @@ typedef struct FsNode {
     i32 parent;
     u32 size;
     i32 exe;
+    b32 infected;
+    b32 corrupted;
+    const char* run_text;
     const char* rom_text;
     u32 pool_off;
     u32 pool_len;
@@ -67,6 +72,7 @@ u32  fs_free_bytes(const Fs* fs, i32 drive);
 FsRef fs_root(i32 drive);
 b32  fs_ref_valid(const Fs* fs, FsRef ref);
 const FsNode* fs_node(const Fs* fs, FsRef ref);
+FsNode* fs_node_mut(Fs* fs, FsRef ref);
 FsRef fs_resolve(const Fs* fs, FsRef cwd, const char* path);
 i32  fs_path_drive(const char* path);
 void fs_path_string(const Fs* fs, FsRef ref, char* buf, u32 size);

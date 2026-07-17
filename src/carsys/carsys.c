@@ -23,6 +23,7 @@ void carsys_init(CarSys* sys)
     sys->impact_cooldown = 1.0f;
     sys->handbrake_latched = 1;
     sys->lever_anim = 1.0f;
+    sys->floppy_disk = -1;
 }
 
 b32 carsys_cargo_add(CarSys* sys, Item item, Vec3 pos)

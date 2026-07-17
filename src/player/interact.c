@@ -5,6 +5,7 @@
 #include "world/world.h"
 #include "physics/physics.h"
 #include "physics/heightfield.h"
+#include "terminal/disks.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -13,6 +14,8 @@
 #define DOOR_OPEN_FOR_USE 0.6f
 #define EXIT_LOOK_YAW 1.15f
 #define DOOR_HINGE_X 0.80f
+#define TERM_DISK_SLOT_LOCAL v3(0.0f, -0.119f, 0.265f)
+#define TERM_DISK_SLOT_HALF v3(0.10f, 0.035f, 0.045f)
 
 void interact_init(Interact* it)
 {
@@ -117,6 +120,23 @@ static b32 consider_cable_jack(Candidate* best, const Interact* it, CarSys* sys,
         best->cable = (i32)kind;
     }
     return taken;
+}
+
+static void consider_disk_slot(Candidate* best, const Interact* it, CarSys* sys, f32 t,
+                               Vec3 center, Vec3 half)
+{
+    char prompt[96];
+    if (it->hands.kind == ITEM_FLOPPY && sys->floppy_disk < 0) {
+        snprintf(prompt, sizeof(prompt), "[E] insert %s", disk_label(it->hands.aux));
+        candidate_consider(best, t, ACTION_DISK_INSERT, center, half, 0, prompt);
+    } else if (sys->floppy_disk >= 0 && it->hands.kind == ITEM_NONE && it->cable_drag < 0) {
+        snprintf(prompt, sizeof(prompt), "[E] eject %s", disk_label(sys->floppy_disk));
+        candidate_consider(best, t, ACTION_DISK_EJECT, center, half, 0, prompt);
+    } else if (sys->floppy_disk < 0) {
+        candidate_consider(best, t, ACTION_INFO, center, half, 0, "drive b: slot empty");
+    } else {
+        candidate_consider(best, t, ACTION_INFO, center, half, 0, "drive b: disk loaded");
+    }
 }
 
 static void resolve_doors(Candidate* best, const struct Player* player, Vehicle* veh, CarSys* sys,
@@ -307,6 +327,10 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
                 consider_cable_root(best, it, sys, (CableKind)pk, t - 0.45f, center, port_half);
             }
         }
+        Vec3 slot_center = vec3_add(term_base, quat_rotate_vec3(rest, TERM_DISK_SLOT_LOCAL));
+        if (ray_vs_local_box(local, slot_center, TERM_DISK_SLOT_HALF, &t)) {
+            consider_disk_slot(best, it, sys, t - 0.30f, slot_center, TERM_DISK_SLOT_HALF);
+        }
     }
 
     {
@@ -405,8 +429,13 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
                 if (!ray_vs_local_box(local, center, half, &t)) {
                     continue;
                 }
-                snprintf(prompt, sizeof(prompt), "[E] take %s (%.0f%%)",
-                         item_name(c->item.kind), (f64)(c->item.condition * 100.0f));
+                if (c->item.kind == ITEM_FLOPPY) {
+                    snprintf(prompt, sizeof(prompt), "[E] take floppy (%s)",
+                             disk_label(c->item.aux));
+                } else {
+                    snprintf(prompt, sizeof(prompt), "[E] take %s (%.0f%%)",
+                             item_name(c->item.kind), (f64)(c->item.condition * 100.0f));
+                }
                 if (candidate_consider(best, t, ACTION_TAKE_CARGO, center, half, 0, prompt)) {
                     best->cargo = i;
                 }
@@ -444,7 +473,7 @@ static void resolve_pickups(Candidate* best, const Interact* it, CarSys* sys, Wo
         b32 is_computer = (ItemKind)entity->aux_kind == ITEM_COMPUTER;
         if ((it->hands.kind != ITEM_NONE || it->cable_drag >= 0)
             && (ItemKind)entity->aux_kind != ITEM_KEY
-            && !(is_computer && sys->computer_on)) {
+            && !(is_computer && (sys->computer_on || it->hands.kind == ITEM_FLOPPY))) {
             continue;
         }
         if (is_computer) {
@@ -458,6 +487,14 @@ static void resolve_pickups(Candidate* best, const Interact* it, CarSys* sys, Wo
                     consider_cable_root(best, it, sys, (CableKind)pk, pt - 0.50f,
                                         vec3_zero(), vec3_zero());
                 }
+            }
+            Sphere slot;
+            slot.center = vec3_add(entity->pos,
+                                   quat_rotate_vec3(entity->rot, TERM_DISK_SLOT_LOCAL));
+            slot.radius = 0.09f;
+            f32 st;
+            if (ray_vs_sphere(view_ray, slot, INTERACT_RANGE, &st)) {
+                consider_disk_slot(best, it, sys, st - 0.50f, vec3_zero(), vec3_zero());
             }
         }
         ItemKind pick_kind = (ItemKind)entity->aux_kind;
@@ -490,8 +527,13 @@ static void resolve_pickups(Candidate* best, const Interact* it, CarSys* sys, Wo
             }
             continue;
         }
-        snprintf(prompt, sizeof(prompt), "[E] take %s (%.0f%%)",
-                 item_name((ItemKind)entity->aux_kind), (f64)(entity->aux_value * 100.0f));
+        if (pick_kind == ITEM_FLOPPY) {
+            snprintf(prompt, sizeof(prompt), "[E] take floppy (%s)",
+                     disk_label((i32)entity->aux_data));
+        } else {
+            snprintf(prompt, sizeof(prompt), "[E] take %s (%.0f%%)",
+                     item_name(pick_kind), (f64)(entity->aux_value * 100.0f));
+        }
         if (candidate_consider(best, t, ACTION_PICKUP, vec3_zero(), vec3_zero(), 0, prompt)) {
             best->entity.idx = idx;
             best->entity.gen = world->entities.gens[idx];
@@ -530,6 +572,7 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
                          ? antenna_item_for_variant(slot->variant)
                          : item_for_part(it->target_part);
         it->hands.condition = slot->condition;
+        it->hands.aux = 0;
         slot->installed = 0;
         if (it->target_part == PART_COMPUTER) {
             sys->computer_on = 0;
@@ -577,6 +620,7 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
             } else {
                 it->hands.kind = (ItemKind)entity->aux_kind;
                 it->hands.condition = entity->aux_value;
+                it->hands.aux = (i32)entity->aux_data;
             }
             if ((ItemKind)entity->aux_kind == ITEM_COMPUTER) {
                 cable_reset(&sys->cables[CABLE_COAX]);
@@ -603,6 +647,17 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
         if (it->cable_drag == it->target_cable) {
             it->cable_drag = -1;
         }
+        break;
+    case ACTION_DISK_INSERT:
+        sys->floppy_disk = it->hands.aux;
+        sys->floppy_cond = it->hands.condition;
+        it->hands.kind = ITEM_NONE;
+        break;
+    case ACTION_DISK_EJECT:
+        it->hands.kind = ITEM_FLOPPY;
+        it->hands.aux = sys->floppy_disk;
+        it->hands.condition = sys->floppy_cond;
+        sys->floppy_disk = -1;
         break;
     case ACTION_REFUEL:
         sys->fluids.fuel = f_min(sys->fluids.fuel + 0.45f, 1.0f);
@@ -723,6 +778,7 @@ Handle interact_spawn_pickup(struct World* world, struct PhysWorld* phys, Item i
     }
     entity->aux_kind = (u32)item.kind;
     entity->aux_value = item.condition;
+    entity->aux_data = (u32)item.aux;
     if (item.kind != ITEM_KEY) {
         entity->body = phys_body_create_box(phys, pos, rot, item_cargo_half(item.kind),
                                             f_max(item_mass(item.kind), 1.0f));

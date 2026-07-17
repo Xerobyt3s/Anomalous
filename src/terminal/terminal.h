@@ -110,9 +110,11 @@ typedef struct Terminal {
 
 b32  terminal_init(Terminal* term);
 void terminal_power(Terminal* term, b32 on);
+void terminal_disk_set(Terminal* term, i32 disk);
 void terminal_update(Terminal* term, const TermView* view, f32 dt);
 void terminal_render(Terminal* term);
 void terminal_key_char(Terminal* term, char c);
 void terminal_key_special(Terminal* term, i32 key);
 u32  terminal_texture(const Terminal* term);
 f32  terminal_pixelate(const Terminal* term);
+f32  terminal_virus_fx(const Terminal* term);

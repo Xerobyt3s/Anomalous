@@ -34,7 +34,15 @@ typedef struct Cable {
     Vec3 prev[CABLE_POINTS];
 } Cable;
 
+typedef struct CableObstacle {
+    Vec3 pos;
+    Quat rot;
+    Vec3 center;
+    Vec3 half;
+} CableObstacle;
+
 void cable_reset(Cable* cable);
 void cable_sim(Cable* cable, Vec3 root, const Vec3* end, const struct Terrain* terrain,
-               Vec3 car_pos, Quat car_rot, f32 dt);
+               Vec3 car_pos, Quat car_rot, const CableObstacle* obstacles, u32 obstacle_count,
+               f32 dt);
 void cable_render(const Cable* cable);

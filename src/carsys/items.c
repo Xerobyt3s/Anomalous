@@ -20,6 +20,7 @@ static const struct {
     { "antenna",       "antenna_std",   4.0f,  { 0.38f, 0.10f, 0.08f }, 0.5f, { 0.0f, 0.37f, 0.01f } },
     { "array antenna", "antenna_array", 15.0f, { 0.48f, 0.17f, 0.17f }, 0.5f, { 0.0f, 0.475f, 0.0f } },
     { "car key",    "part_key",        0.2f,  { 0.04f, 0.015f, 0.07f }, 0.0f, { 0.0f, 0.0f, 0.0f } },
+    { "floppy disk", "part_floppy",    0.3f,  { 0.07f, 0.012f, 0.07f }, 0.0f, { 0.0f, 0.0f, 0.0f } },
 };
 
 const char* item_name(ItemKind kind)
