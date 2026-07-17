@@ -48,7 +48,9 @@ typedef i64 GLintptr;
 #define GL_UNSIGNED_INT 0x1405
 #define GL_FLOAT 0x1406
 #define GL_RED 0x1903
+#define GL_RGB 0x1907
 #define GL_RGBA 0x1908
+#define GL_RGB8 0x8051
 #define GL_NEAREST 0x2600
 #define GL_LINEAR 0x2601
 #define GL_LINEAR_MIPMAP_LINEAR 0x2703
@@ -145,7 +147,9 @@ typedef void (GL_APIENTRY *GlDebugCallback)(GLenum source, GLenum type, GLuint i
     GLFN(void, glBindFramebuffer, (GLenum target, GLuint framebuffer)) \
     GLFN(void, glVertexArrayBindingDivisor, (GLuint vao, GLuint binding_index, GLuint divisor)) \
     GLFN(void, glDrawArraysInstanced, (GLenum mode, GLint first, GLsizei count, GLsizei instance_count)) \
-    GLFN(void, glPolygonMode, (GLenum face, GLenum mode))
+    GLFN(void, glPolygonMode, (GLenum face, GLenum mode)) \
+    GLFN(void, glReadPixels, (GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels)) \
+    GLFN(void, glFinish, (void))
 
 #define GLFN(ret, name, params) typedef ret (GL_APIENTRY *PFN_##name) params; extern PFN_##name name;
 GL_FUNCTION_LIST

@@ -5,6 +5,7 @@
 #include "core/log.h"
 #include "platform/platform.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -20,8 +21,14 @@ static const char* s_floppy_dirs[DISK_COUNT] = {
     "arcade",
 };
 
+#define CAMERA_CAPACITY (24 * PHOTO_FILE_BYTES)
+
 static FsDrive s_store[DISK_COUNT];
 static Fs s_build;
+static Fs s_camfs;
+static u8 s_photo[PHOTO_SLOTS][PHOTO_BYTES];
+static b32 s_photo_used[PHOTO_SLOTS];
+static u32 s_img_counter = 1;
 
 static i32 exe_prog(const char* name)
 {
@@ -42,6 +49,9 @@ static i32 exe_prog(const char* name)
     }
     if (strcmp(name, "toy") == 0) {
         return FS_EXE_TOY;
+    }
+    if (strcmp(name, "video") == 0) {
+        return FS_EXE_VIDEO;
     }
     return FS_EXE_NONE;
 }
@@ -183,6 +193,159 @@ void disks_init(Fs* fs)
         memcpy(&s_store[i], &s_build.drives[FS_DRIVE_B], sizeof(FsDrive));
     }
     fs_unmount(&s_build, FS_DRIVE_B);
+    memset(&s_camfs, 0, sizeof(s_camfs));
+    fs_mount(&s_camfs, FS_DRIVE_C, "CAMERA FILM", CAMERA_CAPACITY);
+    memset(s_photo_used, 0, sizeof(s_photo_used));
+}
+
+static void photo_mark_drive(const FsDrive* d, b32* marked)
+{
+    for (i32 i = 1; i < FS_DRIVE_NODES; i++) {
+        const FsNode* n = &d->nodes[i];
+        if (n->used && n->pic > 0 && n->pic <= PHOTO_SLOTS) {
+            marked[n->pic - 1] = 1;
+        }
+    }
+}
+
+static i32 photo_alloc(const Fs* live_fs)
+{
+    for (i32 i = 0; i < PHOTO_SLOTS; i++) {
+        if (!s_photo_used[i]) {
+            return i;
+        }
+    }
+    b32 marked[PHOTO_SLOTS] = {0};
+    photo_mark_drive(&s_camfs.drives[FS_DRIVE_C], marked);
+    if (live_fs) {
+        for (i32 d = 0; d < FS_DRIVE_COUNT; d++) {
+            if (live_fs->drives[d].mounted) {
+                photo_mark_drive(&live_fs->drives[d], marked);
+            }
+        }
+    }
+    for (i32 i = 0; i < DISK_COUNT; i++) {
+        photo_mark_drive(&s_store[i], marked);
+    }
+    i32 found = -1;
+    for (i32 i = 0; i < PHOTO_SLOTS; i++) {
+        if (!marked[i]) {
+            s_photo_used[i] = 0;
+            if (found < 0) {
+                found = i;
+            }
+        }
+    }
+    return found;
+}
+
+void disks_camera_load(FsDrive* dst)
+{
+    memcpy(dst, &s_camfs.drives[FS_DRIVE_C], sizeof(FsDrive));
+    dst->mounted = 1;
+}
+
+void disks_camera_store(const FsDrive* src)
+{
+    memcpy(&s_camfs.drives[FS_DRIVE_C], src, sizeof(FsDrive));
+    s_camfs.drives[FS_DRIVE_C].mounted = 1;
+}
+
+static u8 photo_luma(const u8* p)
+{
+    return (u8)((u32)(p[0] * 54 + p[1] * 183 + p[2] * 19) >> 8);
+}
+
+static void photo_tone_map(u8* p)
+{
+    u32 hist[256] = {0};
+    for (u32 i = 0; i < PHOTO_PIXELS; i++) {
+        hist[photo_luma(&p[i * 3])]++;
+    }
+    u32 clip = PHOTO_PIXELS / 250;
+    u32 acc = 0;
+    i32 lo = 0;
+    for (i32 v = 0; v < 256; v++) {
+        acc += hist[v];
+        if (acc > clip) {
+            lo = v;
+            break;
+        }
+    }
+    acc = 0;
+    i32 hi = 255;
+    for (i32 v = 255; v >= 0; v--) {
+        acc += hist[v];
+        if (acc > clip) {
+            hi = v;
+            break;
+        }
+    }
+    if (hi - lo < 24) {
+        lo = lo > 12 ? lo - 12 : 0;
+        hi = lo + 24;
+    }
+    u8 lut[256];
+    for (i32 v = 0; v < 256; v++) {
+        f32 t = ((f32)v - (f32)lo) / (f32)(hi - lo);
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        lut[v] = (u8)(235.0f * powf(t, 0.95f) + 0.5f);
+    }
+    for (u32 i = 0; i < PHOTO_PIXELS; i++) {
+        u8* px = &p[i * 3];
+        u32 luma = photo_luma(px);
+        u32 target = lut[luma];
+        u32 scale = (target << 8) / (luma > 0 ? luma : 1);
+        for (u32 c = 0; c < 3; c++) {
+            u32 v = ((u32)px[c] * scale) >> 8;
+            px[c] = (u8)(v > 255 ? 255 : v);
+        }
+    }
+}
+
+b32 disks_camera_capture(Fs* live_fs, const u8* rgb)
+{
+    Fs* fs = live_fs && live_fs->drives[FS_DRIVE_C].mounted ? live_fs : &s_camfs;
+    i32 slot = photo_alloc(live_fs);
+    if (slot < 0) {
+        return 0;
+    }
+    FsRef dir = fs_root(FS_DRIVE_C);
+    char name[FS_NAME_MAX + 1];
+    FsRef file = { FS_DRIVE_C, -1 };
+    for (u32 attempt = 0; attempt < 100; attempt++) {
+        snprintf(name, sizeof(name), "IMG_%02u.PIC", s_img_counter % 100);
+        s_img_counter++;
+        file = fs_mkfile_rom(fs, dir, name, 0, PHOTO_FILE_BYTES, FS_EXE_NONE);
+        if (fs_ref_valid(fs, file)) {
+            break;
+        }
+        if (fs_free_bytes(fs, FS_DRIVE_C) < PHOTO_FILE_BYTES) {
+            return 0;
+        }
+    }
+    if (!fs_ref_valid(fs, file)) {
+        return 0;
+    }
+    fs_node_mut(fs, file)->pic = slot + 1;
+    memcpy(s_photo[slot], rgb, PHOTO_BYTES);
+    photo_tone_map(s_photo[slot]);
+    s_photo_used[slot] = 1;
+    return 1;
+}
+
+u32 disks_camera_exposures_left(const Fs* live_fs)
+{
+    const Fs* fs = live_fs && live_fs->drives[FS_DRIVE_C].mounted ? live_fs : &s_camfs;
+    return fs_free_bytes(fs, FS_DRIVE_C) / PHOTO_FILE_BYTES;
+}
+
+const u8* disk_photo_data(i32 pic)
+{
+    if (pic <= 0 || pic > PHOTO_SLOTS || !s_photo_used[pic - 1]) {
+        return 0;
+    }
+    return s_photo[pic - 1];
 }
 
 const char* disk_label(i32 disk)

@@ -18,6 +18,8 @@ typedef enum ItemKind {
     ITEM_ANTENNA_ARRAY,
     ITEM_KEY,
     ITEM_FLOPPY,
+    ITEM_CAMERA,
+    ITEM_REEL,
     ITEM_KIND_COUNT,
 } ItemKind;
 

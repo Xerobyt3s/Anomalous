@@ -1,12 +1,15 @@
 #pragma once
 
 #include "core/types.h"
+#include "core/pool.h"
 #include "math/vmath.h"
 
 struct Terrain;
+struct PhysWorld;
 
-#define CABLE_POINTS 22
+#define CABLE_POINTS 64
 #define CABLE_LENGTH 5.2f
+#define REEL_LENGTH 15.0f
 
 #define CONNECTOR_COAX_LOCAL v3(0.07f, -0.02f, -0.21f)
 #define CONNECTOR_BUS_LOCAL v3(-0.07f, -0.02f, -0.21f)
@@ -29,6 +32,7 @@ typedef struct Cable {
     CableState state;
     b32 linked;
     b32 sim_init;
+    b32 via_reel;
     f32 let_out;
     Vec3 p[CABLE_POINTS];
     Vec3 prev[CABLE_POINTS];
@@ -42,7 +46,11 @@ typedef struct CableObstacle {
 } CableObstacle;
 
 void cable_reset(Cable* cable);
-void cable_sim(Cable* cable, Vec3 root, const Vec3* end, const struct Terrain* terrain,
+f32  cable_max_len(const Cable* cable);
+f32  cable_current_length(const Cable* cable);
+f32  cable_span(const Cable* cable, Vec3 root, Vec3 end, const Vec3* anchor);
+void cable_sim(Cable* cable, Vec3 root, const Vec3* end, const Vec3* anchor,
+               const struct Terrain* terrain, struct PhysWorld* phys, Handle exclude_body,
                Vec3 car_pos, Quat car_rot, const CableObstacle* obstacles, u32 obstacle_count,
                f32 dt);
 void cable_render(const Cable* cable);

@@ -2,6 +2,7 @@
 
 #include "core/types.h"
 #include "math/vmath.h"
+#include "terminal/fs.h"
 
 struct CarSys;
 struct Vehicle;
@@ -28,6 +29,8 @@ typedef enum TermMode {
     TERM_MAP,
     TERM_COMMS,
     TERM_LINK,
+    TERM_VIEW,
+    TERM_VIDEO,
 } TermMode;
 
 typedef enum CommsPhase {
@@ -53,6 +56,7 @@ typedef struct TermView {
     i32 coax_state;
     i32 bus_state;
     i32 antenna_tier;
+    b32 coax_camera;
 } TermView;
 
 typedef struct Terminal {
@@ -97,6 +101,9 @@ typedef struct Terminal {
     i32 coax_state;
     i32 bus_state;
     i32 antenna_tier;
+    b32 coax_camera;
+    i32 view_pic;
+    char view_name[FS_NAME_MAX + 1];
     i32 link_anim_port;
     f32 link_anim_t;
     b32 link_request[2];
@@ -111,6 +118,10 @@ typedef struct Terminal {
 b32  terminal_init(Terminal* term);
 void terminal_power(Terminal* term, b32 on);
 void terminal_disk_set(Terminal* term, i32 disk);
+b32  terminal_camera_capture(const u8* gray);
+u32  terminal_camera_exposures(void);
+b32  terminal_video_active(const Terminal* term);
+void terminal_video_set(u32 texture);
 void terminal_update(Terminal* term, const TermView* view, f32 dt);
 void terminal_render(Terminal* term);
 void terminal_key_char(Terminal* term, char c);

@@ -40,6 +40,8 @@ typedef enum InteractAction {
     ACTION_OIL_FILL,
     ACTION_CABLE_GRAB,
     ACTION_CABLE_PLUG,
+    ACTION_CABLE_PLUG_CAMERA,
+    ACTION_CABLE_ROUTE_REEL,
     ACTION_CABLE_UNPLUG,
     ACTION_DISK_INSERT,
     ACTION_DISK_EJECT,
@@ -60,6 +62,7 @@ typedef struct Interact {
     f32 hold_progress;
     b32 action_is_hold;
     b32 crank_latch;
+    b32 use_terminal_request;
     i32 target_cable;
     i32 cable_drag;
     char prompt[96];
@@ -70,6 +73,6 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
                      struct CarSys* sys, struct World* world, struct PhysWorld* phys,
                      Ray view_ray, b32 e_down, b32 e_pressed, f32 dt);
 b32  interact_drop(Interact* it, struct World* world, struct PhysWorld* phys,
-                   Vec3 origin, Vec3 dir);
+                   Vec3 origin, Vec3 dir, f32 power);
 Handle interact_spawn_pickup(struct World* world, struct PhysWorld* phys, Item item,
                              Vec3 pos, f32 yaw, Vec3 vel);

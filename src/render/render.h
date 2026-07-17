@@ -21,5 +21,8 @@ u32  r_shader(const char* name);
 Mat4 r_view_proj(void);
 Vec3 r_camera_pos(void);
 Vec2 r_viewport_size(void);
+b32  r_read_backbuffer_rgb(u8* out, i32 out_w, i32 out_h);
+b32  r_video_begin(const struct Camera* cam);
+u32  r_video_end(void);
 const Frustum* r_frustum(void);
 b32  r_project_to_screen(Vec3 world, Vec2* out_screen);

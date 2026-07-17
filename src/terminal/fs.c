@@ -425,6 +425,7 @@ FsError fs_copy(Fs* fs, FsRef src, FsRef dst_dir, const char* dst_name)
     dn->parent = dst_dir.node;
     dn->size = sn->size;
     dn->exe = sn->exe;
+    dn->pic = sn->pic;
     dn->infected = sn->infected;
     dn->corrupted = sn->corrupted;
     dn->run_text = sn->run_text;

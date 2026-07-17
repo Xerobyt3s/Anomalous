@@ -845,6 +845,8 @@ typedef struct TermGpu {
     u32 point_vao;
     u32 point_vbo;
     u32 empty_vao;
+    u32 pic_tex;
+    i32 pic_uploaded;
     b32 clear_pending;
     b32 ready;
 } TermGpu;
@@ -872,6 +874,7 @@ static u32 s_wire_count;
 static Comms s_comms;
 static Fs s_fs;
 static i32 s_disk_inserted = -1;
+static u32 s_video_src_tex;
 
 typedef struct Virus {
     b32 active;
@@ -921,6 +924,9 @@ static void comms_key_char(Terminal* term, char c);
 static void comms_key_enter(Terminal* term);
 static void term_print(Terminal* term, const char* text);
 static void term_printf(Terminal* term, const char* fmt, ...);
+static void grid_clear(Terminal* term);
+static void grid_text(Terminal* term, i32 row, i32 col, u8 color, const char* fmt, ...);
+static void grid_title(Terminal* term, const char* title);
 
 static u32 font_create_atlas(void)
 {
@@ -1019,6 +1025,14 @@ b32 terminal_init(Terminal* term)
 
     glCreateVertexArrays(1, &s_gpu.empty_vao);
 
+    glCreateTextures(GL_TEXTURE_2D, 1, &s_gpu.pic_tex);
+    glTextureStorage2D(s_gpu.pic_tex, 1, GL_RGB8, PHOTO_W, PHOTO_H);
+    glTextureParameteri(s_gpu.pic_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(s_gpu.pic_tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTextureParameteri(s_gpu.pic_tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(s_gpu.pic_tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    s_gpu.pic_uploaded = -1;
+
     s_gpu.clear_pending = 1;
     s_gpu.ready = 1;
     return 1;
@@ -1028,6 +1042,48 @@ u32 terminal_texture(const Terminal* term)
 {
     (void)term;
     return s_gpu.persist_tex[s_gpu.persist_idx];
+}
+
+b32 terminal_camera_capture(const u8* gray)
+{
+    return disks_camera_capture(&s_fs, gray);
+}
+
+b32 terminal_video_active(const Terminal* term)
+{
+    return term->powered && term->mode == TERM_VIDEO
+           && term->coax_state == 2 && term->coax_camera;
+}
+
+void terminal_video_set(u32 texture)
+{
+    s_video_src_tex = texture;
+}
+
+u32 terminal_camera_exposures(void)
+{
+    return disks_camera_exposures_left(&s_fs);
+}
+
+static void terminal_camera_mount(Terminal* term, b32 want)
+{
+    b32 mounted = s_fs.drives[FS_DRIVE_C].mounted;
+    if (want && !mounted) {
+        disks_camera_load(&s_fs.drives[FS_DRIVE_C]);
+        if (term->mode == TERM_SHELL) {
+            term_print(term, "DRIVE C: CAMERA FILM MOUNTED\n");
+        }
+    } else if (!want && mounted) {
+        disks_camera_store(&s_fs.drives[FS_DRIVE_C]);
+        fs_unmount(&s_fs, FS_DRIVE_C);
+        if (term->cwd_drive == FS_DRIVE_C) {
+            term->cwd_drive = FS_DRIVE_A;
+            term->cwd_node = 0;
+        }
+        if (term->mode == TERM_SHELL) {
+            term_print(term, "DRIVE C: DISCONNECTED\n");
+        }
+    }
 }
 
 void terminal_disk_set(Terminal* term, i32 disk)
@@ -1343,6 +1399,52 @@ static void shell_type(Terminal* term, const char* path)
     term_print(term, "\n");
 }
 
+static void shell_view(Terminal* term, const char* path)
+{
+    FsRef ref;
+    if (!shell_check_path(term, path, &ref)) {
+        return;
+    }
+    if (!fs_ref_valid(&s_fs, ref)) {
+        term_print(term, "FILE NOT FOUND\n");
+        return;
+    }
+    const FsNode* n = fs_node(&s_fs, ref);
+    if (n->is_dir || n->pic <= 0) {
+        term_print(term, "NOT AN IMAGE FILE\n");
+        return;
+    }
+    if (n->corrupted) {
+        term_print(term, "IMAGE DATA CORRUPTED\n");
+        return;
+    }
+    if (!disk_photo_data(n->pic)) {
+        term_print(term, "IMAGE DATA MISSING\n");
+        return;
+    }
+    term->mode = TERM_VIEW;
+    term->view_pic = n->pic;
+    term->map_materialize = 0.0f;
+    snprintf(term->view_name, sizeof(term->view_name), "%s", n->name);
+}
+
+static void draw_view(Terminal* term)
+{
+    grid_clear(term);
+    grid_title(term, "IMAGE VIEWER");
+    grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "%s   320X200 VC-6   [Q] BACK", term->view_name);
+}
+
+static void draw_video(Terminal* term)
+{
+    grid_clear(term);
+    grid_title(term, "VIDEO FEED");
+    if (fmodf(term->blink, 1.2f) < 0.7f) {
+        grid_text(term, 1, TERM_COLS - 7, TC_RED, "\x7f LIVE");
+    }
+    grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "SRC: COAX CAM-1   320X200 10FPS   [Q] BACK");
+}
+
 static void shell_del(Terminal* term, const char* path)
 {
     FsRef ref;
@@ -1531,8 +1633,12 @@ static void term_launch_exe(Terminal* term, const FsNode* node)
         break;
     case FS_EXE_MAP:
         if (term->coax_state != 2 || term->antenna_tier < 0) {
-            term_print(term, term->coax_state == 1 ? "COAX PORT NOT INITIALIZED. RUN LINK.\n"
-                                                   : "NO ANTENNA FEED.\n");
+            if (term->coax_state == 2 && term->coax_camera) {
+                term_print(term, "COAX FEED IS CAMERA. NO SURVEY ANTENNA.\n");
+            } else {
+                term_print(term, term->coax_state == 1 ? "COAX PORT NOT INITIALIZED. RUN LINK.\n"
+                                                       : "NO ANTENNA FEED.\n");
+            }
         } else {
             term->mode = TERM_MAP;
             term->map_materialize = 0.0f;
@@ -1557,6 +1663,18 @@ static void term_launch_exe(Terminal* term, const FsNode* node)
         break;
     case FS_EXE_AV:
         term_av_scan(term);
+        break;
+    case FS_EXE_VIDEO:
+        if (term->coax_state == 2 && term->coax_camera) {
+            term->mode = TERM_VIDEO;
+            term->map_materialize = 0.0f;
+        } else if (term->coax_state == 1) {
+            term_print(term, "COAX PORT NOT INITIALIZED. RUN LINK.\n");
+        } else if (term->coax_state == 2) {
+            term_print(term, "COAX FEED IS ANTENNA. NO VIDEO SOURCE.\n");
+        } else {
+            term_print(term, "NO VIDEO SOURCE ON COAX.\n");
+        }
         break;
     case FS_EXE_TOY:
         term_printf(term, "%s\n", node->run_text ? node->run_text : "OUT OF MEMORY");
@@ -1638,6 +1756,7 @@ static void term_run_command(Terminal* term, const char* cmd)
                    "  LS [PATH]       list directory\n"
                    "  CD PATH         change directory\n"
                    "  TYPE FILE       display file contents\n"
+                   "  VIEW FILE       display image file\n"
                    "  COPY SRC DST    copy file\n"
                    "  DEL FILE        delete file\n"
                    "  RUN FILE        run program (or just type its name)\n"
@@ -1655,6 +1774,12 @@ static void term_run_command(Terminal* term, const char* cmd)
             term_print(term, "SYNTAX: TYPE FILE\n");
         } else {
             shell_type(term, tok[1]);
+        }
+    } else if (cmd_is(tok[0], "VIEW")) {
+        if (ntok < 2) {
+            term_print(term, "SYNTAX: VIEW FILE\n");
+        } else {
+            shell_view(term, tok[1]);
         }
     } else if (cmd_is(tok[0], "COPY")) {
         if (ntok < 3) {
@@ -1753,7 +1878,8 @@ void terminal_key_special(Terminal* term, i32 key)
         }
         return;
     }
-    if (term->mode == TERM_STATUS || term->mode == TERM_MAP || term->mode == TERM_LINK) {
+    if (term->mode == TERM_STATUS || term->mode == TERM_MAP || term->mode == TERM_LINK
+        || term->mode == TERM_VIEW || term->mode == TERM_VIDEO) {
         if (key == KEY_ENTER || key == KEY_Q || key == KEY_ESCAPE) {
             term->mode = TERM_SHELL;
         }
@@ -2640,10 +2766,14 @@ static void update_link(Terminal* term, f32 dt)
     grid_title(term, "PORT LINK MANAGER");
 
     char coax_desc[40];
-    snprintf(coax_desc, sizeof(coax_desc), "%s ANTENNA",
-             antenna_variant_name(term->antenna_tier));
+    if (term->coax_camera) {
+        snprintf(coax_desc, sizeof(coax_desc), "CAMERA FILM");
+    } else {
+        snprintf(coax_desc, sizeof(coax_desc), "%s ANTENNA",
+                 antenna_variant_name(term->antenna_tier));
+    }
     draw_link_port(term, 2, "PORT A   COAX / ANTENNA", term->coax_state,
-                   term->antenna_tier >= 0 ? coax_desc : "ANTENNA");
+                   term->coax_camera || term->antenna_tier >= 0 ? coax_desc : "ANTENNA");
     draw_link_port(term, 5, "PORT B   VEHICLE BUS", term->bus_state, "ENGINE BAY TAP");
 
     if (term->link_anim_port >= 0) {
@@ -2752,6 +2882,8 @@ void terminal_update(Terminal* term, const TermView* view, f32 dt)
     term->coax_state = view->coax_state;
     term->bus_state = view->bus_state;
     term->antenna_tier = view->antenna_tier;
+    term->coax_camera = view->coax_camera;
+    terminal_camera_mount(term, view->coax_state == 2 && view->coax_camera);
     if (term->mode == TERM_STATUS && term->bus_state != 2) {
         term->mode = TERM_SHELL;
     }
@@ -2800,6 +2932,19 @@ void terminal_update(Terminal* term, const TermView* view, f32 dt)
         break;
     case TERM_LINK:
         update_link(term, dt);
+        break;
+    case TERM_VIEW:
+        term->map_materialize += dt;
+        draw_view(term);
+        break;
+    case TERM_VIDEO:
+        if (term->coax_state != 2 || !term->coax_camera) {
+            term->mode = TERM_SHELL;
+            term_print(term, "VIDEO SOURCE LOST.\n");
+        } else {
+            term->map_materialize += dt;
+            draw_video(term);
+        }
         break;
     }
 
@@ -2886,6 +3031,42 @@ void terminal_render(Terminal* term)
         glDrawArrays(GL_POINTS, 0, (GLsizei)s_lidar_count);
         glDisable(GL_PROGRAM_POINT_SIZE);
         glDisable(GL_DEPTH_TEST);
+    }
+
+    if (term->mode == TERM_VIEW) {
+        u32 pic_prog = r_shader("term_pic");
+        const u8* pic_data = disk_photo_data(term->view_pic);
+        if (pic_prog && pic_data) {
+            if (s_gpu.pic_uploaded != term->view_pic) {
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                glTextureSubImage2D(s_gpu.pic_tex, 0, 0, 0, PHOTO_W, PHOTO_H,
+                                    GL_RGB, GL_UNSIGNED_BYTE, pic_data);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                s_gpu.pic_uploaded = term->view_pic;
+            }
+            f32 reveal = f_clamp01(term->map_materialize * 0.9f);
+            glDisable(GL_DEPTH_TEST);
+            glUseProgram(pic_prog);
+            glProgramUniform4f(pic_prog, 0, -0.755f, -0.76f, 0.755f, 0.75f);
+            glProgramUniform1f(pic_prog, 1, reveal);
+            glBindTextureUnit(0, s_gpu.pic_tex);
+            glBindVertexArray(s_gpu.empty_vao);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        }
+    }
+
+    if (term->mode == TERM_VIDEO && s_video_src_tex) {
+        u32 pic_prog = r_shader("term_pic");
+        if (pic_prog) {
+            f32 reveal = f_clamp01(term->map_materialize * 1.6f);
+            glDisable(GL_DEPTH_TEST);
+            glUseProgram(pic_prog);
+            glProgramUniform4f(pic_prog, 0, -0.755f, 0.75f, 0.755f, -0.76f);
+            glProgramUniform1f(pic_prog, 1, reveal);
+            glBindTextureUnit(0, s_video_src_tex);
+            glBindVertexArray(s_gpu.empty_vao);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        }
     }
 
     u32 wire_prog = r_shader("term_wire");

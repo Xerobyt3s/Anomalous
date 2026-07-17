@@ -296,16 +296,10 @@ void r_set_environment(Vec3 sun_dir, Vec3 sun_color, f32 ambient, Vec3 fog_color
     s_fog_density = fog_density;
 }
 
-void r_begin_frame(const Camera* cam)
+static void view_setup(const Camera* cam, f32 width, f32 height)
 {
-    i32 width, height;
-    platform_framebuffer_size(&width, &height);
-    if (width <= 0 || height <= 0) {
-        width = 1;
-        height = 1;
-    }
-    s_viewport = v2((f32)width, (f32)height);
-    f32 aspect = (f32)width / (f32)height;
+    s_viewport = v2(width, height);
+    f32 aspect = width / height;
 
     CameraUbo ubo;
     ubo.view = camera_view(cam);
@@ -327,12 +321,62 @@ void r_begin_frame(const Camera* cam)
     s_cam_pos = cam->pos;
     s_frustum = frustum_from_view_proj(s_view_proj);
 
-    glViewport(0, 0, width, height);
+    glViewport(0, 0, (GLsizei)width, (GLsizei)height);
     glClearColor(s_fog_color.x, s_fog_color.y, s_fog_color.z, 1.0f);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glDisable(GL_BLEND);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+}
+
+void r_begin_frame(const Camera* cam)
+{
+    i32 width, height;
+    platform_framebuffer_size(&width, &height);
+    if (width <= 0 || height <= 0) {
+        width = 1;
+        height = 1;
+    }
+    view_setup(cam, (f32)width, (f32)height);
+}
+
+#define VIDEO_W 320
+#define VIDEO_H 200
+
+static u32 s_video_fbo;
+static u32 s_video_tex;
+static u32 s_video_depth;
+
+b32 r_video_begin(const Camera* cam)
+{
+    if (!s_video_fbo) {
+        glCreateTextures(GL_TEXTURE_2D, 1, &s_video_tex);
+        glTextureStorage2D(s_video_tex, 1, GL_RGBA8, VIDEO_W, VIDEO_H);
+        glTextureParameteri(s_video_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTextureParameteri(s_video_tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTextureParameteri(s_video_tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(s_video_tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glCreateTextures(GL_TEXTURE_2D, 1, &s_video_depth);
+        glTextureStorage2D(s_video_depth, 1, GL_DEPTH_COMPONENT24, VIDEO_W, VIDEO_H);
+        glCreateFramebuffers(1, &s_video_fbo);
+        glNamedFramebufferTexture(s_video_fbo, GL_COLOR_ATTACHMENT0, s_video_tex, 0);
+        glNamedFramebufferTexture(s_video_fbo, GL_DEPTH_ATTACHMENT, s_video_depth, 0);
+        if (glCheckNamedFramebufferStatus(s_video_fbo, GL_FRAMEBUFFER)
+            != GL_FRAMEBUFFER_COMPLETE) {
+            log_error("render: video framebuffer incomplete");
+            s_video_fbo = 0;
+            return 0;
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, s_video_fbo);
+    view_setup(cam, (f32)VIDEO_W, (f32)VIDEO_H);
+    return 1;
+}
+
+u32 r_video_end(void)
+{
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return s_video_tex;
 }
 
 void r_end_frame(void)
@@ -354,6 +398,49 @@ Vec3 r_camera_pos(void)
 Vec2 r_viewport_size(void)
 {
     return s_viewport;
+}
+
+b32 r_read_backbuffer_rgb(u8* out, i32 out_w, i32 out_h)
+{
+    i32 w = (i32)s_viewport.x;
+    i32 h = (i32)s_viewport.y;
+    if (w <= 0 || h <= 0 || out_w <= 0 || out_h <= 0) {
+        return 0;
+    }
+    ArenaTemp temp = arena_temp_begin(&g_frame_arena);
+    u8* rgba = arena_push_array(&g_frame_arena, u8, (u64)w * (u64)h * 4);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    for (i32 oy = 0; oy < out_h; oy++) {
+        i32 sy0 = oy * h / out_h;
+        i32 sy1 = (oy + 1) * h / out_h;
+        if (sy1 <= sy0) {
+            sy1 = sy0 + 1;
+        }
+        for (i32 ox = 0; ox < out_w; ox++) {
+            i32 sx0 = ox * w / out_w;
+            i32 sx1 = (ox + 1) * w / out_w;
+            if (sx1 <= sx0) {
+                sx1 = sx0 + 1;
+            }
+            u32 sum[3] = { 0, 0, 0 };
+            for (i32 sy = sy0; sy < sy1; sy++) {
+                const u8* row = &rgba[(u64)(h - 1 - sy) * (u64)w * 4];
+                for (i32 sx = sx0; sx < sx1; sx++) {
+                    const u8* p = &row[(u64)sx * 4];
+                    sum[0] += p[0];
+                    sum[1] += p[1];
+                    sum[2] += p[2];
+                }
+            }
+            u32 n = (u32)((sx1 - sx0) * (sy1 - sy0));
+            u8* dst = &out[((u64)oy * (u64)out_w + (u64)ox) * 3];
+            dst[0] = (u8)(sum[0] / n);
+            dst[1] = (u8)(sum[1] / n);
+            dst[2] = (u8)(sum[2] / n);
+        }
+    }
+    arena_temp_end(temp);
+    return 1;
 }
 
 const Frustum* r_frustum(void)

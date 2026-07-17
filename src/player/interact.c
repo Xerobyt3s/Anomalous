@@ -471,9 +471,17 @@ static void resolve_pickups(Candidate* best, const Interact* it, CarSys* sys, Wo
             continue;
         }
         b32 is_computer = (ItemKind)entity->aux_kind == ITEM_COMPUTER;
+        b32 is_camera = (ItemKind)entity->aux_kind == ITEM_CAMERA;
+        b32 is_reel = (ItemKind)entity->aux_kind == ITEM_REEL;
+        b32 coax_business = is_camera
+                            && (it->cable_drag == (i32)CABLE_COAX
+                                || (sys->coax_target == COAX_TARGET_CAMERA
+                                    && sys->cables[CABLE_COAX].state == CABLE_PLUGGED));
         if ((it->hands.kind != ITEM_NONE || it->cable_drag >= 0)
             && (ItemKind)entity->aux_kind != ITEM_KEY
-            && !(is_computer && (sys->computer_on || it->hands.kind == ITEM_FLOPPY))) {
+            && !(is_computer && (sys->computer_on || it->hands.kind == ITEM_FLOPPY))
+            && !(is_reel && it->cable_drag >= 0)
+            && !coax_business) {
             continue;
         }
         if (is_computer) {
@@ -497,6 +505,58 @@ static void resolve_pickups(Candidate* best, const Interact* it, CarSys* sys, Wo
                 consider_disk_slot(best, it, sys, st - 0.50f, vec3_zero(), vec3_zero());
             }
         }
+        if (is_camera) {
+            if (sys->coax_target == COAX_TARGET_CAMERA
+                && sys->cables[CABLE_COAX].state == CABLE_PLUGGED) {
+                Sphere plug_s;
+                plug_s.center = vec3_add(entity->pos,
+                                         quat_rotate_vec3(entity->rot,
+                                                          v3(-0.13f, 0.01f, 0.016f)));
+                plug_s.radius = 0.13f;
+                f32 pt;
+                if (ray_vs_sphere(view_ray, plug_s, INTERACT_RANGE, &pt)) {
+                    if (candidate_consider(best, pt - 0.60f, ACTION_CABLE_UNPLUG, vec3_zero(),
+                                           vec3_zero(), 0, "[E] unplug coax from camera")) {
+                        best->cable = (i32)CABLE_COAX;
+                    }
+                }
+            } else if (it->cable_drag == (i32)CABLE_COAX) {
+                Sphere cam_s;
+                cam_s.center = vec3_add(entity->pos, v3(0.0f, 0.06f, 0.0f));
+                cam_s.radius = 0.25f;
+                f32 ct;
+                if (ray_vs_sphere(view_ray, cam_s, INTERACT_RANGE, &ct)) {
+                    if (candidate_consider(best, ct - 0.30f, ACTION_CABLE_PLUG_CAMERA,
+                                           vec3_zero(), vec3_zero(), 0,
+                                           "[E] connect coax to camera")) {
+                        best->cable = (i32)CABLE_COAX;
+                    }
+                }
+                continue;
+            }
+        }
+        if (is_reel && it->cable_drag >= 0) {
+            Cable* dragged = &sys->cables[it->cable_drag];
+            Sphere reel_s;
+            reel_s.center = vec3_add(entity->pos, v3(0.0f, 0.10f, 0.0f));
+            reel_s.radius = 0.30f;
+            f32 rt;
+            if (ray_vs_sphere(view_ray, reel_s, INTERACT_RANGE, &rt)) {
+                b32 other_routed = sys->cables[1 - it->cable_drag].via_reel;
+                if (dragged->via_reel || other_routed) {
+                    candidate_consider(best, rt - 0.30f, ACTION_INFO, vec3_zero(), vec3_zero(),
+                                       0, "reel already in use");
+                } else {
+                    snprintf(prompt, sizeof(prompt), "[E] connect %s to reel",
+                             it->cable_drag == (i32)CABLE_COAX ? "coax" : "bus");
+                    if (candidate_consider(best, rt - 0.30f, ACTION_CABLE_ROUTE_REEL,
+                                           vec3_zero(), vec3_zero(), 0, prompt)) {
+                        best->cable = it->cable_drag;
+                    }
+                }
+            }
+            continue;
+        }
         ItemKind pick_kind = (ItemKind)entity->aux_kind;
         Sphere sphere;
         sphere.center = vec3_add(vec3_add(entity->pos,
@@ -511,8 +571,11 @@ static void resolve_pickups(Candidate* best, const Interact* it, CarSys* sys, Wo
         }
         if (is_computer) {
             if (sys->computer_on) {
-                if (candidate_consider(best, t, ACTION_TERMINAL_USE, vec3_zero(), vec3_zero(), 0,
-                                       "[E] use terminal")) {
+                b32 can_take = it->hands.kind == ITEM_NONE && it->cable_drag < 0;
+                if (candidate_consider(best, t, ACTION_TERMINAL_USE, vec3_zero(), vec3_zero(),
+                                       can_take,
+                                       can_take ? "[E] use terminal | hold [E] take"
+                                                : "[E] use terminal")) {
                     best->entity.idx = idx;
                     best->entity.gen = world->entities.gens[idx];
                 }
@@ -574,12 +637,6 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
         it->hands.condition = slot->condition;
         it->hands.aux = 0;
         slot->installed = 0;
-        if (it->target_part == PART_COMPUTER) {
-            sys->computer_on = 0;
-            cable_reset(&sys->cables[CABLE_COAX]);
-            cable_reset(&sys->cables[CABLE_BUS]);
-            it->cable_drag = -1;
-        }
         if (it->target_part == PART_ANTENNA) {
             cable_reset(&sys->cables[CABLE_COAX]);
             if (it->cable_drag == (i32)CABLE_COAX) {
@@ -612,7 +669,11 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
     case ACTION_TAKE_CARGO:
         carsys_cargo_take(sys, it->target_cargo, &it->hands);
         break;
+    case ACTION_TERMINAL_USE:
     case ACTION_PICKUP: {
+        if (it->hands.kind != ITEM_NONE && it->action == ACTION_TERMINAL_USE) {
+            break;
+        }
         Entity* entity = world_entity(world, it->target_entity);
         if (entity) {
             if ((ItemKind)entity->aux_kind == ITEM_KEY) {
@@ -621,11 +682,6 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
                 it->hands.kind = (ItemKind)entity->aux_kind;
                 it->hands.condition = entity->aux_value;
                 it->hands.aux = (i32)entity->aux_data;
-            }
-            if ((ItemKind)entity->aux_kind == ITEM_COMPUTER) {
-                cable_reset(&sys->cables[CABLE_COAX]);
-                cable_reset(&sys->cables[CABLE_BUS]);
-                it->cable_drag = -1;
             }
             if (handle_valid(entity->body)) {
                 phys_body_destroy(phys, entity->body);
@@ -640,10 +696,24 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
         break;
     case ACTION_CABLE_PLUG:
         sys->cables[it->target_cable].state = CABLE_PLUGGED;
+        if (it->target_cable == (i32)CABLE_COAX) {
+            sys->coax_target = COAX_TARGET_ANTENNA;
+        }
         it->cable_drag = -1;
+        break;
+    case ACTION_CABLE_PLUG_CAMERA:
+        sys->cables[CABLE_COAX].state = CABLE_PLUGGED;
+        sys->coax_target = COAX_TARGET_CAMERA;
+        it->cable_drag = -1;
+        break;
+    case ACTION_CABLE_ROUTE_REEL:
+        sys->cables[it->target_cable].via_reel = 1;
         break;
     case ACTION_CABLE_UNPLUG:
         cable_reset(&sys->cables[it->target_cable]);
+        if (it->target_cable == (i32)CABLE_COAX) {
+            sys->coax_target = COAX_TARGET_ANTENNA;
+        }
         if (it->cable_drag == it->target_cable) {
             it->cable_drag = -1;
         }
@@ -728,18 +798,44 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
     }
     sys->crank_request = it->crank_latch;
 
+    if (best.action == ACTION_TERMINAL_USE) {
+        if (best.is_hold) {
+            if (e_down) {
+                it->hold_time += dt;
+                if (it->hold_time >= INTERACT_HOLD_TIME) {
+                    interact_perform(it, sys, world, phys);
+                    it->hold_time = 0.0f;
+                }
+            } else {
+                if (it->hold_time > 0.0f) {
+                    it->use_terminal_request = 1;
+                }
+                it->hold_time = 0.0f;
+            }
+            it->hold_progress = it->hold_time / INTERACT_HOLD_TIME;
+        } else {
+            it->hold_time = 0.0f;
+            it->hold_progress = 0.0f;
+            if (e_pressed) {
+                it->use_terminal_request = 1;
+            }
+        }
+        return;
+    }
+
     if (best.action == ACTION_NONE || best.action == ACTION_INFO
         || best.action == ACTION_ENTER_CAR || best.action == ACTION_EXIT_CAR
-        || best.action == ACTION_CRANK || best.action == ACTION_TERMINAL_USE) {
+        || best.action == ACTION_CRANK) {
+        if (e_pressed && best.action == ACTION_NONE && it->hands.kind == ITEM_COMPUTER
+            && sys->computer_on) {
+            it->use_terminal_request = 1;
+        }
         it->hold_time = 0.0f;
         it->hold_progress = 0.0f;
         return;
     }
 
     if (best.is_hold) {
-        if (e_pressed && best.action == ACTION_REMOVE_PART && best.part == PART_COMPUTER) {
-            sys->computer_on = !sys->computer_on;
-        }
         if (e_down) {
             it->hold_time += dt;
             if (it->hold_time >= INTERACT_HOLD_TIME) {
@@ -752,6 +848,10 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
                 if (entity && (ItemKind)entity->aux_kind == ITEM_COMPUTER) {
                     sys->computer_on = 1;
                 }
+            }
+            if (it->hold_time > 0.0f && best.action == ACTION_REMOVE_PART
+                && best.part == PART_COMPUTER) {
+                sys->computer_on = !sys->computer_on;
             }
             it->hold_time = 0.0f;
         }
@@ -790,13 +890,15 @@ Handle interact_spawn_pickup(struct World* world, struct PhysWorld* phys, Item i
     return handle;
 }
 
-b32 interact_drop(Interact* it, struct World* world, struct PhysWorld* phys, Vec3 origin, Vec3 dir)
+b32 interact_drop(Interact* it, struct World* world, struct PhysWorld* phys, Vec3 origin,
+                  Vec3 dir, f32 power)
 {
     if (it->hands.kind == ITEM_NONE) {
         return 0;
     }
     Vec3 spot = vec3_add(origin, vec3_scale(dir, 0.8f));
-    Vec3 vel = vec3_add(vec3_scale(dir, 5.5f), v3(0.0f, 1.5f, 0.0f));
+    Vec3 vel = vec3_add(vec3_scale(dir, 1.2f + 8.5f * power),
+                        v3(0.0f, 0.5f + 1.8f * power, 0.0f));
     interact_spawn_pickup(world, phys, it->hands, spot, atan2f(dir.x, -dir.z), vel);
     it->hands.kind = ITEM_NONE;
     return 1;

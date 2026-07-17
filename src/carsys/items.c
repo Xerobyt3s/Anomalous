@@ -21,6 +21,8 @@ static const struct {
     { "array antenna", "antenna_array", 15.0f, { 0.48f, 0.17f, 0.17f }, 0.5f, { 0.0f, 0.475f, 0.0f } },
     { "car key",    "part_key",        0.2f,  { 0.04f, 0.015f, 0.07f }, 0.0f, { 0.0f, 0.0f, 0.0f } },
     { "floppy disk", "part_floppy",    0.3f,  { 0.07f, 0.012f, 0.07f }, 0.0f, { 0.0f, 0.0f, 0.0f } },
+    { "camera",     "part_camera",     1.5f,  { 0.12f, 0.08f, 0.075f }, 0.0f, { 0.0f, 0.0f, 0.0f } },
+    { "cable reel", "part_reel",       6.0f,  { 0.12f, 0.11f, 0.12f }, 0.0f, { 0.0f, 0.0f, 0.0f } },
 };
 
 const char* item_name(ItemKind kind)

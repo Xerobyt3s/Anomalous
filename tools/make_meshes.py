@@ -910,6 +910,33 @@ def make_antenna_meshes():
     b.box((0.0, 0.0032, -0.045), (0.012, 0.0008, 0.016))
     b.write(os.path.join(MESH_DIR, "part_floppy.amsh"))
 
+    b = MeshBuilder()
+    b.begin_material("car_dash")
+    b.box((0.0, 0.0, 0.0), (0.085, 0.052, 0.042))
+    b.begin_material("alloy")
+    b.box((0.0, 0.004, -0.056), (0.032, 0.032, 0.016))
+    b.box((0.0, 0.004, -0.074), (0.024, 0.024, 0.004))
+    b.begin_material("car_trim")
+    b.box((-0.042, 0.058, 0.0), (0.026, 0.008, 0.028))
+    b.box((0.086, 0.0, 0.005), (0.004, 0.03, 0.02))
+    b.begin_material("car_signal")
+    b.box((0.056, 0.056, -0.012), (0.009, 0.005, 0.009))
+    b.begin_material("alloy")
+    b.box((-0.09, 0.0, 0.012), (0.006, 0.007, 0.007))
+    b.vertices = [(tuple(c * 1.35 for c in p), n, uv) for p, n, uv in b.vertices]
+    b.write(os.path.join(MESH_DIR, "part_camera.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("car_trim")
+    add_cylinder(b, (0.0, -0.11, 0.0), 0.115, 0.022, 10)
+    add_cylinder(b, (0.0, 0.075, 0.0), 0.115, 0.022, 10)
+    b.begin_material("car_signal")
+    add_cylinder(b, (0.0, -0.088, 0.0), 0.088, 0.163, 10)
+    b.begin_material("alloy")
+    b.box((0.0, 0.11, 0.0), (0.022, 0.014, 0.022))
+    b.box((0.105, -0.02, 0.0), (0.012, 0.02, 0.014))
+    b.write(os.path.join(MESH_DIR, "part_reel.amsh"))
+
 
 def make_excel_wheel():
     b = MeshBuilder()

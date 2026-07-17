@@ -61,6 +61,16 @@ static Interact s_interact;
 static Terminal s_terminal;
 static b32 s_term_focus;
 static f32 s_term_anim;
+static b32 s_viewfinder;
+static b32 s_capture_pending;
+static f32 s_capture_flash;
+static char s_capture_msg[48];
+static f32 s_capture_msg_until;
+static f32 s_throw_charge;
+static b32 s_place_active;
+static b32 s_place_valid;
+static Vec3 s_place_pos;
+static f32 s_place_yaw;
 static ZoneSpawn s_zone_spawn;
 static Camera s_camera;
 static f32 s_fps;
@@ -379,6 +389,48 @@ static void draw_status_hud(void)
     }
 }
 
+static void draw_viewfinder(void)
+{
+    Vec2 vp = r_viewport_size();
+    if (s_capture_flash > 0.0f) {
+        u8 a = (u8)(s_capture_flash * 210.0f);
+        dd_rect_2d_filled(0.0f, 0.0f, vp.x, vp.y, dd_rgba(235, 245, 235, a));
+    }
+    if (s_viewfinder) {
+        f32 frame_h = vp.y * 0.80f;
+        f32 frame_w = frame_h * 1.6f;
+        f32 x0 = (vp.x - frame_w) * 0.5f;
+        f32 y0 = (vp.y - frame_h) * 0.5f;
+        f32 x1 = x0 + frame_w;
+        f32 y1 = y0 + frame_h;
+        u32 shade = dd_rgba(8, 10, 8, 215);
+        dd_rect_2d_filled(0.0f, 0.0f, vp.x, y0, shade);
+        dd_rect_2d_filled(0.0f, y1, vp.x, vp.y, shade);
+        dd_rect_2d_filled(0.0f, y0, x0, y1, shade);
+        dd_rect_2d_filled(x1, y0, vp.x, y1, shade);
+        u32 line = dd_rgba(220, 230, 220, 200);
+        f32 b = 26.0f;
+        dd_rect_2d(x0, y0, x1, y1, dd_rgba(160, 170, 160, 90));
+        dd_rect_2d_filled(x0, y0, x0 + b, y0 + 3.0f, line);
+        dd_rect_2d_filled(x0, y0, x0 + 3.0f, y0 + b, line);
+        dd_rect_2d_filled(x1 - b, y0, x1, y0 + 3.0f, line);
+        dd_rect_2d_filled(x1 - 3.0f, y0, x1, y0 + b, line);
+        dd_rect_2d_filled(x0, y1 - 3.0f, x0 + b, y1, line);
+        dd_rect_2d_filled(x0, y1 - b, x0 + 3.0f, y1, line);
+        dd_rect_2d_filled(x1 - b, y1 - 3.0f, x1, y1, line);
+        dd_rect_2d_filled(x1 - 3.0f, y1 - b, x1, y1, line);
+        f32 cx = vp.x * 0.5f;
+        f32 cy = vp.y * 0.5f;
+        dd_rect_2d_filled(cx - 14.0f, cy - 1.0f, cx + 14.0f, cy + 1.0f, line);
+        dd_rect_2d_filled(cx - 1.0f, cy - 14.0f, cx + 1.0f, cy + 14.0f, line);
+        dd_text_2d(x0 + 8.0f, y1 - 26.0f, 17.0f, DD_WHITE, "EXP %02u", terminal_camera_exposures());
+        dd_text_2d(x1 - 170.0f, y1 - 26.0f, 17.0f, DD_GRAY, "LMB SHUTTER");
+    }
+    if (s_capture_msg_until > 0.0f && s_player.state == PLAYER_ON_FOOT) {
+        dd_text_2d(vp.x * 0.5f - 80.0f, vp.y * 0.80f, 18.0f, DD_CYAN, "%s", s_capture_msg);
+    }
+}
+
 static void draw_interact_prompt(void)
 {
     Vec2 vp = r_viewport_size();
@@ -393,13 +445,25 @@ static void draw_interact_prompt(void)
                               y + 19.0f, dd_rgba(90, 200, 120, 255));
         }
     }
+    if (s_throw_charge > 0.12f) {
+        f32 charge = s_throw_charge / 0.9f;
+        dd_rect_2d(cx - 60.0f, y + 26.0f, cx + 60.0f, y + 34.0f, dd_rgba(90, 100, 110, 255));
+        dd_rect_2d_filled(cx - 59.0f, y + 27.0f, cx - 59.0f + 118.0f * charge, y + 33.0f,
+                          dd_rgba(230, 160, 70, 255));
+    }
     if (s_player.state == PLAYER_ON_FOOT && s_interact.hands.kind != ITEM_NONE) {
         if (s_interact.hands.kind == ITEM_FLOPPY) {
-            dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN, "hands: floppy \"%s\" | [G] throw%s",
+            dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN,
+                       "hands: floppy \"%s\" | [G] drop/throw | [F] place%s",
                        disk_label(s_interact.hands.aux),
                        s_interact.has_key ? " | key in pocket" : "");
+        } else if (s_interact.hands.kind == ITEM_COMPUTER && s_carsys.computer_on) {
+            dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN,
+                       "hands: terminal (on) | [E] use | [G] drop/throw | [F] place%s",
+                       s_interact.has_key ? " | key in pocket" : "");
         } else {
-            dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN, "hands: %s (%.0f%%) | [G] throw%s",
+            dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN,
+                       "hands: %s (%.0f%%) | [G] drop/throw | [F] place%s",
                        item_name(s_interact.hands.kind),
                        (f64)(s_interact.hands.condition * 100.0f),
                        s_interact.has_key ? " | key in pocket" : "");
@@ -409,6 +473,10 @@ static void draw_interact_prompt(void)
     }
     if (s_term_focus) {
         dd_text_2d(cx - 90.0f, y + 34.0f, 15.0f, DD_GRAY, "terminal linked — ESC to look away");
+    }
+    if (s_player.state == PLAYER_DRIVING && s_interact.hands.kind == ITEM_COMPUTER
+        && s_carsys.computer_on && s_interact.action == ACTION_NONE) {
+        dd_text_2d(cx - 110.0f, y + 52.0f, 15.0f, DD_GRAY, "[E] use terminal in hands");
     }
     if (s_player.state == PLAYER_DRIVING && !s_carsys.engine_on) {
         const char* hint = "look at the ignition and hold [E] to start";
@@ -504,9 +572,39 @@ static void draw_cargo_preview(f32 alpha)
     r_draw_mesh(asset_mesh(item_mesh(s_interact.hands.kind)), model);
 }
 
+static Vec3 hands_item_pos(void)
+{
+    Vec3 fwd = camera_forward(&s_camera);
+    Vec3 right = camera_right(&s_camera);
+    Vec3 pos = vec3_add(s_camera.pos, vec3_add(vec3_scale(fwd, 0.62f), vec3_scale(right, 0.30f)));
+    pos.y -= 0.34f;
+    return pos;
+}
+
+static void draw_place_preview(void)
+{
+    if (!s_place_active || s_interact.hands.kind == ITEM_NONE) {
+        return;
+    }
+    Vec2 vp = r_viewport_size();
+    if (!s_place_valid) {
+        dd_text_2d(vp.x * 0.5f - 90.0f, vp.y * 0.66f, 17.0f, DD_GRAY, "no surface to place on");
+        return;
+    }
+    ItemKind kind = s_interact.hands.kind;
+    Quat yaw_rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), s_place_yaw);
+    Quat rot = quat_mul(yaw_rot, item_cargo_rot(kind));
+    Vec3 pos = vec3_sub(s_place_pos, quat_rotate_vec3(rot, item_mesh_center(kind)));
+    r_draw_mesh(asset_mesh(item_mesh(kind)), mat4_trs(pos, rot, v3(1.0f, 1.0f, 1.0f)));
+    dd_obb(s_place_pos, yaw_rot, item_cargo_half(kind), dd_rgba(120, 220, 140, 255));
+    dd_text_2d(vp.x * 0.5f - 130.0f, vp.y * 0.66f, 17.0f, DD_WHITE,
+               "release [F] to place | scroll to rotate");
+}
+
 static void draw_viewmodel(f32 alpha)
 {
-    if (s_player.state != PLAYER_ON_FOOT || s_interact.hands.kind == ITEM_NONE || s_free_cam) {
+    if (s_player.state != PLAYER_ON_FOOT || s_interact.hands.kind == ITEM_NONE || s_free_cam
+        || s_viewfinder || s_place_active) {
         return;
     }
     if (s_interact.action == ACTION_PLACE_CARGO) {
@@ -528,10 +626,7 @@ static void draw_viewmodel(f32 alpha)
             return;
         }
     }
-    Vec3 fwd = camera_forward(&s_camera);
-    Vec3 right = camera_right(&s_camera);
-    Vec3 pos = vec3_add(s_camera.pos, vec3_add(vec3_scale(fwd, 0.62f), vec3_scale(right, 0.30f)));
-    pos.y -= 0.34f;
+    Vec3 pos = hands_item_pos();
     f32 scale = s_interact.hands.kind == ITEM_TIRE ? 0.45f : 0.85f;
     if (antenna_variant_for_item(s_interact.hands.kind) >= 0) {
         scale = 0.5f;
@@ -539,8 +634,13 @@ static void draw_viewmodel(f32 alpha)
     Quat rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), -s_camera.yaw);
     pos = vec3_sub(pos, vec3_scale(quat_rotate_vec3(rot, item_mesh_center(s_interact.hands.kind)),
                                    scale));
-    r_draw_mesh(asset_mesh(item_mesh(s_interact.hands.kind)),
-                mat4_trs(pos, rot, v3(scale, scale, scale)));
+    Mat4 model = mat4_trs(pos, rot, v3(scale, scale, scale));
+    r_draw_mesh(asset_mesh(item_mesh(s_interact.hands.kind)), model);
+    if (s_interact.hands.kind == ITEM_COMPUTER && s_terminal.powered) {
+        Mat4 screen = mat4_mul(model, mat4_trs(v3(0.0f, 0.047f, 0.170f), quat_identity(),
+                                               v3(0.304f, 0.19f, 1.0f)));
+        r_draw_lit_quad(screen, terminal_texture(&s_terminal));
+    }
 }
 
 static void spawn_spare_aux(ItemKind kind, f32 condition, i32 aux, Vec3 offset)
@@ -781,6 +881,8 @@ static void spawn_spares(void)
     spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_SCRATCH, v3(4.9f, 0.0f, 2.35f));
     spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_RESCUE, v3(5.2f, 0.0f, 2.65f));
     spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_ARCADE, v3(5.5f, 0.0f, 2.3f));
+    spawn_spare(ITEM_CAMERA, 1.0f, v3(2.2f, 0.0f, 3.1f));
+    spawn_spare(ITEM_REEL, 1.0f, v3(1.8f, 0.0f, 2.7f));
 }
 
 static void draw_telemetry_panel(void)
@@ -864,6 +966,30 @@ static Entity* find_loose_computer(void)
     return 0;
 }
 
+static Entity* find_reel_entity(void)
+{
+    for (u32 idx = 0; idx < s_world.entities.capacity; idx++) {
+        Entity* entity = pool_at(&s_world.entities, idx);
+        if (entity && entity->kind == ENTITY_PART_PICKUP
+            && (ItemKind)entity->aux_kind == ITEM_REEL) {
+            return entity;
+        }
+    }
+    return 0;
+}
+
+static Entity* find_camera_entity(void)
+{
+    for (u32 idx = 0; idx < s_world.entities.capacity; idx++) {
+        Entity* entity = pool_at(&s_world.entities, idx);
+        if (entity && entity->kind == ENTITY_PART_PICKUP
+            && (ItemKind)entity->aux_kind == ITEM_CAMERA) {
+            return entity;
+        }
+    }
+    return 0;
+}
+
 static b32 terminal_world_transform(Vec3* out_pos, Quat* out_rot)
 {
     if (s_carsys.parts[PART_COMPUTER].installed) {
@@ -875,6 +1001,11 @@ static b32 terminal_world_transform(Vec3* out_pos, Quat* out_rot)
                                      s_vehicle.cfg.com_offset);
         *out_pos = vec3_add(body->pos, quat_rotate_vec3(body->rot, socket_local));
         *out_rot = quat_mul(body->rot, part_computer_rest_rot());
+        return 1;
+    }
+    if (s_interact.hands.kind == ITEM_COMPUTER) {
+        *out_pos = hands_item_pos();
+        *out_rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), -s_camera.yaw);
         return 1;
     }
     Entity* loose = find_loose_computer();
@@ -910,34 +1041,130 @@ static void update_cables(f32 dt)
     term_obs.rot = term_rot;
     term_obs.center = v3(0.0f, 0.0f, 0.03f);
     term_obs.half = v3(0.23f, 0.20f, 0.24f);
+    Vec3 reel_anchor = vec3_zero();
+    b32 have_reel = 0;
+    if (s_interact.hands.kind == ITEM_REEL) {
+        reel_anchor = hands_item_pos();
+        have_reel = 1;
+    } else {
+        Entity* reel = find_reel_entity();
+        if (reel) {
+            reel_anchor = vec3_add(reel->pos, v3(0.0f, 0.10f, 0.0f));
+            have_reel = 1;
+        }
+    }
     for (u32 k = 0; k < CABLE_KIND_COUNT; k++) {
         Cable* cable = &s_carsys.cables[k];
         if (cable->state == CABLE_STOWED) {
             cable->sim_init = 0;
             continue;
         }
+        if (cable->via_reel && !have_reel) {
+            cable_reset(cable);
+            if (k == CABLE_COAX) {
+                s_carsys.coax_target = COAX_TARGET_ANTENNA;
+            }
+            if (s_interact.cable_drag == (i32)k) {
+                s_interact.cable_drag = -1;
+            }
+            audio_play(SFX_THUMP, 0.45f, 1.15f);
+            continue;
+        }
+        const Vec3* anchor = cable->via_reel ? &reel_anchor : 0;
         Vec3 root = vec3_add(term_pos, quat_rotate_vec3(term_rot, roots[k]));
         Vec3 end;
         if (cable->state == CABLE_PLUGGED) {
-            end = vec3_add(car_origin, quat_rotate_vec3(body->rot, jacks[k]));
+            if (k == CABLE_COAX && s_carsys.coax_target == COAX_TARGET_CAMERA) {
+                if (s_interact.hands.kind == ITEM_CAMERA) {
+                    end = hands_item_pos();
+                } else {
+                    Entity* cam = find_camera_entity();
+                    if (!cam) {
+                        cable_reset(cable);
+                        s_carsys.coax_target = COAX_TARGET_ANTENNA;
+                        continue;
+                    }
+                    end = vec3_add(cam->pos, quat_rotate_vec3(cam->rot, v3(-0.13f, 0.0f, 0.0f)));
+                }
+            } else {
+                end = vec3_add(car_origin, quat_rotate_vec3(body->rot, jacks[k]));
+            }
         } else {
             end = vec3_add(s_camera.pos,
                            vec3_add(vec3_scale(camera_forward(&s_camera), 0.50f),
                                     v3(0.0f, -0.18f, 0.0f)));
-            if (vec3_distance(root, end) > CABLE_LENGTH * 1.06f) {
-                cable_reset(cable);
-                if (s_interact.cable_drag == (i32)k) {
-                    s_interact.cable_drag = -1;
-                }
-                continue;
-            }
         }
-        cable_sim(cable, root, &end, &s_terrain, car_origin, body->rot, &term_obs, 1, dt);
+        f32 span = cable_span(cable, root, end, anchor);
+        b32 over_span = span > cable_max_len(cable) * 1.06f;
+        b32 over_arc = cable->sim_init
+                       && cable_current_length(cable) > cable_max_len(cable) * 1.18f;
+        if (over_span || over_arc) {
+            b32 was_plugged = cable->state == CABLE_PLUGGED;
+            cable_reset(cable);
+            if (k == CABLE_COAX) {
+                s_carsys.coax_target = COAX_TARGET_ANTENNA;
+            }
+            if (s_interact.cable_drag == (i32)k) {
+                s_interact.cable_drag = -1;
+            }
+            if (was_plugged || over_arc) {
+                audio_play(SFX_THUMP, 0.45f, 1.15f);
+            }
+            continue;
+        }
+        cable_sim(cable, root, &end, anchor, &s_terrain, &s_phys, s_vehicle.body,
+                  car_origin, body->rot, &term_obs, 1, dt);
     }
+}
+
+static b32 video_camera_build(Camera* out)
+{
+    if (s_interact.hands.kind == ITEM_CAMERA) {
+        *out = s_camera;
+        return 1;
+    }
+    Entity* cam = find_camera_entity();
+    if (!cam) {
+        return 0;
+    }
+    Vec3 eye = vec3_add(cam->pos, quat_rotate_vec3(cam->rot, v3(0.0f, 0.06f, -0.10f)));
+    Vec3 fwd = quat_rotate_vec3(cam->rot, v3(0.0f, 0.0f, -1.0f));
+    camera_init(out, eye);
+    camera_look_at(out, vec3_add(eye, fwd));
+    return 1;
+}
+
+static void render_video_feed(f32 alpha)
+{
+    static f32 video_timer;
+    if (!terminal_video_active(&s_terminal)) {
+        video_timer = 0.0f;
+        return;
+    }
+    video_timer -= s_frame_dt_render;
+    if (video_timer > 0.0f) {
+        return;
+    }
+    video_timer = 0.1f;
+    Camera feed_cam;
+    if (!video_camera_build(&feed_cam)) {
+        return;
+    }
+    if (!r_video_begin(&feed_cam)) {
+        return;
+    }
+    terrain_render_draw();
+    world_render(&s_world);
+    cable_render(&s_carsys.cables[CABLE_COAX]);
+    cable_render(&s_carsys.cables[CABLE_BUS]);
+    vehicle_render(&s_vehicle, &s_phys, alpha);
+    carsys_render(&s_carsys, &s_vehicle, &s_phys, alpha, 0.0f, 0);
+    terminal_video_set(r_video_end());
 }
 
 static void game_render(f32 alpha, const GameInput* input)
 {
+    render_video_feed(alpha);
     terminal_render(&s_terminal);
     r_begin_frame(&s_camera);
     dd_begin_frame();
@@ -977,7 +1204,25 @@ static void game_render(f32 alpha, const GameInput* input)
                   s_terminal.powered ? terminal_texture(&s_terminal) : 0);
     draw_interact_highlights(alpha);
     draw_cargo_preview(alpha);
+    draw_place_preview();
     draw_viewmodel(alpha);
+
+    if (s_capture_pending) {
+        s_capture_pending = 0;
+        static u8 shot[PHOTO_BYTES];
+        if (r_read_backbuffer_rgb(shot, PHOTO_W, PHOTO_H)) {
+            if (terminal_camera_capture(shot)) {
+                s_capture_flash = 1.0f;
+                audio_play(SFX_RATCHET, 0.55f, 1.9f);
+                snprintf(s_capture_msg, sizeof(s_capture_msg), "exposure saved - %u left",
+                         terminal_camera_exposures());
+            } else {
+                audio_play(SFX_THUMP, 0.30f, 0.7f);
+                snprintf(s_capture_msg, sizeof(s_capture_msg), "film spent");
+            }
+            s_capture_msg_until = 2.5f;
+        }
+    }
 
     if (s_term_anim > 0.80f && s_carsys.computer_on) {
         Vec2 vp = r_viewport_size();
@@ -1000,6 +1245,7 @@ static void game_render(f32 alpha, const GameInput* input)
     if (player_driving(&s_player)) {
         draw_drive_hud();
     }
+    draw_viewfinder();
     draw_interact_prompt();
     mission_draw();
     if (s_show_carsys) {
@@ -2062,6 +2308,17 @@ int main(int argc, char** argv)
             s_chase_cam = !s_chase_cam;
         }
 
+        s_viewfinder = s_player.state == PLAYER_ON_FOOT && !s_term_focus && !s_free_cam
+                       && s_interact.hands.kind == ITEM_CAMERA
+                       && input->mouse_down[MOUSE_RIGHT];
+        if (s_viewfinder && input->mouse_pressed[MOUSE_LEFT]) {
+            s_capture_pending = 1;
+        }
+        s_capture_flash = f_max(s_capture_flash - (f32)frame_dt * 3.0f, 0.0f);
+        if (s_capture_msg_until > 0.0f) {
+            s_capture_msg_until -= (f32)frame_dt;
+        }
+
         PlayerCommand frame_cmd = {0};
         if (s_free_cam) {
             camera_fly_update(&s_camera, input, (f32)frame_dt);
@@ -2132,15 +2389,52 @@ int main(int argc, char** argv)
                 if (input->key_pressed[KEY_SPACE]) {
                     s_pending_jump = 1;
                 }
-                if (input->key_pressed[KEY_G]) {
-                    if (s_interact.cable_drag >= 0) {
+                if (s_interact.cable_drag >= 0) {
+                    if (input->key_pressed[KEY_G]) {
                         cable_reset(&s_carsys.cables[s_interact.cable_drag]);
                         s_interact.cable_drag = -1;
-                    } else {
+                    }
+                    s_throw_charge = 0.0f;
+                } else if (s_interact.hands.kind != ITEM_NONE) {
+                    if (input->key_down[KEY_G]) {
+                        s_throw_charge = f_min(s_throw_charge + (f32)frame_dt, 0.9f);
+                    }
+                    if (input->key_released[KEY_G]) {
+                        f32 power = s_throw_charge < 0.12f ? 0.0f : s_throw_charge / 0.9f;
                         Vec3 eye = vec3_add(s_player.pos, v3(0.0f, 1.38f, 0.0f));
                         interact_drop(&s_interact, &s_world, &s_phys, eye,
-                                      camera_forward(&s_camera));
+                                      camera_forward(&s_camera), power);
+                        s_throw_charge = 0.0f;
                     }
+                    if (input->key_down[KEY_F]) {
+                        if (!s_place_active) {
+                            s_place_active = 1;
+                            s_place_yaw = -s_camera.yaw;
+                        }
+                        s_place_yaw += input->scroll_dy * 0.45f;
+                        Ray aim;
+                        aim.origin = s_camera.pos;
+                        aim.dir = camera_forward(&s_camera);
+                        PhysRayHit place_hit;
+                        s_place_valid = phys_raycast(&s_phys, aim, 3.5f, &place_hit)
+                                        && place_hit.normal.y > 0.55f;
+                        if (s_place_valid) {
+                            f32 lift = item_cargo_half(s_interact.hands.kind).y + 0.015f;
+                            s_place_pos = vec3_add(place_hit.point, v3(0.0f, lift, 0.0f));
+                        }
+                    } else if (s_place_active) {
+                        if (s_place_valid && s_interact.hands.kind != ITEM_NONE) {
+                            interact_spawn_pickup(&s_world, &s_phys, s_interact.hands,
+                                                  s_place_pos, s_place_yaw, vec3_zero());
+                            s_interact.hands.kind = ITEM_NONE;
+                        }
+                        s_place_active = 0;
+                        s_place_valid = 0;
+                    }
+                } else {
+                    s_throw_charge = 0.0f;
+                    s_place_active = 0;
+                    s_place_valid = 0;
                 }
             }
             Ray view_ray;
@@ -2149,9 +2443,11 @@ int main(int argc, char** argv)
             interact_update(&s_interact, &s_player, &s_vehicle, &s_carsys, &s_world, &s_phys,
                             view_ray, !s_term_focus && input->key_down[KEY_E],
                             !s_term_focus && input->key_pressed[KEY_E], (f32)frame_dt);
-            if (!s_term_focus && input->key_pressed[KEY_E]
-                && s_interact.action == ACTION_TERMINAL_USE) {
-                s_term_focus = 1;
+            if (s_interact.use_terminal_request) {
+                s_interact.use_terminal_request = 0;
+                if (!s_term_focus) {
+                    s_term_focus = 1;
+                }
             }
             if (s_term_focus && !s_carsys.computer_on) {
                 s_term_focus = 0;
@@ -2254,7 +2550,8 @@ int main(int argc, char** argv)
             const Cable* bus = &s_carsys.cables[CABLE_BUS];
             view.coax_state = coax->state == CABLE_PLUGGED ? (coax->linked ? 2 : 1) : 0;
             view.bus_state = bus->state == CABLE_PLUGGED ? (bus->linked ? 2 : 1) : 0;
-            view.antenna_tier = s_carsys.parts[PART_ANTENNA].installed
+            view.coax_camera = s_carsys.coax_target == COAX_TARGET_CAMERA;
+            view.antenna_tier = !view.coax_camera && s_carsys.parts[PART_ANTENNA].installed
                                 ? s_carsys.parts[PART_ANTENNA].variant : -1;
             terminal_disk_set(&s_terminal, s_carsys.floppy_disk);
             terminal_update(&s_terminal, &view, (f32)frame_dt);
