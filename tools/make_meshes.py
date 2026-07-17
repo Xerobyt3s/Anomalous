@@ -876,6 +876,26 @@ def make_antenna_meshes():
     b.box((0.0, 0.0, 0.055), (0.012, 0.012, 0.012))
     b.write(os.path.join(MESH_DIR, "cable_plug.amsh"))
 
+    b = MeshBuilder()
+    b.begin_material("car_trim")
+    b.box((0.0, 0.006, 0.0), (0.034, 0.006, 0.034))
+    b.begin_material("alloy")
+    add_cylinder(b, (0.0, 0.012, 0.0), 0.015, 0.026, 8)
+    b.begin_material("car_signal")
+    b.box((0.0, 0.040, 0.0), (0.017, 0.004, 0.017))
+    b.begin_material("alloy")
+    b.box((0.0, 0.047, 0.0), (0.007, 0.006, 0.007))
+    b.write(os.path.join(MESH_DIR, "jack_coax.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("car_trim")
+    b.box((0.0, 0.008, 0.0), (0.042, 0.008, 0.030))
+    b.begin_material("alloy")
+    b.box((0.0, 0.028, 0.0), (0.026, 0.014, 0.017))
+    b.begin_material("car_tail")
+    b.box((0.0, 0.046, 0.0), (0.028, 0.005, 0.019))
+    b.write(os.path.join(MESH_DIR, "jack_bus.amsh"))
+
 
 def make_excel_wheel():
     b = MeshBuilder()

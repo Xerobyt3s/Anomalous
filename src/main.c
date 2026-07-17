@@ -139,8 +139,10 @@ static void game_tick(f32 dt, PlayerCommand cmd)
         }
         RigidBody* body = phys_body(&s_phys, entity->body);
         if (body) {
-            entity->pos = body->pos;
-            entity->rot = quat_mul(body->rot, item_cargo_rot((ItemKind)entity->aux_kind));
+            ItemKind kind = (ItemKind)entity->aux_kind;
+            entity->rot = quat_mul(body->rot, item_cargo_rot(kind));
+            entity->pos = vec3_sub(body->pos,
+                                   quat_rotate_vec3(entity->rot, item_mesh_center(kind)));
         }
     }
 
@@ -442,6 +444,19 @@ static void draw_interact_highlights(f32 alpha)
                s_interact.target_half, target_color);
     }
 
+    if (s_interact.cable_drag >= 0 && s_player.state == PLAYER_ON_FOOT
+        && s_interact.action != ACTION_CABLE_PLUG) {
+        b32 coax = s_interact.cable_drag == (i32)CABLE_COAX;
+        b32 reachable = coax ? s_carsys.parts[PART_ANTENNA].installed
+                             : s_carsys.hood_open >= 0.8f;
+        if (reachable) {
+            Vec3 jack = coax ? ANTENNA_JACK_LOCAL : BAY_JACK_LOCAL;
+            Vec3 local = vec3_sub(jack, s_vehicle.cfg.com_offset);
+            dd_obb(vec3_add(body_pos, quat_rotate_vec3(body_rot, local)), body_rot,
+                   v3(0.07f, 0.07f, 0.07f), slot_color);
+        }
+    }
+
     if (s_interact.hands.kind != ITEM_NONE && s_player.state == PLAYER_ON_FOOT) {
         for (u32 k = 0; k < PART_COUNT; k++) {
             const PartDef* def = part_def((PartKind)k);
@@ -472,11 +487,12 @@ static void draw_cargo_preview(f32 alpha)
     }
     Vec3 pos = vec3_lerp(body->prev_pos, body->pos, alpha);
     Quat rot = quat_slerp(body->prev_rot, body->rot, alpha);
-    Vec3 local = vec3_sub(s_interact.place_pos, s_vehicle.cfg.com_offset);
+    Quat cargo_rot = item_cargo_rot(s_interact.hands.kind);
+    Vec3 local = vec3_sub(vec3_sub(s_interact.place_pos, s_vehicle.cfg.com_offset),
+                          quat_rotate_vec3(cargo_rot, item_mesh_center(s_interact.hands.kind)));
     Mat4 base = mat4_trs(pos, rot, v3(1.0f, 1.0f, 1.0f));
     Mat4 model = mat4_mul(base, mat4_trs(vec3_add(local, v3(0.0f, 0.02f, 0.0f)),
-                                         item_cargo_rot(s_interact.hands.kind),
-                                         v3(1.0f, 1.0f, 1.0f)));
+                                         cargo_rot, v3(1.0f, 1.0f, 1.0f)));
     r_draw_mesh(asset_mesh(item_mesh(s_interact.hands.kind)), model);
 }
 
@@ -509,7 +525,12 @@ static void draw_viewmodel(f32 alpha)
     Vec3 pos = vec3_add(s_camera.pos, vec3_add(vec3_scale(fwd, 0.62f), vec3_scale(right, 0.30f)));
     pos.y -= 0.34f;
     f32 scale = s_interact.hands.kind == ITEM_TIRE ? 0.45f : 0.85f;
+    if (antenna_variant_for_item(s_interact.hands.kind) >= 0) {
+        scale = 0.5f;
+    }
     Quat rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), -s_camera.yaw);
+    pos = vec3_sub(pos, vec3_scale(quat_rotate_vec3(rot, item_mesh_center(s_interact.hands.kind)),
+                                   scale));
     r_draw_mesh(asset_mesh(item_mesh(s_interact.hands.kind)),
                 mat4_trs(pos, rot, v3(scale, scale, scale)));
 }

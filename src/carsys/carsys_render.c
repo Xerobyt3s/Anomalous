@@ -174,8 +174,11 @@ void carsys_render(const struct CarSys* sys, const struct Vehicle* veh,
             if (!c->used) {
                 continue;
             }
-            Vec3 local = vec3_sub(c->pos, com);
-            Mat4 model = mat4_mul(base, mat4_trs(local, item_cargo_rot(c->item.kind), one));
+            Quat cargo_rot = item_cargo_rot(c->item.kind);
+            Vec3 local = vec3_sub(vec3_sub(c->pos, com),
+                                  quat_rotate_vec3(cargo_rot,
+                                                   item_mesh_center(c->item.kind)));
+            Mat4 model = mat4_mul(base, mat4_trs(local, cargo_rot, one));
             r_draw_mesh(asset_mesh(item_mesh(c->item.kind)), model);
         }
 
@@ -189,6 +192,13 @@ void carsys_render(const struct CarSys* sys, const struct Vehicle* veh,
                                                quat_identity(), one));
             r_draw_mesh(asset_mesh("part_key"), key);
         }
+
+        r_draw_mesh(asset_mesh("jack_coax"),
+                    mat4_mul(base, mat4_trs(vec3_sub(v3(0.35f, 0.515f, 0.36f), com),
+                                            quat_identity(), one)));
+        r_draw_mesh(asset_mesh("jack_bus"),
+                    mat4_mul(base, mat4_trs(vec3_sub(v3(0.32f, -0.02f, -0.75f), com),
+                                            quat_identity(), one)));
 
         if (sys->parts[PART_ANTENNA].installed) {
             static const char* ant_meshes[3] = { "antenna_whip", "antenna_std", "antenna_array" };

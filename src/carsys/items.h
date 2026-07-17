@@ -30,6 +30,7 @@ const char* item_mesh(ItemKind kind);
 f32         item_mass(ItemKind kind);
 Vec3        item_cargo_half(ItemKind kind);
 Quat        item_cargo_rot(ItemKind kind);
+Vec3        item_mesh_center(ItemKind kind);
 ItemKind    item_for_part(PartKind part);
 i32         antenna_variant_for_item(ItemKind kind);
 ItemKind    antenna_item_for_variant(i32 variant);

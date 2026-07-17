@@ -100,6 +100,9 @@ typedef struct Terminal {
     i32 link_anim_port;
     f32 link_anim_t;
     b32 link_request[2];
+    i32 cwd_drive;
+    i32 cwd_node;
+    i32 format_drive;
     b32 powered;
     b32 wants_off;
     b32 click_pending;

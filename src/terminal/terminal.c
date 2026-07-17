@@ -1,5 +1,6 @@
 #include "terminal/terminal.h"
 #include "terminal/comms.h"
+#include "terminal/fs.h"
 #include "core/log.h"
 #include "carsys/carsys.h"
 #include "vehicle/vehicle.h"
@@ -14,8 +15,8 @@
 #include <string.h>
 
 #define TERM_CPS 620.0f
-#define TERM_PROMPT "A:\\>"
 #define TERM_PERSIST_DECAY 0.80f
+#define TERM_PROMPT_MAX (FS_PATH_MAX + 2)
 
 #define COMMS_CONNECT_CPS 46.0f
 #define COMMS_CONNECT_HOLD 0.7f
@@ -868,6 +869,7 @@ static i32 s_lidar_tier;
 static WireDraw s_wires[12];
 static u32 s_wire_count;
 static Comms s_comms;
+static Fs s_fs;
 
 static void comms_enter_phase(Terminal* term, CommsPhase phase);
 static void comms_key_char(Terminal* term, char c);
@@ -909,8 +911,10 @@ b32 terminal_init(Terminal* term)
     Terminal zero = {0};
     *term = zero;
     term->history_pos = -1;
+    term->format_drive = -1;
 
     comms_init(&s_comms);
+    fs_init(&s_fs);
     s_gpu.atlas = font_create_atlas();
 
     glCreateTextures(GL_TEXTURE_2D, 1, &s_gpu.color_tex);
@@ -1038,11 +1042,21 @@ static void term_reveal(Terminal* term, f32 dt)
 
 static void term_run_command(Terminal* term, const char* cmd);
 
+static void term_prompt(const Terminal* term, char* buf, u32 size)
+{
+    FsRef cwd = { term->cwd_drive, term->cwd_node };
+    char path[FS_PATH_MAX];
+    fs_path_string(&s_fs, cwd, path, sizeof(path));
+    snprintf(buf, size, "%s>", path);
+}
+
 static void term_submit(Terminal* term)
 {
     char cmd[TERM_INPUT_MAX + 1];
+    char prompt[TERM_PROMPT_MAX];
+    term_prompt(term, prompt, sizeof(prompt));
     snprintf(cmd, sizeof(cmd), "%s", term->input);
-    term_printf(term, "%s%s\n", TERM_PROMPT, cmd);
+    term_printf(term, "%s%s\n", prompt, cmd);
     if (term->input_len > 0) {
         snprintf(term->history[term->history_count % TERM_HISTORY], TERM_INPUT_MAX + 1,
                  "%s", term->input);
@@ -1072,42 +1086,334 @@ static b32 cmd_is(const char* cmd, const char* name)
     }
 }
 
-static void term_run_command(Terminal* term, const char* cmd)
+static i32 term_tokenize(const char* cmd, char tokens[3][TERM_INPUT_MAX + 1])
 {
-    if (cmd[0] == 0) {
+    i32 n = 0;
+    const char* p = cmd;
+    while (*p && n < 3) {
+        while (*p == ' ') {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+        u32 len = 0;
+        while (*p && *p != ' ') {
+            if (len < TERM_INPUT_MAX) {
+                tokens[n][len++] = *p;
+            }
+            p++;
+        }
+        tokens[n][len] = 0;
+        n++;
+    }
+    return n;
+}
+
+static b32 shell_check_path(Terminal* term, const char* path, FsRef* out)
+{
+    i32 pd = fs_path_drive(path);
+    if (pd == -2) {
+        term_print(term, "INVALID DRIVE SPECIFICATION\n");
+        return 0;
+    }
+    if (pd >= 0 && !fs_drive_mounted(&s_fs, pd)) {
+        term_printf(term, "DRIVE %c: NOT READY\n", 'A' + pd);
+        return 0;
+    }
+    FsRef cwd = { term->cwd_drive, term->cwd_node };
+    *out = fs_resolve(&s_fs, cwd, path);
+    return 1;
+}
+
+static void path_split(const char* path, char* head, u32 head_size, char* tail, u32 tail_size)
+{
+    const char* cut = 0;
+    for (const char* p = path; *p; p++) {
+        if (*p == '\\' || *p == '/') {
+            cut = p;
+        }
+    }
+    if (!cut && path[0] && path[1] == ':') {
+        cut = path + 1;
+    }
+    if (cut) {
+        u32 hlen = (u32)(cut - path) + 1;
+        if (hlen >= head_size) {
+            hlen = head_size - 1;
+        }
+        memcpy(head, path, hlen);
+        head[hlen] = 0;
+        snprintf(tail, tail_size, "%s", cut + 1);
+    } else {
+        head[0] = 0;
+        snprintf(tail, tail_size, "%s", path);
+    }
+}
+
+static void shell_dir(Terminal* term, const char* path)
+{
+    FsRef dir;
+    if (path[0]) {
+        if (!shell_check_path(term, path, &dir)) {
+            return;
+        }
+    } else {
+        dir.drive = term->cwd_drive;
+        dir.node = term->cwd_node;
+    }
+    if (!fs_drive_mounted(&s_fs, dir.drive)) {
+        term_printf(term, "DRIVE %c: NOT READY\n", 'A' + dir.drive);
         return;
     }
-    if (cmd_is(cmd, "HELP")) {
-        term_print(term,
-                   "DR-OS 2.2 COMMANDS:\n"
-                   "  STATUS   vehicle diagnostics\n"
-                   "  MAP      terrain survey\n"
-                   "  LINK     port link manager\n"
-                   "  COMMS    relaynet mailbox\n"
-                   "  MISSION  current objective\n"
-                   "  CLS      clear screen\n"
-                   "  VER      system version\n"
-                   "  OFF      power down\n");
-    } else if (cmd_is(cmd, "LINK")) {
-        term->mode = TERM_LINK;
-        term->link_anim_port = -1;
-        term->link_anim_t = 0.0f;
-    } else if (cmd_is(cmd, "COMMS") || cmd_is(cmd, "MAIL")) {
-        term->mode = TERM_COMMS;
-        term->comms_open = 0;
-        term->comms_page = 0;
-        term->comms_status[0] = 0;
-        term->comms_status_until = 0.0f;
-        term->comms_mat = 10.0f;
-        comms_enter_phase(term, COMMS_PHASE_CONNECT);
-    } else if (cmd_is(cmd, "STATUS")) {
+    if (!fs_ref_valid(&s_fs, dir) || !fs_node(&s_fs, dir)->is_dir) {
+        term_print(term, "PATH NOT FOUND\n");
+        return;
+    }
+    const FsDrive* d = &s_fs.drives[dir.drive];
+    char pathstr[FS_PATH_MAX];
+    fs_path_string(&s_fs, dir, pathstr, sizeof(pathstr));
+    term_printf(term, " VOLUME IN DRIVE %c IS %s\n", 'A' + dir.drive, d->label);
+    term_printf(term, " DIRECTORY OF %s\n\n", pathstr);
+    u32 files = 0;
+    u32 bytes = 0;
+    for (i32 pass = 0; pass < 2; pass++) {
+        for (i32 i = 1; i < FS_DRIVE_NODES; i++) {
+            const FsNode* n = &d->nodes[i];
+            if (!n->used || n->parent != dir.node || (pass == 0) != (n->is_dir != 0)) {
+                continue;
+            }
+            if (n->is_dir) {
+                term_printf(term, " %-12s   <DIR>\n", n->name);
+            } else {
+                char base[9] = "";
+                char ext[4] = "";
+                const char* dot = strrchr(n->name, '.');
+                if (dot) {
+                    u32 blen = (u32)(dot - n->name);
+                    memcpy(base, n->name, blen > 8 ? 8 : blen);
+                    base[blen > 8 ? 8 : blen] = 0;
+                    snprintf(ext, sizeof(ext), "%s", dot + 1);
+                } else {
+                    snprintf(base, sizeof(base), "%s", n->name);
+                }
+                term_printf(term, " %-8s %-3s %10u\n", base, ext, n->size);
+                files++;
+                bytes += n->size;
+            }
+        }
+    }
+    term_printf(term, "%9u FILE(S) %10u BYTES\n", files, bytes);
+    term_printf(term, "%20u BYTES FREE\n", fs_free_bytes(&s_fs, dir.drive));
+}
+
+static void shell_cd(Terminal* term, const char* path)
+{
+    if (!path[0]) {
+        char pathstr[FS_PATH_MAX];
+        FsRef cwd = { term->cwd_drive, term->cwd_node };
+        fs_path_string(&s_fs, cwd, pathstr, sizeof(pathstr));
+        term_printf(term, "%s\n", pathstr);
+        return;
+    }
+    FsRef dir;
+    if (!shell_check_path(term, path, &dir)) {
+        return;
+    }
+    if (!fs_ref_valid(&s_fs, dir) || !fs_node(&s_fs, dir)->is_dir) {
+        term_print(term, "INVALID DIRECTORY\n");
+        return;
+    }
+    term->cwd_drive = dir.drive;
+    term->cwd_node = dir.node;
+}
+
+static void shell_type_binary(Terminal* term, const char* name)
+{
+    u32 h = 2166136261u;
+    for (const char* c = name; *c; c++) {
+        h = (h ^ (u32)(u8)*c) * 16777619u;
+    }
+    char line[60];
+    term_print(term, "MZ");
+    for (i32 r = 0; r < 3; r++) {
+        for (i32 i = 0; i < 58; i++) {
+            h = h * 1664525u + 1013904223u;
+            line[i] = (char)(33 + (h >> 20) % 92);
+        }
+        line[58] = 0;
+        term_printf(term, "%s\n", line);
+    }
+}
+
+static void shell_type(Terminal* term, const char* path)
+{
+    FsRef ref;
+    if (!shell_check_path(term, path, &ref)) {
+        return;
+    }
+    if (!fs_ref_valid(&s_fs, ref)) {
+        term_print(term, "FILE NOT FOUND\n");
+        return;
+    }
+    const FsNode* n = fs_node(&s_fs, ref);
+    if (n->is_dir) {
+        term_print(term, "ACCESS DENIED\n");
+        return;
+    }
+    const char* text = fs_text(&s_fs, ref);
+    if (!text) {
+        shell_type_binary(term, n->name);
+        return;
+    }
+    term_print(term, text);
+    term_print(term, "\n");
+}
+
+static void shell_del(Terminal* term, const char* path)
+{
+    FsRef ref;
+    if (!shell_check_path(term, path, &ref)) {
+        return;
+    }
+    if (!fs_ref_valid(&s_fs, ref)) {
+        term_print(term, "FILE NOT FOUND\n");
+        return;
+    }
+    FsError err = fs_delete(&s_fs, ref);
+    if (err == FS_ERR_IS_DIR) {
+        term_print(term, "CANNOT DELETE A DIRECTORY\n");
+    }
+}
+
+static void shell_copy(Terminal* term, const char* srcp, const char* dstp)
+{
+    FsRef src;
+    if (!shell_check_path(term, srcp, &src)) {
+        return;
+    }
+    if (!fs_ref_valid(&s_fs, src)) {
+        term_print(term, "FILE NOT FOUND\n");
+        return;
+    }
+    if (fs_node(&s_fs, src)->is_dir) {
+        term_print(term, "CANNOT COPY A DIRECTORY\n");
+        return;
+    }
+    FsRef dst;
+    if (!shell_check_path(term, dstp, &dst)) {
+        return;
+    }
+    FsRef dst_dir;
+    char dst_name[TERM_INPUT_MAX + 1];
+    if (fs_ref_valid(&s_fs, dst) && fs_node(&s_fs, dst)->is_dir) {
+        dst_dir = dst;
+        snprintf(dst_name, sizeof(dst_name), "%s", fs_node(&s_fs, src)->name);
+    } else {
+        char head[TERM_INPUT_MAX + 1];
+        path_split(dstp, head, sizeof(head), dst_name, sizeof(dst_name));
+        if (head[0]) {
+            if (!shell_check_path(term, head, &dst_dir)) {
+                return;
+            }
+            if (!fs_ref_valid(&s_fs, dst_dir) || !fs_node(&s_fs, dst_dir)->is_dir) {
+                term_print(term, "PATH NOT FOUND\n");
+                return;
+            }
+        } else {
+            dst_dir.drive = term->cwd_drive;
+            dst_dir.node = term->cwd_node;
+        }
+    }
+    FsError err = fs_copy(&s_fs, src, dst_dir, dst_name);
+    switch (err) {
+    case FS_OK:
+        term_print(term, "        1 FILE(S) COPIED\n");
+        break;
+    case FS_ERR_NO_SPACE:
+        term_print(term, "INSUFFICIENT DISK SPACE\n        0 FILE(S) COPIED\n");
+        break;
+    case FS_ERR_SELF:
+        term_print(term, "FILE CANNOT BE COPIED ONTO ITSELF\n");
+        break;
+    case FS_ERR_BAD_NAME:
+        term_print(term, "BAD FILE NAME\n");
+        break;
+    case FS_ERR_IS_DIR:
+        term_print(term, "ACCESS DENIED\n");
+        break;
+    case FS_ERR_FULL:
+        term_print(term, "DIRECTORY FULL\n");
+        break;
+    default:
+        term_print(term, "COPY FAILED\n");
+        break;
+    }
+}
+
+static void shell_chkdsk(Terminal* term, const char* arg)
+{
+    i32 drive = term->cwd_drive;
+    if (arg[0]) {
+        drive = fs_path_drive(arg);
+        if (drive < 0 || arg[2] != 0) {
+            term_print(term, "INVALID DRIVE SPECIFICATION\n");
+            return;
+        }
+    }
+    if (!fs_drive_mounted(&s_fs, drive)) {
+        term_printf(term, "DRIVE %c: NOT READY\n", 'A' + drive);
+        return;
+    }
+    const FsDrive* d = &s_fs.drives[drive];
+    u32 files = 0;
+    u32 dirs = 0;
+    for (i32 i = 1; i < FS_DRIVE_NODES; i++) {
+        if (d->nodes[i].used) {
+            if (d->nodes[i].is_dir) {
+                dirs++;
+            } else {
+                files++;
+            }
+        }
+    }
+    u32 used = fs_used_bytes(&s_fs, drive);
+    term_printf(term, "VOLUME %s   DRIVE %c:\n\n", d->label, 'A' + drive);
+    term_printf(term, "%10u BYTES TOTAL DISK SPACE\n", d->capacity);
+    term_printf(term, "%10u BYTES IN %u FILE(S), %u DIRECTORY(S)\n", used, files, dirs);
+    term_printf(term, "%10u BYTES AVAILABLE ON DISK\n", fs_free_bytes(&s_fs, drive));
+    term_print(term, "\n    655360 BYTES TOTAL MEMORY\n    598016 BYTES FREE\n");
+}
+
+static void shell_format(Terminal* term, const char* arg)
+{
+    i32 drive = fs_path_drive(arg);
+    if (drive < 0 || arg[2] != 0) {
+        term_print(term, "INVALID DRIVE SPECIFICATION\n");
+        return;
+    }
+    if (!fs_drive_mounted(&s_fs, drive)) {
+        term_printf(term, "DRIVE %c: NOT READY\n", 'A' + drive);
+        return;
+    }
+    term->format_drive = drive;
+    term_printf(term, "WARNING: ALL DATA ON %sDRIVE %c: WILL BE LOST!\n",
+                drive == FS_DRIVE_A ? "NON-REMOVABLE " : "", 'A' + drive);
+    term_print(term, "PROCEED WITH FORMAT (Y/N)?\n");
+}
+
+static void term_launch_exe(Terminal* term, i32 exe)
+{
+    switch (exe) {
+    case FS_EXE_STATUS:
         if (term->bus_state != 2) {
             term_print(term, term->bus_state == 1 ? "BUS PORT NOT INITIALIZED. RUN LINK.\n"
                                                   : "NO VEHICLE BUS CABLE.\n");
         } else {
             term->mode = TERM_STATUS;
         }
-    } else if (cmd_is(cmd, "MAP") || cmd_is(cmd, "SURVEY")) {
+        break;
+    case FS_EXE_MAP:
         if (term->coax_state != 2 || term->antenna_tier < 0) {
             term_print(term, term->coax_state == 1 ? "COAX PORT NOT INITIALIZED. RUN LINK.\n"
                                                    : "NO ANTENNA FEED.\n");
@@ -1118,19 +1424,149 @@ static void term_run_command(Terminal* term, const char* cmd)
             term->map_zoom = 1.0f;
             s_lidar_count = 0;
         }
-    } else if (cmd_is(cmd, "MISSION")) {
+        break;
+    case FS_EXE_LINK:
+        term->mode = TERM_LINK;
+        term->link_anim_port = -1;
+        term->link_anim_t = 0.0f;
+        break;
+    case FS_EXE_COMMS:
+        term->mode = TERM_COMMS;
+        term->comms_open = 0;
+        term->comms_page = 0;
+        term->comms_status[0] = 0;
+        term->comms_status_until = 0.0f;
+        term->comms_mat = 10.0f;
+        comms_enter_phase(term, COMMS_PHASE_CONNECT);
+        break;
+    default:
+        term_print(term, "PROGRAM DAMAGED. CANNOT EXECUTE.\n");
+        break;
+    }
+}
+
+static b32 term_try_exe(Terminal* term, const char* name)
+{
+    char full[TERM_INPUT_MAX + 8];
+    u32 len = (u32)strlen(name);
+    if (len > 4 && strcmp(name + len - 4, ".EXE") == 0) {
+        snprintf(full, sizeof(full), "%s", name);
+    } else {
+        snprintf(full, sizeof(full), "%s.EXE", name);
+    }
+    FsRef cwd = { term->cwd_drive, term->cwd_node };
+    FsRef ref = fs_resolve(&s_fs, cwd, full);
+    if (!fs_ref_valid(&s_fs, ref) || fs_node(&s_fs, ref)->is_dir) {
+        ref = fs_resolve(&s_fs, fs_root(FS_DRIVE_A), full);
+    }
+    if (!fs_ref_valid(&s_fs, ref) || fs_node(&s_fs, ref)->is_dir) {
+        return 0;
+    }
+    term_launch_exe(term, fs_node(&s_fs, ref)->exe);
+    return 1;
+}
+
+static void term_run_command(Terminal* term, const char* cmd)
+{
+    if (term->format_drive >= 0) {
+        i32 drive = term->format_drive;
+        term->format_drive = -1;
+        if (cmd[0] == 'Y' && cmd[1] == 0) {
+            fs_format(&s_fs, drive, 0);
+            if (term->cwd_drive == drive) {
+                term->cwd_node = 0;
+            }
+            term_printf(term, "FORMAT COMPLETE.\n%u BYTES FREE\n",
+                        fs_free_bytes(&s_fs, drive));
+        } else {
+            term_print(term, "FORMAT ABORTED.\n");
+        }
+        return;
+    }
+    if (!fs_drive_mounted(&s_fs, term->cwd_drive)) {
+        term->cwd_drive = FS_DRIVE_A;
+        term->cwd_node = 0;
+    }
+    char tok[3][TERM_INPUT_MAX + 1];
+    i32 ntok = term_tokenize(cmd, tok);
+    if (ntok == 0) {
+        return;
+    }
+    if (strlen(tok[0]) == 2 && tok[0][1] == ':' && ntok == 1) {
+        i32 drive = fs_path_drive(tok[0]);
+        if (drive == -2) {
+            term_print(term, "INVALID DRIVE SPECIFICATION\n");
+        } else if (!fs_drive_mounted(&s_fs, drive)) {
+            term_printf(term, "DRIVE %c: NOT READY\n", 'A' + drive);
+        } else {
+            term->cwd_drive = drive;
+            term->cwd_node = 0;
+        }
+        return;
+    }
+    if (cmd_is(tok[0], "HELP")) {
+        term_print(term,
+                   "DR-OS 2.2 SHELL COMMANDS:\n"
+                   "  LS [PATH]       list directory\n"
+                   "  CD PATH         change directory\n"
+                   "  TYPE FILE       display file contents\n"
+                   "  COPY SRC DST    copy file\n"
+                   "  DEL FILE        delete file\n"
+                   "  RUN FILE        run program (or just type its name)\n"
+                   "  CHKDSK [X:]     disk space report\n"
+                   "  FORMAT X:       erase a drive\n"
+                   "  MISSION         current objective\n"
+                   "  CLS / VER / OFF\n"
+                   "PROGRAMS ARE .EXE FILES ON DISK. USE LS TO SEE THEM.\n");
+    } else if (cmd_is(tok[0], "LS")) {
+        shell_dir(term, ntok > 1 ? tok[1] : "");
+    } else if (cmd_is(tok[0], "CD") || cmd_is(tok[0], "CHDIR")) {
+        shell_cd(term, ntok > 1 ? tok[1] : "");
+    } else if (cmd_is(tok[0], "TYPE")) {
+        if (ntok < 2) {
+            term_print(term, "SYNTAX: TYPE FILE\n");
+        } else {
+            shell_type(term, tok[1]);
+        }
+    } else if (cmd_is(tok[0], "COPY")) {
+        if (ntok < 3) {
+            term_print(term, "SYNTAX: COPY SRC DST\n");
+        } else {
+            shell_copy(term, tok[1], tok[2]);
+        }
+    } else if (cmd_is(tok[0], "DEL") || cmd_is(tok[0], "ERASE")) {
+        if (ntok < 2) {
+            term_print(term, "SYNTAX: DEL FILE\n");
+        } else {
+            shell_del(term, tok[1]);
+        }
+    } else if (cmd_is(tok[0], "CHKDSK")) {
+        shell_chkdsk(term, ntok > 1 ? tok[1] : "");
+    } else if (cmd_is(tok[0], "FORMAT")) {
+        if (ntok < 2) {
+            term_print(term, "SYNTAX: FORMAT X:\n");
+        } else {
+            shell_format(term, tok[1]);
+        }
+    } else if (cmd_is(tok[0], "RUN")) {
+        if (ntok < 2) {
+            term_print(term, "SYNTAX: RUN FILE\n");
+        } else if (!term_try_exe(term, tok[1])) {
+            term_print(term, "FILE NOT FOUND\n");
+        }
+    } else if (cmd_is(tok[0], "MISSION")) {
         term->mode_timer = -1.0f;
-    } else if (cmd_is(cmd, "CLS")) {
+    } else if (cmd_is(tok[0], "CLS")) {
         term->line_count = 0;
         term->line_head = 0;
         term->out_line[0] = 0;
         term->out_len = 0;
-    } else if (cmd_is(cmd, "VER")) {
+    } else if (cmd_is(tok[0], "VER")) {
         term_print(term, "DR-OS 2.2 (REDLINE SYSTEMS 1988)\n");
-    } else if (cmd_is(cmd, "OFF")) {
+    } else if (cmd_is(tok[0], "OFF")) {
         term_print(term, "SYSTEM HALTED.\n");
         term->wants_off = 1;
-    } else {
+    } else if (!term_try_exe(term, tok[0])) {
         term_print(term, "Bad command or file name\n");
     }
 }
@@ -1248,6 +1684,7 @@ void terminal_power(Terminal* term, b32 on)
     *term = zero;
     term->powered = on;
     term->history_pos = -1;
+    term->format_drive = -1;
     term->map_zoom = 1.0f;
     if (on) {
         term->mode = TERM_BOOT;
@@ -1312,10 +1749,14 @@ static void draw_boot(Terminal* term)
         grid_text(term, 10, 6, TC_GREEN, "SENSOR LOOM ........ OK");
     }
     if (t > 2.9f) {
-        grid_text(term, 11, 6, TC_AMBER, "UPLINK ............. NO CARRIER");
+        grid_text(term, 11, 6, TC_GREEN, "DRIVE A: ........... 354K FIXED, %uK FREE",
+                  fs_free_bytes(&s_fs, FS_DRIVE_A) / 1024);
     }
     if (t > 3.5f) {
-        grid_text(term, 13, 6, TC_BRIGHT, "READY. TYPE HELP FOR COMMANDS.");
+        grid_text(term, 12, 6, TC_AMBER, "UPLINK ............. NO CARRIER");
+    }
+    if (t > 4.1f) {
+        grid_text(term, 14, 6, TC_BRIGHT, "READY. TYPE HELP FOR COMMANDS.");
     }
 }
 
@@ -1336,9 +1777,11 @@ static void draw_shell(Terminal* term)
         }
         grid_text(term, row, 0, TC_GREEN, "%s", text);
     }
-    grid_text(term, row, 0, TC_BRIGHT, "%s%s", TERM_PROMPT, term->input);
+    char prompt[TERM_PROMPT_MAX];
+    term_prompt(term, prompt, sizeof(prompt));
+    grid_text(term, row, 0, TC_BRIGHT, "%s%s", prompt, term->input);
     if (term_reveal_idle(term) && fmodf(term->blink, 1.06f) < 0.53f) {
-        i32 ccol = (i32)strlen(TERM_PROMPT) + (i32)term->input_cursor;
+        i32 ccol = (i32)strlen(prompt) + (i32)term->input_cursor;
         if (ccol > TERM_COLS - 1) {
             ccol = TERM_COLS - 1;
         }
@@ -2102,7 +2545,7 @@ void terminal_update(Terminal* term, const TermView* view, f32 dt)
         term->blink -= 100.0f;
     }
 
-    if (term->mode == TERM_BOOT && term->mode_timer > 4.2f) {
+    if (term->mode == TERM_BOOT && term->mode_timer > 4.8f) {
         term->mode = TERM_SHELL;
         term->mode_timer = 0.0f;
     }

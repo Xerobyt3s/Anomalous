@@ -460,9 +460,14 @@ static void resolve_pickups(Candidate* best, const Interact* it, CarSys* sys, Wo
                 }
             }
         }
+        ItemKind pick_kind = (ItemKind)entity->aux_kind;
         Sphere sphere;
-        sphere.center = vec3_add(entity->pos, v3(0.0f, 0.22f, 0.0f));
-        sphere.radius = 0.45f * entity->scale;
+        sphere.center = vec3_add(vec3_add(entity->pos,
+                                          quat_rotate_vec3(entity->rot,
+                                                           item_mesh_center(pick_kind))),
+                                 v3(0.0f, 0.22f, 0.0f));
+        sphere.radius = antenna_variant_for_item(pick_kind) >= 0 ? 0.60f
+                        : 0.45f * entity->scale;
         f32 t;
         if (!ray_vs_sphere(view_ray, sphere, INTERACT_RANGE, &t)) {
             continue;
@@ -708,8 +713,9 @@ Handle interact_spawn_pickup(struct World* world, struct PhysWorld* phys, Item i
                              Vec3 pos, f32 yaw, Vec3 vel)
 {
     Quat rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), yaw);
-    EntityHandle handle = world_spawn(world, ENTITY_PART_PICKUP, pos,
-                                      quat_mul(rot, item_cargo_rot(item.kind)), 1.0f,
+    Quat mesh_rot = quat_mul(rot, item_cargo_rot(item.kind));
+    Vec3 mesh_pos = vec3_sub(pos, quat_rotate_vec3(mesh_rot, item_mesh_center(item.kind)));
+    EntityHandle handle = world_spawn(world, ENTITY_PART_PICKUP, mesh_pos, mesh_rot, 1.0f,
                                       item_mesh(item.kind), 0);
     Entity* entity = world_entity(world, handle);
     if (!entity) {
