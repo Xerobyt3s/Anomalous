@@ -66,6 +66,19 @@ typedef i64 GLintptr;
 #define GL_COMPILE_STATUS 0x8B81
 #define GL_LINK_STATUS 0x8B82
 #define GL_DYNAMIC_STORAGE_BIT 0x0100
+#define GL_TRIANGLE_STRIP 0x0005
+#define GL_POINTS 0x0000
+#define GL_COLOR 0x1800
+#define GL_DEPTH 0x1801
+#define GL_FRAMEBUFFER 0x8D40
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_DEPTH_ATTACHMENT 0x8D00
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_DEPTH_COMPONENT24 0x81A6
+#define GL_PROGRAM_POINT_SIZE 0x8642
+#define GL_FRONT_AND_BACK 0x0408
+#define GL_LINE 0x1B01
+#define GL_FILL 0x1B02
 
 typedef void (GL_APIENTRY *GlDebugCallback)(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* user_param);
 
@@ -121,7 +134,18 @@ typedef void (GL_APIENTRY *GlDebugCallback)(GLenum source, GLenum type, GLuint i
     GLFN(void, glVertexArrayElementBuffer, (GLuint vao, GLuint buffer)) \
     GLFN(void, glProgramUniformMatrix4fv, (GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLfloat* value)) \
     GLFN(void, glProgramUniform4f, (GLuint program, GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3)) \
-    GLFN(void, glGenerateTextureMipmap, (GLuint texture))
+    GLFN(void, glProgramUniform1f, (GLuint program, GLint location, GLfloat v0)) \
+    GLFN(void, glGenerateTextureMipmap, (GLuint texture)) \
+    GLFN(void, glProgramUniform3f, (GLuint program, GLint location, GLfloat v0, GLfloat v1, GLfloat v2)) \
+    GLFN(void, glCreateFramebuffers, (GLsizei n, GLuint* framebuffers)) \
+    GLFN(void, glDeleteFramebuffers, (GLsizei n, const GLuint* framebuffers)) \
+    GLFN(void, glNamedFramebufferTexture, (GLuint framebuffer, GLenum attachment, GLuint texture, GLint level)) \
+    GLFN(GLenum, glCheckNamedFramebufferStatus, (GLuint framebuffer, GLenum target)) \
+    GLFN(void, glClearNamedFramebufferfv, (GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLfloat* value)) \
+    GLFN(void, glBindFramebuffer, (GLenum target, GLuint framebuffer)) \
+    GLFN(void, glVertexArrayBindingDivisor, (GLuint vao, GLuint binding_index, GLuint divisor)) \
+    GLFN(void, glDrawArraysInstanced, (GLenum mode, GLint first, GLsizei count, GLsizei instance_count)) \
+    GLFN(void, glPolygonMode, (GLenum face, GLenum mode))
 
 #define GLFN(ret, name, params) typedef ret (GL_APIENTRY *PFN_##name) params; extern PFN_##name name;
 GL_FUNCTION_LIST

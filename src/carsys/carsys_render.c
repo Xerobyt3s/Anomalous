@@ -106,7 +106,7 @@ void carsys_spawn_sparks(Vec3 pos, u32 count)
 }
 
 void carsys_render(const struct CarSys* sys, const struct Vehicle* veh,
-                   struct PhysWorld* world, f32 alpha, f32 dt)
+                   struct PhysWorld* world, f32 alpha, f32 dt, u32 screen_texture)
 {
     RigidBody* body = phys_body(world, veh->body);
     if (!body || !veh->cfg.body_mesh[0]) {
@@ -188,6 +188,32 @@ void carsys_render(const struct CarSys* sys, const struct Vehicle* veh,
             Mat4 key = mat4_mul(base, mat4_trs(vec3_sub(v3(-0.22f, 0.05f, -0.25f), com),
                                                quat_identity(), one));
             r_draw_mesh(asset_mesh("part_key"), key);
+        }
+
+        if (sys->parts[PART_ANTENNA].installed) {
+            static const char* ant_meshes[3] = { "antenna_whip", "antenna_std", "antenna_array" };
+            i32 variant = sys->parts[PART_ANTENNA].variant;
+            if (variant < 0 || variant > 2) {
+                variant = 1;
+            }
+            Mat4 ant = mat4_mul(base, mat4_trs(vec3_sub(part_def(PART_ANTENNA)->socket_pos, com),
+                                               quat_identity(), one));
+            r_draw_mesh(asset_mesh(ant_meshes[variant]), ant);
+        }
+
+        if (sys->parts[PART_COMPUTER].installed) {
+            const PartDef* cdef = part_def(PART_COMPUTER);
+            Mat4 term = mat4_mul(base, mat4_trs(vec3_sub(cdef->socket_pos, com),
+                                                part_computer_rest_rot(), one));
+            r_draw_mesh(asset_mesh("part_computer"), term);
+            if (screen_texture) {
+                Mat4 screen = mat4_mul(term, mat4_trs(v3(0.0f, 0.047f, 0.170f),
+                                                      quat_identity(),
+                                                      v3(0.304f, 0.19f, 1.0f)));
+                r_draw_lit_quad(screen, screen_texture);
+            } else if (sys->computer_on) {
+                r_draw_mesh(asset_mesh("computer_glow"), term);
+            }
         }
 
         f32 speed_norm = f_clamp01(f_abs(vehicle_forward_speed((Vehicle*)veh, world)) * 3.6f / 200.0f);

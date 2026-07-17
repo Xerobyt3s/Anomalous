@@ -65,6 +65,31 @@ static void glfw_scroll_callback(GLFWwindow* window, double dx, double dy)
     s_input.scroll_dy += (f32)dy;
 }
 
+#define CHAR_QUEUE_MAX 64
+static u32 s_char_queue[CHAR_QUEUE_MAX];
+static u32 s_char_head;
+static u32 s_char_tail;
+
+static void glfw_char_callback(GLFWwindow* window, unsigned int codepoint)
+{
+    (void)window;
+    u32 next = (s_char_head + 1) % CHAR_QUEUE_MAX;
+    if (next != s_char_tail) {
+        s_char_queue[s_char_head] = codepoint;
+        s_char_head = next;
+    }
+}
+
+u32 platform_next_char(void)
+{
+    if (s_char_tail == s_char_head) {
+        return 0;
+    }
+    u32 c = s_char_queue[s_char_tail];
+    s_char_tail = (s_char_tail + 1) % CHAR_QUEUE_MAX;
+    return c;
+}
+
 static void GL_APIENTRY gl_debug_callback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* user_param)
 {
     (void)source; (void)type; (void)id; (void)length; (void)user_param;
@@ -105,6 +130,7 @@ b32 platform_init(const char* title, i32 width, i32 height)
     glfwSetMouseButtonCallback(s_window, glfw_mouse_button_callback);
     glfwSetCursorPosCallback(s_window, glfw_cursor_pos_callback);
     glfwSetScrollCallback(s_window, glfw_scroll_callback);
+    glfwSetCharCallback(s_window, glfw_char_callback);
 
     if (!gl_loader_init()) {
         log_error("platform: failed to load required OpenGL functions");

@@ -27,6 +27,8 @@ typedef enum InteractAction {
     ACTION_CRANK,
     ACTION_ENGINE_OFF,
     ACTION_FUEL_CAP,
+    ACTION_COMPUTER,
+    ACTION_TERMINAL_USE,
     ACTION_REMOVE_PART,
     ACTION_INSTALL_PART,
     ACTION_TOGGLE_HOOD,
@@ -36,6 +38,9 @@ typedef enum InteractAction {
     ACTION_PICKUP,
     ACTION_REFUEL,
     ACTION_OIL_FILL,
+    ACTION_CABLE_GRAB,
+    ACTION_CABLE_PLUG,
+    ACTION_CABLE_UNPLUG,
 } InteractAction;
 
 typedef struct Interact {
@@ -53,6 +58,8 @@ typedef struct Interact {
     f32 hold_progress;
     b32 action_is_hold;
     b32 crank_latch;
+    i32 target_cable;
+    i32 cable_drag;
     char prompt[96];
 } Interact;
 

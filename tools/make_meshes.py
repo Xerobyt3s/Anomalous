@@ -749,6 +749,28 @@ def make_excel_extras():
     make_double_sided(b)
     b.write(os.path.join(MESH_DIR, "part_key.amsh"))
 
+    b = MeshBuilder()
+    b.begin_material("beige")
+    b.box((0.0, 0.01, -0.03), (0.17, 0.135, 0.145))
+    b.box((0.0, -0.135, 0.0), (0.15, 0.012, 0.17))
+    b.box((0.0, -0.095, 0.135), (0.14, 0.028, 0.062))
+    b.begin_material("car_trim")
+    b.box((0.0, 0.035, 0.118), (0.135, 0.095, 0.006))
+    b.box((0.0, -0.10, 0.14), (0.12, 0.008, 0.045))
+    b.box((0.0, 0.01, -0.178), (0.14, 0.10, 0.004))
+    b.begin_material("car_signal")
+    b.box((0.052, -0.015, -0.187), (0.016, 0.016, 0.011))
+    b.begin_material("alloy")
+    b.box((-0.052, -0.015, -0.187), (0.016, 0.016, 0.011))
+    b.vertices = [(tuple(c * 1.35 for c in p), n, uv) for p, n, uv in b.vertices]
+    b.write(os.path.join(MESH_DIR, "part_computer.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("crt")
+    b.box((0.0, 0.035, 0.121), (0.115, 0.078, 0.006))
+    b.vertices = [(tuple(c * 1.35 for c in p), n, uv) for p, n, uv in b.vertices]
+    b.write(os.path.join(MESH_DIR, "computer_glow.amsh"))
+
 
 def make_part_meshes():
     b = MeshBuilder()
@@ -807,6 +829,54 @@ def make_part_meshes():
     b.write(os.path.join(MESH_DIR, "excel_lever.amsh"))
 
 
+def make_antenna_meshes():
+    b = MeshBuilder()
+    b.begin_material("car_trim")
+    b.box((0.0, 0.015, 0.0), (0.045, 0.015, 0.045))
+    b.begin_material("alloy")
+    beam(b, (0.0, 0.03, 0.0), (0.0, 0.60, 0.10), 0.008, 0.008)
+    b.box((0.0, 0.615, 0.103), (0.014, 0.014, 0.014))
+    b.write(os.path.join(MESH_DIR, "antenna_whip.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("car_trim")
+    b.box((0.0, 0.02, 0.0), (0.06, 0.02, 0.06))
+    add_cylinder(b, (0.0, 0.04, 0.0), 0.028, 0.10, 8)
+    b.begin_material("alloy")
+    beam(b, (0.0, 0.14, 0.0), (0.0, 0.70, 0.06), 0.010, 0.010)
+    beam(b, (-0.10, 0.42, 0.02), (0.10, 0.42, 0.02), 0.006, 0.006)
+    beam(b, (-0.08, 0.54, 0.035), (0.08, 0.54, 0.035), 0.006, 0.006)
+    b.begin_material("car_signal")
+    b.box((0.0, 0.72, 0.062), (0.018, 0.018, 0.018))
+    b.write(os.path.join(MESH_DIR, "antenna_std.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("car_trim")
+    b.box((0.0, 0.03, 0.0), (0.16, 0.03, 0.16))
+    b.box((0.0, 0.13, 0.0), (0.12, 0.07, 0.10))
+    b.begin_material("alloy")
+    beam(b, (-0.10, 0.20, -0.08), (-0.13, 0.82, -0.14), 0.008, 0.008)
+    beam(b, (0.10, 0.20, -0.08), (0.13, 0.78, -0.02), 0.008, 0.008)
+    beam(b, (0.0, 0.20, 0.08), (0.0, 0.95, 0.13), 0.011, 0.011)
+    beam(b, (-0.06, 0.60, 0.10), (0.06, 0.60, 0.10), 0.006, 0.006)
+    beam(b, (-0.09, 0.75, 0.115), (0.09, 0.75, 0.115), 0.006, 0.006)
+    b.begin_material("car_signal")
+    b.box((0.0, 0.13, 0.105), (0.045, 0.028, 0.008))
+    b.write(os.path.join(MESH_DIR, "antenna_array.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("car_trim")
+    add_cylinder(b, (0.0, 0.0, 0.0), 1.0, 1.0, 6)
+    b.write(os.path.join(MESH_DIR, "cable_seg.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("car_signal")
+    b.box((0.0, 0.0, 0.0), (0.022, 0.022, 0.045))
+    b.begin_material("alloy")
+    b.box((0.0, 0.0, 0.055), (0.012, 0.012, 0.012))
+    b.write(os.path.join(MESH_DIR, "cable_plug.amsh"))
+
+
 def make_excel_wheel():
     b = MeshBuilder()
     sides = 14
@@ -845,6 +915,8 @@ def make_car_textures():
     make_texture(os.path.join(tex, "car_light.png"), 64, (246, 241, 228), (4, 4, 4), 0.3, None, 31)
     make_texture(os.path.join(tex, "smoke.png"), 64, (118, 118, 122), (8, 8, 8), 1.0, None, 32)
     make_texture(os.path.join(tex, "dial.png"), 64, (214, 212, 202), (6, 6, 6), 0.5, None, 33)
+    make_texture(os.path.join(tex, "beige.png"), 64, (200, 192, 172), (7, 7, 7), 0.6, None, 34)
+    make_texture(os.path.join(tex, "crt.png"), 64, (96, 210, 130), (8, 20, 10), 1.4, None, 35)
 
 
 def main():
@@ -860,6 +932,7 @@ def main():
     make_excel_extras()
     make_excel_wheel()
     make_part_meshes()
+    make_antenna_meshes()
     make_car_textures()
 
 

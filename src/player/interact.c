@@ -18,6 +18,7 @@ void interact_init(Interact* it)
 {
     Interact zero = {0};
     *it = zero;
+    it->cable_drag = -1;
 }
 
 typedef struct Candidate {
@@ -27,6 +28,7 @@ typedef struct Candidate {
     Handle entity;
     i32 side;
     u32 cargo;
+    i32 cable;
     b32 is_hold;
     Vec3 center;
     Vec3 half;
@@ -64,6 +66,57 @@ static Ray chassis_local_ray(const RigidBody* body, Ray view_ray)
     local.origin = quat_rotate_vec3(inv_rot, vec3_sub(view_ray.origin, body->pos));
     local.dir = quat_rotate_vec3(inv_rot, view_ray.dir);
     return local;
+}
+
+static b32 consider_cable_root(Candidate* best, const Interact* it, CarSys* sys, CableKind kind,
+                               f32 t, Vec3 center, Vec3 half)
+{
+    Cable* cable = &sys->cables[kind];
+    const char* name = kind == CABLE_COAX ? "coax" : "bus";
+    char prompt[96];
+    b32 taken = 0;
+    if (cable->state == CABLE_STOWED) {
+        if (it->cable_drag < 0 && it->hands.kind == ITEM_NONE) {
+            snprintf(prompt, sizeof(prompt), "[E] grab %s cable", name);
+            taken = candidate_consider(best, t, ACTION_CABLE_GRAB, center, half, 0, prompt);
+        } else {
+            snprintf(prompt, sizeof(prompt), "%s port", name);
+            taken = candidate_consider(best, t, ACTION_INFO, center, half, 0, prompt);
+        }
+    } else if (cable->state == CABLE_PLUGGED) {
+        snprintf(prompt, sizeof(prompt), "[E] unplug %s cable", name);
+        taken = candidate_consider(best, t, ACTION_CABLE_UNPLUG, center, half, 0, prompt);
+    } else {
+        snprintf(prompt, sizeof(prompt), "%s cable is out", name);
+        taken = candidate_consider(best, t, ACTION_INFO, center, half, 0, prompt);
+    }
+    if (taken) {
+        best->cable = (i32)kind;
+    }
+    return taken;
+}
+
+static b32 consider_cable_jack(Candidate* best, const Interact* it, CarSys* sys, CableKind kind,
+                               f32 t, Vec3 center, Vec3 half, const char* target_name)
+{
+    Cable* cable = &sys->cables[kind];
+    const char* name = kind == CABLE_COAX ? "coax" : "bus";
+    char prompt[96];
+    b32 taken = 0;
+    if (cable->state == CABLE_PLUGGED) {
+        snprintf(prompt, sizeof(prompt), "[E] unplug %s cable", name);
+        taken = candidate_consider(best, t, ACTION_CABLE_UNPLUG, center, half, 0, prompt);
+    } else if (it->cable_drag == (i32)kind) {
+        snprintf(prompt, sizeof(prompt), "[E] connect %s to %s", name, target_name);
+        taken = candidate_consider(best, t, ACTION_CABLE_PLUG, center, half, 0, prompt);
+    } else {
+        snprintf(prompt, sizeof(prompt), "%s jack", name);
+        taken = candidate_consider(best, t, ACTION_INFO, center, half, 0, prompt);
+    }
+    if (taken) {
+        best->cable = (i32)kind;
+    }
+    return taken;
 }
 
 static void resolve_doors(Candidate* best, const struct Player* player, Vehicle* veh, CarSys* sys,
@@ -148,6 +201,25 @@ static void resolve_in_car(Candidate* best, Interact* it, struct Player* player,
         }
     }
 
+    const PartDef* term_def = part_def(PART_COMPUTER);
+    Vec3 term_center = vec3_sub(term_def->socket_pos, com);
+    if (ray_vs_local_box(local, term_center, term_def->socket_half, &t)) {
+        if (sys->parts[PART_COMPUTER].installed) {
+            if (sys->computer_on) {
+                candidate_consider(best, t, ACTION_TERMINAL_USE, term_center,
+                                   term_def->socket_half, 0, "[E] use terminal");
+            } else {
+                candidate_consider(best, t, ACTION_COMPUTER, term_center, term_def->socket_half, 0,
+                                   "[E] power on terminal");
+            }
+        } else if (it->hands.kind == ITEM_COMPUTER) {
+            if (candidate_consider(best, t, ACTION_INSTALL_PART, term_center,
+                                   term_def->socket_half, 1, "hold [E] install terminal")) {
+                best->part = PART_COMPUTER;
+            }
+        }
+    }
+
     for (i32 side = 0; side < 2; side++) {
         f32 sign = side == 0 ? -1.0f : 1.0f;
         if (sys->door_open[side] < DOOR_OPEN_FOR_USE) {
@@ -192,8 +264,13 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
                 taken = candidate_consider(best, t, ACTION_OIL_FILL, center, def->socket_half, 1,
                                            "hold [E] top up oil");
             } else if (def->removable && it->hands.kind == ITEM_NONE) {
-                snprintf(prompt, sizeof(prompt), "hold [E] take %s (%.0f%%)",
-                         def->name, (f64)(slot->condition * 100.0f));
+                if ((PartKind)k == PART_COMPUTER) {
+                    snprintf(prompt, sizeof(prompt), "tap [E] power | hold [E] take terminal (%.0f%%)",
+                             (f64)(slot->condition * 100.0f));
+                } else {
+                    snprintf(prompt, sizeof(prompt), "hold [E] take %s (%.0f%%)",
+                             def->name, (f64)(slot->condition * 100.0f));
+                }
                 taken = candidate_consider(best, t, ACTION_REMOVE_PART, center, def->socket_half,
                                            1, prompt);
             } else {
@@ -202,9 +279,12 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
                 taken = candidate_consider(best, t, ACTION_INFO, center, def->socket_half, 0,
                                            prompt);
             }
-        } else if (item_for_part((PartKind)k) == it->hands.kind && it->hands.kind != ITEM_NONE) {
+        } else if (it->hands.kind != ITEM_NONE
+                   && ((PartKind)k == PART_ANTENNA
+                       ? antenna_variant_for_item(it->hands.kind) >= 0
+                       : item_for_part((PartKind)k) == it->hands.kind)) {
             snprintf(prompt, sizeof(prompt), "hold [E] install %s (%.0f%%)",
-                     def->name, (f64)(it->hands.condition * 100.0f));
+                     item_name(it->hands.kind), (f64)(it->hands.condition * 100.0f));
             taken = candidate_consider(best, t, ACTION_INSTALL_PART, center, def->socket_half,
                                        1, prompt);
         } else {
@@ -213,6 +293,41 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
         }
         if (taken) {
             best->part = (PartKind)k;
+        }
+    }
+
+    if (sys->parts[PART_COMPUTER].installed) {
+        Quat rest = part_computer_rest_rot();
+        Vec3 term_base = vec3_sub(part_def(PART_COMPUTER)->socket_pos, com);
+        Vec3 ports[2] = { CONNECTOR_COAX_LOCAL, CONNECTOR_BUS_LOCAL };
+        Vec3 port_half = v3(0.05f, 0.05f, 0.06f);
+        for (u32 pk = 0; pk < 2; pk++) {
+            Vec3 center = vec3_add(term_base, quat_rotate_vec3(rest, ports[pk]));
+            if (ray_vs_local_box(local, center, port_half, &t)) {
+                consider_cable_root(best, it, sys, (CableKind)pk, t - 0.45f, center, port_half);
+            }
+        }
+    }
+
+    {
+        Vec3 jack_half = v3(0.055f, 0.055f, 0.055f);
+        Vec3 center = vec3_sub(ANTENNA_JACK_LOCAL, com);
+        if (ray_vs_local_box(local, center, jack_half, &t)) {
+            if (!sys->parts[PART_ANTENNA].installed && it->cable_drag == (i32)CABLE_COAX) {
+                candidate_consider(best, t - 0.20f, ACTION_INFO, center, jack_half, 0,
+                                   "no antenna mounted");
+            } else if (sys->parts[PART_ANTENNA].installed
+                       || sys->cables[CABLE_COAX].state == CABLE_PLUGGED) {
+                consider_cable_jack(best, it, sys, CABLE_COAX, t - 0.20f, center, jack_half,
+                                    "antenna");
+            }
+        }
+        if (sys->hood_open >= HOOD_OPEN_FOR_BAY) {
+            center = vec3_sub(BAY_JACK_LOCAL, com);
+            if (ray_vs_local_box(local, center, jack_half, &t)) {
+                consider_cable_jack(best, it, sys, CABLE_BUS, t - 0.20f, center, jack_half,
+                                    "vehicle bus");
+            }
         }
     }
 
@@ -317,7 +432,8 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
     }
 }
 
-static void resolve_pickups(Candidate* best, const Interact* it, World* world, Ray view_ray)
+static void resolve_pickups(Candidate* best, const Interact* it, CarSys* sys, World* world,
+                            Ray view_ray)
 {
     char prompt[96];
     for (u32 idx = 0; idx < world->entities.capacity; idx++) {
@@ -325,14 +441,48 @@ static void resolve_pickups(Candidate* best, const Interact* it, World* world, R
         if (!entity || entity->kind != ENTITY_PART_PICKUP) {
             continue;
         }
-        if (it->hands.kind != ITEM_NONE && (ItemKind)entity->aux_kind != ITEM_KEY) {
+        b32 is_computer = (ItemKind)entity->aux_kind == ITEM_COMPUTER;
+        if ((it->hands.kind != ITEM_NONE || it->cable_drag >= 0)
+            && (ItemKind)entity->aux_kind != ITEM_KEY
+            && !(is_computer && sys->computer_on)) {
             continue;
+        }
+        if (is_computer) {
+            Vec3 ports[2] = { CONNECTOR_COAX_LOCAL, CONNECTOR_BUS_LOCAL };
+            for (u32 pk = 0; pk < 2; pk++) {
+                Sphere port;
+                port.center = vec3_add(entity->pos, quat_rotate_vec3(entity->rot, ports[pk]));
+                port.radius = 0.07f;
+                f32 pt;
+                if (ray_vs_sphere(view_ray, port, INTERACT_RANGE, &pt)) {
+                    consider_cable_root(best, it, sys, (CableKind)pk, pt - 0.50f,
+                                        vec3_zero(), vec3_zero());
+                }
+            }
         }
         Sphere sphere;
         sphere.center = vec3_add(entity->pos, v3(0.0f, 0.22f, 0.0f));
         sphere.radius = 0.45f * entity->scale;
         f32 t;
         if (!ray_vs_sphere(view_ray, sphere, INTERACT_RANGE, &t)) {
+            continue;
+        }
+        if (is_computer) {
+            if (sys->computer_on) {
+                if (candidate_consider(best, t, ACTION_TERMINAL_USE, vec3_zero(), vec3_zero(), 0,
+                                       "[E] use terminal")) {
+                    best->entity.idx = idx;
+                    best->entity.gen = world->entities.gens[idx];
+                }
+            } else {
+                snprintf(prompt, sizeof(prompt), "[E] power on | hold [E] take terminal (%.0f%%)",
+                         (f64)(entity->aux_value * 100.0f));
+                if (candidate_consider(best, t, ACTION_PICKUP, vec3_zero(), vec3_zero(), 1,
+                                       prompt)) {
+                    best->entity.idx = idx;
+                    best->entity.gen = world->entities.gens[idx];
+                }
+            }
             continue;
         }
         snprintf(prompt, sizeof(prompt), "[E] take %s (%.0f%%)",
@@ -366,17 +516,37 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
     case ACTION_FUEL_CAP:
         sys->fuel_cap_open = !sys->fuel_cap_open;
         break;
+    case ACTION_COMPUTER:
+        sys->computer_on = !sys->computer_on;
+        break;
     case ACTION_REMOVE_PART: {
         PartSlot* slot = &sys->parts[it->target_part];
-        it->hands.kind = item_for_part(it->target_part);
+        it->hands.kind = it->target_part == PART_ANTENNA
+                         ? antenna_item_for_variant(slot->variant)
+                         : item_for_part(it->target_part);
         it->hands.condition = slot->condition;
         slot->installed = 0;
+        if (it->target_part == PART_COMPUTER) {
+            sys->computer_on = 0;
+            cable_reset(&sys->cables[CABLE_COAX]);
+            cable_reset(&sys->cables[CABLE_BUS]);
+            it->cable_drag = -1;
+        }
+        if (it->target_part == PART_ANTENNA) {
+            cable_reset(&sys->cables[CABLE_COAX]);
+            if (it->cable_drag == (i32)CABLE_COAX) {
+                it->cable_drag = -1;
+            }
+        }
         break;
     }
     case ACTION_INSTALL_PART: {
         PartSlot* slot = &sys->parts[it->target_part];
         slot->installed = 1;
         slot->condition = it->hands.condition;
+        if (it->target_part == PART_ANTENNA) {
+            slot->variant = antenna_variant_for_item(it->hands.kind);
+        }
         it->hands.kind = ITEM_NONE;
         break;
     }
@@ -403,6 +573,11 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
                 it->hands.kind = (ItemKind)entity->aux_kind;
                 it->hands.condition = entity->aux_value;
             }
+            if ((ItemKind)entity->aux_kind == ITEM_COMPUTER) {
+                cable_reset(&sys->cables[CABLE_COAX]);
+                cable_reset(&sys->cables[CABLE_BUS]);
+                it->cable_drag = -1;
+            }
             if (handle_valid(entity->body)) {
                 phys_body_destroy(phys, entity->body);
             }
@@ -410,6 +585,20 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
         }
         break;
     }
+    case ACTION_CABLE_GRAB:
+        sys->cables[it->target_cable].state = CABLE_DRAGGED;
+        it->cable_drag = it->target_cable;
+        break;
+    case ACTION_CABLE_PLUG:
+        sys->cables[it->target_cable].state = CABLE_PLUGGED;
+        it->cable_drag = -1;
+        break;
+    case ACTION_CABLE_UNPLUG:
+        cable_reset(&sys->cables[it->target_cable]);
+        if (it->cable_drag == it->target_cable) {
+            it->cable_drag = -1;
+        }
+        break;
     case ACTION_REFUEL:
         sys->fluids.fuel = f_min(sys->fluids.fuel + 0.45f, 1.0f);
         it->hands.kind = ITEM_NONE;
@@ -433,6 +622,7 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
     best.part = PART_COUNT;
     best.side = 0;
     best.cargo = 0;
+    best.cable = -1;
     best.is_hold = 0;
     best.center = vec3_zero();
     best.half = vec3_zero();
@@ -443,7 +633,7 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
 
     if (player->state == PLAYER_ON_FOOT) {
         resolve_car_targets(&best, it, player, veh, sys, phys, view_ray);
-        resolve_pickups(&best, it, world, view_ray);
+        resolve_pickups(&best, it, sys, world, view_ray);
     } else if (player->state == PLAYER_DRIVING) {
         resolve_in_car(&best, it, player, veh, sys, phys, view_ray);
     }
@@ -456,6 +646,7 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
     it->target_entity = best.entity;
     it->target_side = best.side;
     it->target_cargo = best.cargo;
+    it->target_cable = best.cable;
     it->target_center = best.center;
     it->target_half = best.half;
     it->place_pos = best.place_pos;
@@ -479,13 +670,16 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
 
     if (best.action == ACTION_NONE || best.action == ACTION_INFO
         || best.action == ACTION_ENTER_CAR || best.action == ACTION_EXIT_CAR
-        || best.action == ACTION_CRANK) {
+        || best.action == ACTION_CRANK || best.action == ACTION_TERMINAL_USE) {
         it->hold_time = 0.0f;
         it->hold_progress = 0.0f;
         return;
     }
 
     if (best.is_hold) {
+        if (e_pressed && best.action == ACTION_REMOVE_PART && best.part == PART_COMPUTER) {
+            sys->computer_on = !sys->computer_on;
+        }
         if (e_down) {
             it->hold_time += dt;
             if (it->hold_time >= INTERACT_HOLD_TIME) {
@@ -493,6 +687,12 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
                 it->hold_time = 0.0f;
             }
         } else {
+            if (it->hold_time > 0.0f && best.action == ACTION_PICKUP) {
+                Entity* entity = world_entity(world, best.entity);
+                if (entity && (ItemKind)entity->aux_kind == ITEM_COMPUTER) {
+                    sys->computer_on = 1;
+                }
+            }
             it->hold_time = 0.0f;
         }
         it->hold_progress = it->hold_time / INTERACT_HOLD_TIME;

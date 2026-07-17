@@ -6,16 +6,16 @@
 #include "render/camera.h"
 #include "render/debug_draw.h"
 
-#define PLAYER_RADIUS 0.35f
-#define PLAYER_HEIGHT 1.75f
-#define PLAYER_EYE_HEIGHT 1.62f
-#define PLAYER_STEP_HEIGHT 0.3f
-#define PLAYER_WALK_SPEED 4.2f
-#define PLAYER_RUN_SPEED 6.8f
+#define PLAYER_RADIUS 0.32f
+#define PLAYER_HEIGHT 1.56f
+#define PLAYER_EYE_HEIGHT 1.44f
+#define PLAYER_STEP_HEIGHT 0.28f
+#define PLAYER_WALK_SPEED 4.0f
+#define PLAYER_RUN_SPEED 6.4f
 #define PLAYER_GROUND_ACCEL 45.0f
 #define PLAYER_AIR_ACCEL 10.0f
-#define PLAYER_JUMP_SPEED 4.4f
-#define PLAYER_SNAP_DOWN 0.3f
+#define PLAYER_JUMP_SPEED 4.2f
+#define PLAYER_SNAP_DOWN 0.28f
 #define PLAYER_WALKABLE_NY 0.64f
 #define PLAYER_SPHERES 3
 #define PLAYER_ENTER_TIME 0.45f

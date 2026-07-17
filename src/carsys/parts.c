@@ -7,6 +7,8 @@ static const PartDef s_part_defs[PART_COUNT] = {
     { "radiator",   1,   9.0f, { 0.00f, -0.20f, -1.80f }, { 0.31f, 0.13f, 0.05f }, "part_radiator", 1 },
     { "fuel tank",  0,  40.0f, { 0.00f, -0.30f, 1.75f },  { 0.30f, 0.11f, 0.21f }, "",              0 },
     { "headlights", 0,   3.0f, { 0.00f, 0.03f, -1.98f },  { 0.56f, 0.06f, 0.10f }, "",              0 },
+    { "terminal",   1,  11.0f, { 0.37f, -0.05f, 0.20f },  { 0.27f, 0.23f, 0.27f }, "part_computer", 0 },
+    { "antenna",    1,   4.0f, { 0.35f, 0.515f, 0.50f },  { 0.15f, 0.28f, 0.15f }, "",              0 },
     { "tire fl",    1,  16.0f, { -0.72f, -0.31f, -1.24f }, { 0.14f, 0.31f, 0.31f }, "excel_wheel",  0 },
     { "tire fr",    1,  16.0f, { 0.72f, -0.31f, -1.24f },  { 0.14f, 0.31f, 0.31f }, "excel_wheel",  0 },
     { "tire rl",    1,  16.0f, { -0.72f, -0.31f, 1.24f },  { 0.14f, 0.31f, 0.31f }, "excel_wheel",  0 },
@@ -18,6 +20,14 @@ const PartDef* part_def(PartKind kind)
     return &s_part_defs[kind];
 }
 
+Quat part_computer_rest_rot(void)
+{
+    Quat yaw = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), -PI32 * 0.5f - 0.12f);
+    Quat lean = quat_from_axis_angle(v3(1.0f, 0.0f, 0.0f), 0.10f);
+    Quat roll = quat_from_axis_angle(v3(0.0f, 0.0f, 1.0f), -0.135f);
+    return quat_mul(roll, quat_mul(lean, yaw));
+}
+
 b32 part_kind_is_tire(PartKind kind)
 {
     return kind >= PART_TIRE_FL && kind <= PART_TIRE_RR;
@@ -26,8 +36,9 @@ b32 part_kind_is_tire(PartKind kind)
 void parts_init(PartSlot* parts)
 {
     for (u32 i = 0; i < PART_COUNT; i++) {
-        parts[i].installed = 1;
+        parts[i].installed = i != PART_COMPUTER && i != PART_ANTENNA;
         parts[i].condition = 1.0f;
+        parts[i].variant = 0;
     }
 }
 

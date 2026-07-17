@@ -6,6 +6,7 @@
 #include "carsys/electrics.h"
 #include "carsys/fluids.h"
 #include "carsys/items.h"
+#include "carsys/cables.h"
 
 struct Vehicle;
 struct PhysWorld;
@@ -49,6 +50,8 @@ typedef struct CarSys {
     b32 fuel_cap_open;
     f32 cap_anim;
     f32 popup_anim;
+    b32 computer_on;
+    Cable cables[CABLE_KIND_COUNT];
     CargoItem cargo[CARGO_MAX];
     Vec3 prev_vel;
     f32 impact_cooldown;

@@ -24,8 +24,12 @@ struct Arena;
 #define KEY_ESCAPE 256
 #define KEY_ENTER 257
 #define KEY_TAB 258
+#define KEY_BACKSPACE 259
+#define KEY_DELETE 261
 #define KEY_RIGHT 262
 #define KEY_LEFT 263
+#define KEY_HOME 268
+#define KEY_END 269
 #define KEY_DOWN 264
 #define KEY_UP 265
 #define KEY_LEFT_SHIFT 340
@@ -71,6 +75,7 @@ void platform_framebuffer_size(i32* out_width, i32* out_height);
 f64  platform_time_now(void);
 
 const GameInput* platform_input(void);
+u32  platform_next_char(void);
 
 void platform_set_cursor_captured(b32 captured);
 b32  platform_cursor_captured(void);

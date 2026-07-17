@@ -109,12 +109,103 @@ static u32 shader_build(ShaderEntry* entry)
     return program;
 }
 
+static u32 s_quad_vao;
+static u32 s_quad_vbo;
+static u32 s_quad_ebo;
+static f32 s_screen_power;
+static f32 s_screen_burn;
+static f32 s_screen_shake;
+static f32 s_screen_pixelate = 1.0f;
+
+static void quad_init(void)
+{
+    f32 verts[4][8] = {
+        { -0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f },
+        { 0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f },
+        { 0.5f, 0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f },
+        { -0.5f, 0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f },
+    };
+    u32 indices[6] = { 0, 1, 2, 0, 2, 3 };
+    glCreateBuffers(1, &s_quad_vbo);
+    glNamedBufferStorage(s_quad_vbo, sizeof(verts), verts, 0);
+    glCreateBuffers(1, &s_quad_ebo);
+    glNamedBufferStorage(s_quad_ebo, sizeof(indices), indices, 0);
+    glCreateVertexArrays(1, &s_quad_vao);
+    glVertexArrayVertexBuffer(s_quad_vao, 0, s_quad_vbo, 0, 8 * sizeof(f32));
+    glVertexArrayElementBuffer(s_quad_vao, s_quad_ebo);
+    for (u32 i = 0; i < 3; i++) {
+        glEnableVertexArrayAttrib(s_quad_vao, i);
+        glVertexArrayAttribFormat(s_quad_vao, i, i == 2 ? 2 : 3, GL_FLOAT, GL_FALSE,
+                                  (i == 0 ? 0 : (i == 1 ? 3 : 6)) * sizeof(f32));
+        glVertexArrayAttribBinding(s_quad_vao, i, 0);
+    }
+}
+
 b32 r_init(void)
 {
     glCreateBuffers(1, &s_camera_ubo);
     glNamedBufferStorage(s_camera_ubo, sizeof(CameraUbo), 0, GL_DYNAMIC_STORAGE_BIT);
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_camera_ubo);
+    quad_init();
     return 1;
+}
+
+void r_blit_texture(f32 x, f32 y, f32 w, f32 h, u32 gl_texture, f32 alpha)
+{
+    u32 program = r_shader("blit");
+    if (!program) {
+        return;
+    }
+    f32 x0 = x / s_viewport.x * 2.0f - 1.0f;
+    f32 x1 = (x + w) / s_viewport.x * 2.0f - 1.0f;
+    f32 y1 = 1.0f - y / s_viewport.y * 2.0f;
+    f32 y0 = 1.0f - (y + h) / s_viewport.y * 2.0f;
+    glProgramUniform4f(program, 0, x0, y0, x1, y1);
+    glProgramUniform1f(program, 1, (f32)platform_time_now());
+    glProgramUniform1f(program, 2, alpha);
+    glProgramUniform1f(program, 3, s_screen_power);
+    glProgramUniform1f(program, 4, s_screen_burn);
+    glProgramUniform1f(program, 5, s_screen_shake);
+    glProgramUniform1f(program, 6, s_screen_pixelate);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(program);
+    glBindVertexArray(s_quad_vao);
+    glBindTextureUnit(0, gl_texture);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+}
+
+void r_draw_lit_quad(Mat4 model, u32 gl_texture)
+{
+    u32 program = r_shader("screen");
+    if (!program) {
+        return;
+    }
+    glProgramUniformMatrix4fv(program, 0, 1, GL_FALSE, model.m);
+    glProgramUniform1f(program, 4, (f32)platform_time_now());
+    glProgramUniform1f(program, 5, s_screen_power);
+    glProgramUniform1f(program, 6, s_screen_burn);
+    glProgramUniform1f(program, 7, s_screen_shake);
+    glProgramUniform1f(program, 8, s_screen_pixelate);
+    glUseProgram(program);
+    glBindVertexArray(s_quad_vao);
+    glBindTextureUnit(0, gl_texture);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
+void r_set_screen_fx(f32 power_seconds, f32 burn, f32 shake, f32 pixelate)
+{
+    s_screen_power = power_seconds;
+    s_screen_burn = burn;
+    s_screen_shake = shake;
+    s_screen_pixelate = pixelate;
 }
 
 void r_shutdown(void)

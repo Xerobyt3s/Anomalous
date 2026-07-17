@@ -12,6 +12,10 @@ typedef enum ItemKind {
     ITEM_TIRE,
     ITEM_JERRYCAN,
     ITEM_OILCAN,
+    ITEM_COMPUTER,
+    ITEM_ANTENNA_WHIP,
+    ITEM_ANTENNA_STD,
+    ITEM_ANTENNA_ARRAY,
     ITEM_KEY,
     ITEM_KIND_COUNT,
 } ItemKind;
@@ -27,3 +31,6 @@ f32         item_mass(ItemKind kind);
 Vec3        item_cargo_half(ItemKind kind);
 Quat        item_cargo_rot(ItemKind kind);
 ItemKind    item_for_part(PartKind part);
+i32         antenna_variant_for_item(ItemKind kind);
+ItemKind    antenna_item_for_variant(i32 variant);
+const char* antenna_variant_name(i32 variant);

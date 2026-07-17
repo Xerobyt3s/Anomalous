@@ -10,6 +10,8 @@ typedef enum PartKind {
     PART_RADIATOR,
     PART_FUEL_TANK,
     PART_HEADLIGHTS,
+    PART_COMPUTER,
+    PART_ANTENNA,
     PART_TIRE_FL,
     PART_TIRE_FR,
     PART_TIRE_RL,
@@ -30,9 +32,11 @@ typedef struct PartDef {
 typedef struct PartSlot {
     b32 installed;
     f32 condition;
+    i32 variant;
 } PartSlot;
 
 const PartDef* part_def(PartKind kind);
+Quat part_computer_rest_rot(void);
 b32  part_kind_is_tire(PartKind kind);
 void parts_init(PartSlot* parts);
 void parts_apply_impact(PartSlot* parts, Vec3 local_point, f32 severity);

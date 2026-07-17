@@ -300,6 +300,11 @@ void carsys_tick(CarSys* sys, struct Vehicle* veh, struct PhysWorld* world, f32 
         }
     }
 
+    if (sys->computer_on && sys->parts[PART_COMPUTER].installed
+        && sys->elec.battery_charge < 0.02f) {
+        sys->computer_on = 0;
+    }
+
     f32 speed = vec3_length(body->vel);
     fluids_tick(&sys->fluids, sys->parts, rpm, veh->cfg.max_rpm, veh->input.throttle,
                 sys->engine_on, sys->elec.powered[CONSUMER_FUEL_PUMP], speed, dt);

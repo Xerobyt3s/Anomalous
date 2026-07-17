@@ -22,6 +22,7 @@
 #include "player/interact.h"
 #include "carsys/carsys.h"
 #include "carsys/carsys_render.h"
+#include "terminal/terminal.h"
 #include "audio/audio.h"
 #include "ui/ui.h"
 
@@ -56,6 +57,9 @@ static Vehicle s_vehicle;
 static Player s_player;
 static CarSys s_carsys;
 static Interact s_interact;
+static Terminal s_terminal;
+static b32 s_term_focus;
+static f32 s_term_anim;
 static ZoneSpawn s_zone_spawn;
 static Camera s_camera;
 static f32 s_fps;
@@ -393,6 +397,9 @@ static void draw_interact_prompt(void)
     } else if (s_player.state == PLAYER_ON_FOOT && s_interact.has_key) {
         dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_GRAY, "key in pocket");
     }
+    if (s_term_focus) {
+        dd_text_2d(cx - 90.0f, y + 34.0f, 15.0f, DD_GRAY, "terminal linked — ESC to look away");
+    }
     if (s_player.state == PLAYER_DRIVING && !s_carsys.engine_on) {
         const char* hint = "look at the ignition and hold [E] to start";
         if (s_carsys.crank_timer > 0.0f || s_carsys.crank_active) {
@@ -551,6 +558,11 @@ static void update_audio(f32 frame_dt)
     if (s_carsys.handbrake_latched != prev_handbrake) {
         audio_play(SFX_THUMP, 0.4f, 1.5f);
         prev_handbrake = s_carsys.handbrake_latched;
+    }
+    static b32 prev_computer_on;
+    if (s_carsys.computer_on != prev_computer_on) {
+        audio_play(SFX_THUMP, 0.35f, 1.9f);
+        prev_computer_on = s_carsys.computer_on;
     }
 
     u32 installed = 0;
@@ -716,6 +728,10 @@ static void spawn_spares(void)
     spawn_spare(ITEM_ALTERNATOR, 0.8f, v3(3.9f, 0.0f, 1.5f));
     spawn_spare(ITEM_JERRYCAN, 1.0f, v3(2.4f, 0.0f, 2.6f));
     spawn_spare(ITEM_OILCAN, 1.0f, v3(3.1f, 0.0f, 2.8f));
+    spawn_spare(ITEM_COMPUTER, 1.0f, v3(4.5f, 0.0f, 0.4f));
+    spawn_spare(ITEM_ANTENNA_WHIP, 1.0f, v3(5.1f, 0.0f, 1.4f));
+    spawn_spare(ITEM_ANTENNA_STD, 0.9f, v3(5.4f, 0.0f, 0.3f));
+    spawn_spare(ITEM_ANTENNA_ARRAY, 0.8f, v3(5.8f, 0.0f, -0.9f));
     spawn_spare(ITEM_KEY, 1.0f, v3(2.1f, 0.0f, -0.2f));
 }
 
@@ -788,20 +804,127 @@ static void update_chase_camera(f32 dt, f32 alpha)
     camera_look_at(&s_camera, vec3_add(pos, v3(0.0f, 1.2f, 0.0f)));
 }
 
+static Entity* find_loose_computer(void)
+{
+    for (u32 idx = 0; idx < s_world.entities.capacity; idx++) {
+        Entity* entity = pool_at(&s_world.entities, idx);
+        if (entity && entity->kind == ENTITY_PART_PICKUP
+            && (ItemKind)entity->aux_kind == ITEM_COMPUTER) {
+            return entity;
+        }
+    }
+    return 0;
+}
+
+static b32 terminal_world_transform(Vec3* out_pos, Quat* out_rot)
+{
+    if (s_carsys.parts[PART_COMPUTER].installed) {
+        RigidBody* body = phys_body(&s_phys, s_vehicle.body);
+        if (!body) {
+            return 0;
+        }
+        Vec3 socket_local = vec3_sub(part_def(PART_COMPUTER)->socket_pos,
+                                     s_vehicle.cfg.com_offset);
+        *out_pos = vec3_add(body->pos, quat_rotate_vec3(body->rot, socket_local));
+        *out_rot = quat_mul(body->rot, part_computer_rest_rot());
+        return 1;
+    }
+    Entity* loose = find_loose_computer();
+    if (loose) {
+        *out_pos = loose->pos;
+        *out_rot = loose->rot;
+        return 1;
+    }
+    return 0;
+}
+
+static void update_cables(f32 dt)
+{
+    RigidBody* body = phys_body(&s_phys, s_vehicle.body);
+    Vec3 term_pos;
+    Quat term_rot;
+    if (!body || !terminal_world_transform(&term_pos, &term_rot)) {
+        for (u32 k = 0; k < CABLE_KIND_COUNT; k++) {
+            if (s_carsys.cables[k].state != CABLE_STOWED) {
+                cable_reset(&s_carsys.cables[k]);
+            }
+        }
+        s_interact.cable_drag = -1;
+        return;
+    }
+    Vec3 car_origin = vec3_add(body->pos,
+                               quat_rotate_vec3(body->rot,
+                                                vec3_negate(s_vehicle.cfg.com_offset)));
+    Vec3 roots[2] = { CONNECTOR_COAX_LOCAL, CONNECTOR_BUS_LOCAL };
+    Vec3 jacks[2] = { ANTENNA_JACK_LOCAL, BAY_JACK_LOCAL };
+    for (u32 k = 0; k < CABLE_KIND_COUNT; k++) {
+        Cable* cable = &s_carsys.cables[k];
+        if (cable->state == CABLE_STOWED) {
+            cable->sim_init = 0;
+            continue;
+        }
+        Vec3 root = vec3_add(term_pos, quat_rotate_vec3(term_rot, roots[k]));
+        Vec3 end;
+        if (cable->state == CABLE_PLUGGED) {
+            end = vec3_add(car_origin, quat_rotate_vec3(body->rot, jacks[k]));
+        } else {
+            end = vec3_add(s_camera.pos,
+                           vec3_add(vec3_scale(camera_forward(&s_camera), 0.50f),
+                                    v3(0.0f, -0.18f, 0.0f)));
+            if (vec3_distance(root, end) > CABLE_LENGTH * 1.06f) {
+                cable_reset(cable);
+                if (s_interact.cable_drag == (i32)k) {
+                    s_interact.cable_drag = -1;
+                }
+                continue;
+            }
+        }
+        cable_sim(cable, root, &end, &s_terrain, car_origin, body->rot, dt);
+    }
+}
+
 static void game_render(f32 alpha, const GameInput* input)
 {
+    terminal_render(&s_terminal);
     r_begin_frame(&s_camera);
     dd_begin_frame();
     text_begin_frame();
     ui_begin_frame(input);
 
+    if (s_term_anim >= 0.995f && s_carsys.computer_on) {
+        Vec2 vp = r_viewport_size();
+        r_blit_texture(0.0f, 0.0f, vp.x, vp.y, terminal_texture(&s_terminal), 1.0f);
+        dd_text_2d(vp.x * 0.5f - 80.0f, vp.y - 10.0f, 14.0f, DD_GRAY, "ESC to look away");
+        r_end_frame();
+        return;
+    }
+
     terrain_render_draw();
     world_render(&s_world);
+    if (s_terminal.powered && !s_carsys.parts[PART_COMPUTER].installed) {
+        Entity* loose = find_loose_computer();
+        if (loose) {
+            Mat4 base = mat4_trs(loose->pos, loose->rot, v3(1.0f, 1.0f, 1.0f));
+            Mat4 screen = mat4_mul(base, mat4_trs(v3(0.0f, 0.047f, 0.170f), quat_identity(),
+                                                  v3(0.304f, 0.19f, 1.0f)));
+            r_draw_lit_quad(screen, terminal_texture(&s_terminal));
+        }
+    }
+    cable_render(&s_carsys.cables[CABLE_COAX]);
+    cable_render(&s_carsys.cables[CABLE_BUS]);
     vehicle_render(&s_vehicle, &s_phys, alpha);
-    carsys_render(&s_carsys, &s_vehicle, &s_phys, alpha, s_frame_dt_render);
+    carsys_render(&s_carsys, &s_vehicle, &s_phys, alpha, s_frame_dt_render,
+                  s_terminal.powered ? terminal_texture(&s_terminal) : 0);
     draw_interact_highlights(alpha);
     draw_cargo_preview(alpha);
     draw_viewmodel(alpha);
+
+    if (s_term_anim > 0.80f && s_carsys.computer_on) {
+        Vec2 vp = r_viewport_size();
+        f32 fade = f_clamp01((s_term_anim - 0.80f) / 0.18f);
+        r_blit_texture(0.0f, 0.0f, vp.x, vp.y, terminal_texture(&s_terminal), fade * fade);
+    }
+
     if (s_show_phys_debug) {
         vehicle_debug_draw(&s_vehicle, &s_phys, alpha, 1);
         draw_phys_debug(alpha);
@@ -1406,8 +1529,8 @@ static WalkTestReport walk_test_run(b32 verbose)
         PhysWorld* world = arena_push(&g_perm_arena, PhysWorld);
         phys_init(world, &g_perm_arena, hf);
         phys_statics_reserve(world, &g_perm_arena, 64);
-        walk_add_wall(world, v3(-1.95f, 0.0f, -3.5f), v3(-1.95f, 0.0f, 3.5f), 2.5f);
-        walk_add_wall(world, v3(1.95f, 0.0f, -3.5f), v3(1.95f, 0.0f, 3.5f), 2.5f);
+        walk_add_wall(world, v3(-1.90f, 0.0f, -3.5f), v3(-1.90f, 0.0f, 3.5f), 2.5f);
+        walk_add_wall(world, v3(1.90f, 0.0f, -3.5f), v3(1.90f, 0.0f, 3.5f), 2.5f);
         walk_add_wall(world, v3(-2.0f, 0.0f, -3.1f), v3(2.0f, 0.0f, -3.1f), 2.5f);
         walk_add_wall(world, v3(-2.0f, 0.0f, 3.1f), v3(2.0f, 0.0f, 3.1f), 2.5f);
         phys_statics_build(world, &g_perm_arena);
@@ -1818,6 +1941,7 @@ int main(int argc, char** argv)
     player_init(&s_player, s_zone_spawn.player_pos, s_zone_spawn.player_yaw);
     carsys_init(&s_carsys);
     interact_init(&s_interact);
+    terminal_init(&s_terminal);
     spawn_spares();
     audio_init();
     mission_init();
@@ -1844,9 +1968,13 @@ int main(int argc, char** argv)
         platform_poll_input();
         const GameInput* input = platform_input();
         if (input->key_pressed[KEY_ESCAPE]) {
-            platform_request_close();
+            if (s_term_focus) {
+                s_term_focus = 0;
+            } else {
+                platform_request_close();
+            }
         }
-        if (input->key_pressed[KEY_R]) {
+        if (input->key_pressed[KEY_R] && !s_term_focus) {
             reset_car();
         }
         if (input->key_pressed[KEY_F1]) {
@@ -1870,7 +1998,7 @@ int main(int argc, char** argv)
         if (input->key_pressed[KEY_F7]) {
             s_show_tuning = !s_show_tuning;
         }
-        if (input->key_pressed[KEY_C]) {
+        if (input->key_pressed[KEY_C] && !s_term_focus) {
             s_chase_cam = !s_chase_cam;
         }
 
@@ -1883,10 +2011,30 @@ int main(int argc, char** argv)
             s_pending_interact = 0;
         } else {
             platform_set_cursor_captured(!s_show_tuning);
-            if (platform_cursor_captured()) {
+            if (platform_cursor_captured() && !s_term_focus) {
                 player_look(&s_player, input->mouse_dx, input->mouse_dy);
             }
-            if (player_driving(&s_player)) {
+            if (s_term_focus) {
+                VehicleInput coast = {0};
+                coast.handbrake = s_carsys.handbrake_latched;
+                vehicle_set_input(&s_vehicle, coast);
+                u32 typed;
+                while ((typed = platform_next_char()) != 0) {
+                    if (typed < 128) {
+                        terminal_key_char(&s_terminal, (char)typed);
+                    }
+                }
+                static const i32 specials[10] = { KEY_ENTER, KEY_BACKSPACE, KEY_DELETE, KEY_UP,
+                                                  KEY_DOWN, KEY_Q, KEY_LEFT, KEY_RIGHT,
+                                                  KEY_HOME, KEY_END };
+                for (u32 sk = 0; sk < 10; sk++) {
+                    if (input->key_pressed[specials[sk]]) {
+                        terminal_key_special(&s_terminal, specials[sk]);
+                    }
+                }
+            } else if (player_driving(&s_player)) {
+                while (platform_next_char() != 0) {
+                }
                 f32 forward_intent = input->key_down[KEY_W] ? 1.0f : 0.0f;
                 f32 reverse_intent = input->key_down[KEY_S] ? 1.0f : 0.0f;
                 f32 steer = (input->key_down[KEY_D] ? 1.0f : 0.0f) - (input->key_down[KEY_A] ? 1.0f : 0.0f);
@@ -1913,6 +2061,8 @@ int main(int argc, char** argv)
                     s_interact.has_key = 1;
                 }
             } else {
+                while (platform_next_char() != 0) {
+                }
                 VehicleInput parked = {0};
                 parked.handbrake = s_carsys.handbrake_latched;
                 vehicle_set_input(&s_vehicle, parked);
@@ -1923,18 +2073,31 @@ int main(int argc, char** argv)
                     s_pending_jump = 1;
                 }
                 if (input->key_pressed[KEY_G]) {
-                    Vec3 eye = vec3_add(s_player.pos, v3(0.0f, 1.55f, 0.0f));
-                    interact_drop(&s_interact, &s_world, &s_phys, eye, camera_forward(&s_camera));
+                    if (s_interact.cable_drag >= 0) {
+                        cable_reset(&s_carsys.cables[s_interact.cable_drag]);
+                        s_interact.cable_drag = -1;
+                    } else {
+                        Vec3 eye = vec3_add(s_player.pos, v3(0.0f, 1.38f, 0.0f));
+                        interact_drop(&s_interact, &s_world, &s_phys, eye,
+                                      camera_forward(&s_camera));
+                    }
                 }
             }
             Ray view_ray;
             view_ray.origin = s_camera.pos;
             view_ray.dir = camera_forward(&s_camera);
             interact_update(&s_interact, &s_player, &s_vehicle, &s_carsys, &s_world, &s_phys,
-                            view_ray, input->key_down[KEY_E], input->key_pressed[KEY_E],
-                            (f32)frame_dt);
+                            view_ray, !s_term_focus && input->key_down[KEY_E],
+                            !s_term_focus && input->key_pressed[KEY_E], (f32)frame_dt);
+            if (!s_term_focus && input->key_pressed[KEY_E]
+                && s_interact.action == ACTION_TERMINAL_USE) {
+                s_term_focus = 1;
+            }
+            if (s_term_focus && !s_carsys.computer_on) {
+                s_term_focus = 0;
+            }
             s_player.speed_mul = f_max(1.0f - item_mass(s_interact.hands.kind) * 0.012f, 0.6f);
-            if (input->key_pressed[KEY_E]) {
+            if (!s_term_focus && input->key_pressed[KEY_E]) {
                 if (s_interact.action == ACTION_ENTER_CAR) {
                     s_pending_interact = 1;
                 } else if (s_interact.action == ACTION_EXIT_CAR) {
@@ -1979,7 +2142,113 @@ int main(int argc, char** argv)
             }
         }
         mission_update();
+        update_cables((f32)frame_dt);
+
+        static b32 prev_power;
+        static f32 power_elapsed;
+        if (s_carsys.computer_on != prev_power) {
+            if (s_carsys.computer_on) {
+                terminal_power(&s_terminal, 1);
+                power_elapsed = 0.0f;
+            } else {
+                power_elapsed = f_min(power_elapsed, 0.45f);
+            }
+            prev_power = s_carsys.computer_on;
+        }
+        if (s_carsys.computer_on) {
+            power_elapsed += (f32)frame_dt;
+        } else {
+            power_elapsed = f_max(power_elapsed - (f32)frame_dt * 1.6f, 0.0f);
+            if (power_elapsed <= 0.0f && s_terminal.powered) {
+                terminal_power(&s_terminal, 0);
+            }
+        }
+        f32 term_burn = f_max(0.6f - s_carsys.parts[PART_COMPUTER].condition, 0.0f) * 0.5f;
+        r_set_screen_fx(power_elapsed, term_burn, f_min(s_carsys.impact_cooldown * 2.0f, 0.5f),
+                        terminal_pixelate(&s_terminal));
+        if (s_terminal.wants_off) {
+            s_carsys.computer_on = 0;
+            s_term_focus = 0;
+        }
+        if (s_carsys.computer_on) {
+            RigidBody* term_body = phys_body(&s_phys, s_vehicle.body);
+            TermView view;
+            view.sys = &s_carsys;
+            view.veh = &s_vehicle;
+            view.phys = &s_phys;
+            view.terrain = &s_terrain;
+            view.car_pos = term_body ? term_body->pos : vec3_zero();
+            view.garage_pos = s_zone_spawn.car_pos;
+            view.mission_pos = s_mission_out;
+            view.mission_stage = (u32)s_mission;
+            view.speed_kmh = f_abs(vehicle_forward_speed(&s_vehicle, &s_phys)) * 3.6f;
+            view.rpm = drivetrain_rpm(&s_vehicle.train);
+            view.orbit = s_term_focus ? ((input->key_down[KEY_RIGHT] ? 1.0f : 0.0f)
+                                         - (input->key_down[KEY_LEFT] ? 1.0f : 0.0f)) : 0.0f;
+            view.zoom = s_term_focus ? ((input->key_down[KEY_UP] ? 1.0f : 0.0f)
+                                        - (input->key_down[KEY_DOWN] ? 1.0f : 0.0f)) : 0.0f;
+            const Cable* coax = &s_carsys.cables[CABLE_COAX];
+            const Cable* bus = &s_carsys.cables[CABLE_BUS];
+            view.coax_state = coax->state == CABLE_PLUGGED ? (coax->linked ? 2 : 1) : 0;
+            view.bus_state = bus->state == CABLE_PLUGGED ? (bus->linked ? 2 : 1) : 0;
+            view.antenna_tier = s_carsys.parts[PART_ANTENNA].installed
+                                ? s_carsys.parts[PART_ANTENNA].variant : -1;
+            terminal_update(&s_terminal, &view, (f32)frame_dt);
+            for (u32 lk = 0; lk < 2; lk++) {
+                if (s_terminal.link_request[lk]) {
+                    s_terminal.link_request[lk] = 0;
+                    if (s_carsys.cables[lk].state == CABLE_PLUGGED) {
+                        s_carsys.cables[lk].linked = 1;
+                        audio_play(SFX_THUMP, 0.14f, 3.2f);
+                    }
+                }
+            }
+            if (s_terminal.click_pending) {
+                s_terminal.click_pending = 0;
+                audio_play(SFX_THUMP, 0.10f, 2.6f);
+            }
+        }
+
         update_audio((f32)frame_dt);
+        s_term_anim = f_approach_exp(s_term_anim, s_term_focus ? 1.0f : 0.0f, 7.0f, (f32)frame_dt);
+        if (s_term_anim > 0.002f) {
+            b32 have_screen = 0;
+            Vec3 screen_center = vec3_zero();
+            Quat srot = quat_identity();
+            if (s_carsys.parts[PART_COMPUTER].installed) {
+                RigidBody* term_body = phys_body(&s_phys, s_vehicle.body);
+                if (term_body) {
+                    Vec3 tpos = vec3_lerp(term_body->prev_pos, term_body->pos, alpha);
+                    Quat trot = quat_slerp(term_body->prev_rot, term_body->rot, alpha);
+                    srot = quat_mul(trot, part_computer_rest_rot());
+                    Vec3 socket_local = vec3_sub(part_def(PART_COMPUTER)->socket_pos,
+                                                 s_vehicle.cfg.com_offset);
+                    screen_center = vec3_add(vec3_add(tpos, quat_rotate_vec3(trot, socket_local)),
+                                             quat_rotate_vec3(srot, v3(0.0f, 0.047f, 0.170f)));
+                    have_screen = 1;
+                }
+            } else {
+                Entity* loose = find_loose_computer();
+                if (loose) {
+                    srot = loose->rot;
+                    screen_center = vec3_add(loose->pos,
+                                             quat_rotate_vec3(srot, v3(0.0f, 0.047f, 0.170f)));
+                    have_screen = 1;
+                }
+            }
+            if (have_screen) {
+                Vec3 normal = quat_rotate_vec3(srot, v3(0.0f, 0.0f, 1.0f));
+                Vec3 target = vec3_add(screen_center, vec3_scale(normal, 0.13f));
+                Vec3 dir = vec3_negate(normal);
+                f32 s = s_term_anim * s_term_anim * (3.0f - 2.0f * s_term_anim);
+                s_camera.pos = vec3_lerp(s_camera.pos, target, s);
+                f32 target_yaw = atan2f(dir.x, -dir.z);
+                f32 target_pitch = asinf(f_clamp(dir.y, -1.0f, 1.0f));
+                s_camera.yaw = f_wrap_angle(s_camera.yaw
+                                            + f_wrap_angle(target_yaw - s_camera.yaw) * s);
+                s_camera.pitch = s_camera.pitch + (target_pitch - s_camera.pitch) * s;
+            }
+        }
         update_headlights(alpha);
         s_frame_dt_render = (f32)frame_dt;
         RigidBody* spark_body = phys_body(&s_phys, s_vehicle.body);
