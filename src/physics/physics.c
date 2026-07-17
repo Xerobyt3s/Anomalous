@@ -279,11 +279,29 @@ BodyHandle phys_body_create_box(PhysWorld* world, Vec3 pos, Quat rot, Vec3 half_
     }
     body->restitution = 0.15f;
     body->friction = 0.6f;
+    body->box_offset = vec3_zero();
+    body->sleep_timer = 0.0f;
+    body->asleep = 0;
     return handle;
+}
+
+static void body_wake(RigidBody* body)
+{
+    body->asleep = 0;
+    body->sleep_timer = 0.0f;
 }
 
 void phys_body_destroy(PhysWorld* world, BodyHandle handle)
 {
+    RigidBody* dead = pool_get(&world->bodies, handle);
+    if (dead) {
+        for (u32 idx = 0; idx < world->bodies.capacity; idx++) {
+            RigidBody* other = pool_at(&world->bodies, idx);
+            if (other && other != dead && vec3_distance_sq(other->pos, dead->pos) < 4.0f) {
+                body_wake(other);
+            }
+        }
+    }
     pool_free(&world->bodies, handle);
 }
 
@@ -305,6 +323,8 @@ Vec3 body_velocity_at_point(const RigidBody* body, Vec3 point)
 
 void body_apply_force_at_point(RigidBody* body, Vec3 force, Vec3 point)
 {
+    body->asleep = 0;
+    body->sleep_timer = 0.0f;
     body->force_accum = vec3_add(body->force_accum, force);
     body->torque_accum = vec3_add(body->torque_accum, vec3_cross(vec3_sub(point, body->pos), force));
 }
@@ -356,6 +376,133 @@ static void resolve_contact(RigidBody* body, const SphereContact* contact)
     body->angular_vel = vec3_add(body->angular_vel, mat3_mul_vec3(inv_inertia, vec3_scale(rxt, jt)));
 }
 
+static b32 sphere_vs_obb(Sphere s, const RigidBody* box, SphereContact* out)
+{
+    Mat3 rot = quat_to_mat3(box->rot);
+    Vec3 center = vec3_add(box->pos, mat3_mul_vec3(rot, box->box_offset));
+    Vec3 local = mat3_mul_vec3(mat3_transpose(rot), vec3_sub(s.center, center));
+    Vec3 h = box->half_extents;
+    Vec3 clamped = v3(f_clamp(local.x, -h.x, h.x),
+                      f_clamp(local.y, -h.y, h.y),
+                      f_clamp(local.z, -h.z, h.z));
+    Vec3 diff = vec3_sub(local, clamped);
+    f32 dist_sq = vec3_length_sq(diff);
+    if (dist_sq > s.radius * s.radius) {
+        return 0;
+    }
+    Vec3 n_local;
+    f32 depth;
+    if (dist_sq > 1e-10f) {
+        f32 dist = sqrtf(dist_sq);
+        n_local = vec3_scale(diff, 1.0f / dist);
+        depth = s.radius - dist;
+    } else {
+        f32 px = h.x - f_abs(local.x);
+        f32 py = h.y - f_abs(local.y);
+        f32 pz = h.z - f_abs(local.z);
+        if (px < py && px < pz) {
+            n_local = v3(local.x >= 0.0f ? 1.0f : -1.0f, 0.0f, 0.0f);
+            clamped.x = local.x >= 0.0f ? h.x : -h.x;
+            depth = px + s.radius;
+        } else if (py < pz) {
+            n_local = v3(0.0f, local.y >= 0.0f ? 1.0f : -1.0f, 0.0f);
+            clamped.y = local.y >= 0.0f ? h.y : -h.y;
+            depth = py + s.radius;
+        } else {
+            n_local = v3(0.0f, 0.0f, local.z >= 0.0f ? 1.0f : -1.0f);
+            clamped.z = local.z >= 0.0f ? h.z : -h.z;
+            depth = pz + s.radius;
+        }
+    }
+    out->normal = mat3_mul_vec3(rot, n_local);
+    out->point = vec3_add(center, mat3_mul_vec3(rot, clamped));
+    out->depth = depth;
+    return 1;
+}
+
+static void resolve_contact_pair(RigidBody* a, RigidBody* b, Vec3 point, Vec3 n, f32 depth)
+{
+    f32 inv_sum = a->inv_mass + b->inv_mass;
+    if (inv_sum < 1e-8f) {
+        return;
+    }
+    f32 push = depth * PHYS_PUSHOUT_BETA / inv_sum;
+    a->pos = vec3_sub(a->pos, vec3_scale(n, push * a->inv_mass));
+    b->pos = vec3_add(b->pos, vec3_scale(n, push * b->inv_mass));
+
+    Vec3 ra = vec3_sub(point, a->pos);
+    Vec3 rb = vec3_sub(point, b->pos);
+    Vec3 rel = vec3_sub(body_velocity_at_point(b, point), body_velocity_at_point(a, point));
+    f32 vn = vec3_dot(rel, n);
+    if (vn >= 0.0f) {
+        return;
+    }
+    Mat3 inv_ia = body_inv_inertia_world(a);
+    Mat3 inv_ib = body_inv_inertia_world(b);
+    Vec3 ran = vec3_cross(ra, n);
+    Vec3 rbn = vec3_cross(rb, n);
+    f32 eff = inv_sum
+              + vec3_dot(n, vec3_cross(mat3_mul_vec3(inv_ia, ran), ra))
+              + vec3_dot(n, vec3_cross(mat3_mul_vec3(inv_ib, rbn), rb));
+    if (eff < 1e-8f) {
+        return;
+    }
+    f32 e = -vn > PHYS_RESTITUTION_MIN_SPEED ? f_min(a->restitution, b->restitution) : 0.0f;
+    f32 j = -(1.0f + e) * vn / eff;
+    Vec3 impulse = vec3_scale(n, j);
+    body_apply_impulse_at_point(a, vec3_negate(impulse), point);
+    body_apply_impulse_at_point(b, impulse, point);
+
+    rel = vec3_sub(body_velocity_at_point(b, point), body_velocity_at_point(a, point));
+    Vec3 vt = vec3_sub(rel, vec3_scale(n, vec3_dot(rel, n)));
+    f32 vt_len = vec3_length(vt);
+    if (vt_len < 1e-5f) {
+        return;
+    }
+    Vec3 t = vec3_scale(vt, -1.0f / vt_len);
+    Vec3 rat = vec3_cross(ra, t);
+    Vec3 rbt = vec3_cross(rb, t);
+    f32 eff_t = inv_sum
+                + vec3_dot(t, vec3_cross(mat3_mul_vec3(inv_ia, rat), ra))
+                + vec3_dot(t, vec3_cross(mat3_mul_vec3(inv_ib, rbt), rb));
+    if (eff_t < 1e-8f) {
+        return;
+    }
+    f32 mu = 0.5f * (a->friction + b->friction);
+    f32 jt = f_min(vt_len / eff_t, mu * j);
+    Vec3 fric = vec3_scale(t, jt);
+    body_apply_impulse_at_point(a, vec3_negate(fric), point);
+    body_apply_impulse_at_point(b, fric, point);
+}
+
+static b32 collide_body_pair(RigidBody* a, RigidBody* b)
+{
+    b32 touched = 0;
+    Mat3 rot_b = quat_to_mat3(b->rot);
+    for (u32 i = 0; i < b->sphere_count; i++) {
+        Sphere s;
+        s.center = vec3_add(b->pos, mat3_mul_vec3(rot_b, b->sphere_offsets[i]));
+        s.radius = b->sphere_radius;
+        SphereContact c;
+        if (sphere_vs_obb(s, a, &c)) {
+            resolve_contact_pair(a, b, c.point, c.normal, c.depth);
+            touched = 1;
+        }
+    }
+    Mat3 rot_a = quat_to_mat3(a->rot);
+    for (u32 i = 0; i < a->sphere_count; i++) {
+        Sphere s;
+        s.center = vec3_add(a->pos, mat3_mul_vec3(rot_a, a->sphere_offsets[i]));
+        s.radius = a->sphere_radius;
+        SphereContact c;
+        if (sphere_vs_obb(s, b, &c)) {
+            resolve_contact_pair(b, a, c.point, c.normal, c.depth);
+            touched = 1;
+        }
+    }
+    return touched;
+}
+
 void phys_tick(PhysWorld* world, f32 dt)
 {
     world->contact_count = 0;
@@ -367,6 +514,11 @@ void phys_tick(PhysWorld* world, f32 dt)
         }
         body->prev_pos = body->pos;
         body->prev_rot = body->rot;
+        if (body->asleep) {
+            body->force_accum = vec3_zero();
+            body->torque_accum = vec3_zero();
+            continue;
+        }
 
         Vec3 accel = vec3_add(world->gravity, vec3_scale(body->force_accum, body->inv_mass));
         body->vel = vec3_add(body->vel, vec3_scale(accel, dt));
@@ -381,9 +533,36 @@ void phys_tick(PhysWorld* world, f32 dt)
         body->rot = quat_integrate(body->rot, body->angular_vel, dt);
     }
 
+    for (u32 ia = 0; ia < world->bodies.capacity; ia++) {
+        RigidBody* a = pool_at(&world->bodies, ia);
+        if (!a) {
+            continue;
+        }
+        f32 reach_a = vec3_length(a->half_extents) + vec3_length(a->box_offset);
+        for (u32 ib = ia + 1; ib < world->bodies.capacity; ib++) {
+            RigidBody* b = pool_at(&world->bodies, ib);
+            if (!b) {
+                continue;
+            }
+            if (a->asleep && b->asleep) {
+                continue;
+            }
+            f32 reach = reach_a + vec3_length(b->half_extents) + vec3_length(b->box_offset)
+                        + 0.2f;
+            if (vec3_distance_sq(a->pos, b->pos) > reach * reach) {
+                continue;
+            }
+            b32 mover = vec3_length_sq(a->vel) > 0.02f || vec3_length_sq(b->vel) > 0.02f;
+            if (collide_body_pair(a, b) && mover) {
+                body_wake(a);
+                body_wake(b);
+            }
+        }
+    }
+
     for (u32 idx = 0; idx < world->bodies.capacity; idx++) {
         RigidBody* body = pool_at(&world->bodies, idx);
-        if (!body) {
+        if (!body || body->asleep) {
             continue;
         }
         Mat3 rot = quat_to_mat3(body->rot);
@@ -406,8 +585,21 @@ void phys_tick(PhysWorld* world, f32 dt)
                     record->point = contacts[c].point;
                     record->normal = contacts[c].normal;
                     record->depth = contacts[c].depth;
+                    record->body.idx = idx;
+                    record->body.gen = world->bodies.gens[idx];
                 }
             }
+        }
+
+        if (vec3_length_sq(body->vel) < 0.006f && vec3_length_sq(body->angular_vel) < 0.05f) {
+            body->sleep_timer += dt;
+            if (body->sleep_timer > 0.5f) {
+                body->asleep = 1;
+                body->vel = vec3_zero();
+                body->angular_vel = vec3_zero();
+            }
+        } else {
+            body->sleep_timer = 0.0f;
         }
     }
 }

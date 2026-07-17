@@ -2253,8 +2253,13 @@ int main(int argc, char** argv)
         s_frame_dt_render = (f32)frame_dt;
         RigidBody* spark_body = phys_body(&s_phys, s_vehicle.body);
         if (spark_body && vec3_length(spark_body->vel) > 4.0f) {
-            for (u32 ci = 0; ci < s_phys.contact_count && ci < 4; ci++) {
-                carsys_spawn_sparks(s_phys.contacts[ci].point, 2);
+            u32 spawned = 0;
+            for (u32 ci = 0; ci < s_phys.contact_count && spawned < 4; ci++) {
+                if (s_phys.contacts[ci].body.idx == s_vehicle.body.idx
+                    && s_phys.contacts[ci].body.gen == s_vehicle.body.gen) {
+                    carsys_spawn_sparks(s_phys.contacts[ci].point, 2);
+                    spawned++;
+                }
             }
         }
         game_render(alpha, input);

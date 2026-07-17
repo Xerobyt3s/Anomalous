@@ -56,6 +56,7 @@ void vehicle_apply_config(Vehicle* v, struct PhysWorld* world)
     }
     body->restitution = 0.1f;
     body->friction = 0.5f;
+    body->box_offset = vec3_negate(cfg->com_offset);
 
     for (u32 i = 0; i < VEHICLE_WHEEL_COUNT; i++) {
         v->wheels[i].attach_local = vec3_sub(cfg->wheels[i].pos, cfg->com_offset);

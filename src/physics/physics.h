@@ -30,12 +30,16 @@ typedef struct RigidBody {
     f32 sphere_radius;
     f32 restitution;
     f32 friction;
+    Vec3 box_offset;
+    f32 sleep_timer;
+    b32 asleep;
 } RigidBody;
 
 typedef struct PhysContact {
     Vec3 point;
     Vec3 normal;
     f32 depth;
+    Handle body;
 } PhysContact;
 
 typedef struct PhysRayHit {
