@@ -77,6 +77,13 @@ typedef i64 GLintptr;
 #define GL_DEPTH_ATTACHMENT 0x8D00
 #define GL_FRAMEBUFFER_COMPLETE 0x8CD5
 #define GL_DEPTH_COMPONENT24 0x81A6
+#define GL_DEPTH_COMPONENT32F 0x8CAC
+#define GL_NONE 0
+#define GL_CLAMP_TO_BORDER 0x812D
+#define GL_TEXTURE_BORDER_COLOR 0x1004
+#define GL_TEXTURE_COMPARE_MODE 0x884C
+#define GL_TEXTURE_COMPARE_FUNC 0x884D
+#define GL_COMPARE_REF_TO_TEXTURE 0x884E
 #define GL_PROGRAM_POINT_SIZE 0x8642
 #define GL_FRONT_AND_BACK 0x0408
 #define GL_LINE 0x1B01
@@ -123,6 +130,9 @@ typedef void (GL_APIENTRY *GlDebugCallback)(GLenum source, GLenum type, GLuint i
     GLFN(void, glTextureStorage2D, (GLuint texture, GLsizei levels, GLenum internal_format, GLsizei width, GLsizei height)) \
     GLFN(void, glTextureSubImage2D, (GLuint texture, GLint level, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels)) \
     GLFN(void, glTextureParameteri, (GLuint texture, GLenum pname, GLint param)) \
+    GLFN(void, glTextureParameterfv, (GLuint texture, GLenum pname, const GLfloat* params)) \
+    GLFN(void, glNamedFramebufferDrawBuffer, (GLuint framebuffer, GLenum buf)) \
+    GLFN(void, glNamedFramebufferReadBuffer, (GLuint framebuffer, GLenum src)) \
     GLFN(void, glBindTextureUnit, (GLuint unit, GLuint texture)) \
     GLFN(void, glDeleteTextures, (GLsizei n, const GLuint* textures)) \
     GLFN(void, glPixelStorei, (GLenum pname, GLint param)) \

@@ -155,18 +155,28 @@ void terrain_render_draw(void)
     if (!s_ready) {
         return;
     }
-    u32 program = r_shader("terrain");
+    b32 shadow_pass = r_shadow_pass_active();
+    u32 program = r_shader(shadow_pass ? "shadow" : "terrain");
     if (!program) {
         return;
     }
-    glProgramUniform4f(program, 0, s_terrain_params.x, s_terrain_params.y,
-                       s_terrain_params.z, s_terrain_params.w);
+    if (shadow_pass) {
+        Mat4 identity = mat4_identity();
+        Mat4 light_vp = r_shadow_matrix();
+        glProgramUniformMatrix4fv(program, 0, 1, GL_FALSE, identity.m);
+        glProgramUniformMatrix4fv(program, 4, 1, GL_FALSE, light_vp.m);
+    } else {
+        glProgramUniform4f(program, 0, s_terrain_params.x, s_terrain_params.y,
+                           s_terrain_params.z, s_terrain_params.w);
+    }
     glUseProgram(program);
     glBindVertexArray(s_vao);
-    glBindTextureUnit(0, asset_texture_gl(s_tex_grass));
-    glBindTextureUnit(1, asset_texture_gl(s_tex_rock));
-    glBindTextureUnit(2, asset_texture_gl(s_tex_road));
-    glBindTextureUnit(3, s_mask_texture);
+    if (!shadow_pass) {
+        glBindTextureUnit(0, asset_texture_gl(s_tex_grass));
+        glBindTextureUnit(1, asset_texture_gl(s_tex_rock));
+        glBindTextureUnit(2, asset_texture_gl(s_tex_road));
+        glBindTextureUnit(3, s_mask_texture);
+    }
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     const Frustum* frustum = r_frustum();

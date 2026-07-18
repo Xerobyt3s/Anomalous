@@ -126,9 +126,13 @@ void carsys_render(const struct CarSys* sys, const struct Vehicle* veh,
     f32 popup = sys ? sys->popup_anim : 0.0f;
     for (u32 p = 0; p < 2; p++) {
         f32 sign = p == 0 ? -1.0f : 1.0f;
+        f32 pod = popup;
+        if (p == 1 && sys && sys->parts[PART_HEADLIGHTS].condition < 0.4f) {
+            pod = f_min(popup, 0.38f);
+        }
         Mat4 pop = mat4_mul(hood, mat4_trs(v3(sign * 0.40f, -0.0934f, -0.88f),
                                            quat_from_axis_angle(v3(1.0f, 0.0f, 0.0f),
-                                                                popup * 0.7f), one));
+                                                                pod * 0.7f), one));
         r_draw_mesh(asset_mesh("excel_popup"), pop);
     }
 

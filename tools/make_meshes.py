@@ -696,6 +696,7 @@ def make_excel_extras():
     b.begin_material("car_light")
     b.box((0.0, 0.0, -0.33), (0.11, 0.012, 0.05))
     make_double_sided(b)
+    b.vertices = [(tuple(c * 0.72 for c in p), n, uv) for p, n, uv in b.vertices]
     b.write(os.path.join(MESH_DIR, "excel_popup.amsh"))
 
     b = MeshBuilder()

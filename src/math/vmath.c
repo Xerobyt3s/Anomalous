@@ -224,6 +224,19 @@ Mat4 mat4_perspective(f32 fovy_radians, f32 aspect, f32 znear, f32 zfar)
     return m;
 }
 
+Mat4 mat4_ortho(f32 left, f32 right, f32 bottom, f32 top, f32 znear, f32 zfar)
+{
+    Mat4 m = {0};
+    m.m[0] = 2.0f / (right - left);
+    m.m[5] = 2.0f / (top - bottom);
+    m.m[10] = -2.0f / (zfar - znear);
+    m.m[12] = -(right + left) / (right - left);
+    m.m[13] = -(top + bottom) / (top - bottom);
+    m.m[14] = -(zfar + znear) / (zfar - znear);
+    m.m[15] = 1.0f;
+    return m;
+}
+
 Vec3 mat4_transform_point(Mat4 m, Vec3 p)
 {
     return v3(m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12],

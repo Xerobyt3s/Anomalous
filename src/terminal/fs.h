@@ -25,6 +25,7 @@ typedef enum FsExe {
     FS_EXE_BREACH,
     FS_EXE_GATE,
     FS_EXE_TAPES,
+    FS_EXE_DEV,
 } FsExe;
 
 typedef enum FsError {

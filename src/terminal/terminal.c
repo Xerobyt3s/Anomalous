@@ -1884,6 +1884,51 @@ static void update_tapes(Terminal* term, f32 dt)
     draw_tapes_list(term);
 }
 
+static const char* dev_phase_name(f32 tod)
+{
+    if (tod < 0.20f || tod >= 0.80f) {
+        return "NIGHT";
+    }
+    if (tod < 0.30f) {
+        return "DAWN";
+    }
+    if (tod < 0.70f) {
+        return "DAY";
+    }
+    return "DUSK";
+}
+
+static void draw_dev(Terminal* term)
+{
+    grid_clear(term);
+    grid_title(term, "DEV CONSOLE -- FIELD DIAGNOSTICS");
+    f32 hours = term->dev_tod * 24.0f;
+    i32 hh = (i32)hours;
+    i32 mm = (i32)((hours - (f32)hh) * 60.0f);
+    grid_text(term, 3, 4, TC_BRIGHT, "TIME      %02d:%02d  (%s)", hh, mm,
+              dev_phase_name(term->dev_tod));
+    grid_text(term, 4, 4, TC_GREEN, "WARP      %s", term->dev_warp ? "60X ENGAGED" : "OFF");
+    grid_text(term, 6, 4, TC_DIM, "WEATHER   CLEAR -- CONTROL MODULE NOT INSTALLED");
+
+    grid_text(term, 9, 4, TC_GREEN, "[LEFT]/[RIGHT]  TIME -/+ 30 MIN");
+    grid_text(term, 10, 4, TC_GREEN, "[1] DAWN   [2] NOON   [3] DUSK   [4] MIDNIGHT");
+    grid_text(term, 11, 4, TC_GREEN, "[T] TOGGLE TIME WARP");
+
+    if (fmodf(term->blink, 1.4f) < 0.8f) {
+        grid_text(term, 14, 4, TC_AMBER, "ENGINEERING BUILD -- NOT FOR FIELD UNITS");
+    }
+    grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "[Q] EXIT");
+}
+
+static void dev_request_time(Terminal* term, f32 tod)
+{
+    tod -= floorf(tod);
+    term->dev_time_value = tod;
+    term->dev_time_request = 1;
+    term->dev_tod = tod;
+    term->click_pending = 1;
+}
+
 static void shell_del(Terminal* term, const char* path)
 {
     FsRef ref;
@@ -2536,6 +2581,9 @@ static void term_launch_exe(Terminal* term, const FsNode* node)
     case FS_EXE_GATE:
         term_print(term, "GATE ACTUATOR: NO BARRIER WIRED TO THIS NODE.\n");
         break;
+    case FS_EXE_DEV:
+        term->mode = TERM_DEV;
+        break;
     case FS_EXE_TAPES:
         term->mode = TERM_TAPES;
         term->tapes_sel = 0;
@@ -2747,6 +2795,21 @@ void terminal_key_char(Terminal* term, char c)
         }
         return;
     }
+    if (term->mode == TERM_DEV) {
+        if (c == '1') {
+            dev_request_time(term, 0.27f);
+        } else if (c == '2') {
+            dev_request_time(term, 0.50f);
+        } else if (c == '3') {
+            dev_request_time(term, 0.72f);
+        } else if (c == '4') {
+            dev_request_time(term, 0.0f);
+        } else if (c == 'T') {
+            term->dev_warp = !term->dev_warp;
+            term->click_pending = 1;
+        }
+        return;
+    }
     if (term->mode == TERM_TAPES) {
         if (term->tapes_prompt_track >= 0
             && term->tapes_dest_len + 1 < sizeof(term->tapes_dest)) {
@@ -2813,6 +2876,16 @@ void terminal_key_special(Terminal* term, i32 key)
             term->map_downloading = 0;
             term->mode = TERM_SHELL;
             term_print(term, "TRANSFER ABORTED.\n");
+        }
+        return;
+    }
+    if (term->mode == TERM_DEV) {
+        if (key == KEY_LEFT) {
+            dev_request_time(term, term->dev_tod - 1.0f / 48.0f);
+        } else if (key == KEY_RIGHT) {
+            dev_request_time(term, term->dev_tod + 1.0f / 48.0f);
+        } else if (key == KEY_ENTER || key == KEY_Q || key == KEY_ESCAPE) {
+            term->mode = TERM_SHELL;
         }
         return;
     }
@@ -4097,6 +4170,9 @@ void terminal_update(Terminal* term, const TermView* view, f32 dt)
     term->bus_tower = view->bus_tower;
     term->tower_breached = view->tower_breached;
     term->tower_pos = view->tower_pos;
+    if (!term->dev_time_request) {
+        term->dev_tod = view->time_of_day;
+    }
     term->deck_docked = view->sys->parts[PART_COMPUTER].installed;
     term->deck_tape = view->sys->tape_inserted;
     term->deck_cond = view->sys->tape_cond;
@@ -4177,6 +4253,9 @@ void terminal_update(Terminal* term, const TermView* view, f32 dt)
         break;
     case TERM_TAPES:
         update_tapes(term, dt);
+        break;
+    case TERM_DEV:
+        draw_dev(term);
         break;
     }
 

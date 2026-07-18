@@ -14,6 +14,10 @@ layout(std140, binding = 0) uniform CameraBlock {
     vec4 u_fog_color_density;
     vec4 u_spot_pos_cone[2];
     vec4 u_spot_dir_intensity[2];
+    mat4 u_shadow_mat;
+    vec4 u_shadow_params;
+    vec4 u_point_pos_radius[4];
+    vec4 u_point_color[4];
 };
 
 out vec3 v_world;

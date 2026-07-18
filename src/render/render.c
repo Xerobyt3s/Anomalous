@@ -35,6 +35,10 @@ typedef struct CameraUbo {
     Vec4 fog_color_density;
     Vec4 spot_pos_cone[2];
     Vec4 spot_dir_intensity[2];
+    Mat4 shadow_mat;
+    Vec4 shadow_params;
+    Vec4 point_pos_radius[4];
+    Vec4 point_color[4];
 } CameraUbo;
 
 static ShaderEntry s_shaders[MAX_SHADERS];
@@ -52,6 +56,21 @@ static f64 s_next_poll_time;
 static Vec3 s_spot_pos[2];
 static Vec3 s_spot_dir = { 0.0f, 0.0f, -1.0f };
 static f32 s_spot_intensity;
+static Vec3 s_point_pos[4];
+static Vec3 s_point_color[4];
+static f32 s_point_radius[4];
+static Vec3 s_sky_fwd = { 0.0f, 0.0f, -1.0f };
+static Vec3 s_sky_right = { 1.0f, 0.0f, 0.0f };
+static Vec3 s_sky_up = { 0.0f, 1.0f, 0.0f };
+
+#define SHADOW_SIZE 2048
+
+static u32 s_shadow_fbo;
+static u32 s_shadow_tex;
+static b32 s_shadow_broken;
+static b32 s_shadow_pass;
+static f32 s_shadow_strength;
+static Mat4 s_shadow_mat;
 
 static u32 shader_compile_stage(GLenum type, const char* path)
 {
@@ -182,6 +201,9 @@ void r_blit_texture(f32 x, f32 y, f32 w, f32 h, u32 gl_texture, f32 alpha)
 
 void r_draw_lit_quad(Mat4 model, u32 gl_texture)
 {
+    if (s_shadow_pass) {
+        return;
+    }
     u32 program = r_shader("screen");
     if (!program) {
         return;
@@ -287,6 +309,16 @@ void r_set_headlights(Vec3 pos_left, Vec3 pos_right, Vec3 dir, f32 intensity)
     s_spot_intensity = intensity;
 }
 
+void r_set_point_light(u32 index, Vec3 pos, Vec3 color, f32 radius)
+{
+    if (index >= 4) {
+        return;
+    }
+    s_point_pos[index] = pos;
+    s_point_color[index] = color;
+    s_point_radius[index] = radius;
+}
+
 void r_set_environment(Vec3 sun_dir, Vec3 sun_color, f32 ambient, Vec3 fog_color, f32 fog_density)
 {
     s_sun_dir = vec3_normalize(sun_dir);
@@ -310,16 +342,32 @@ static void view_setup(const Camera* cam, f32 width, f32 height)
     ubo.sun_dir = vec4_from_vec3(s_sun_dir, 0.0f);
     ubo.sun_color_ambient = vec4_from_vec3(s_sun_color, s_ambient);
     ubo.fog_color_density = vec4_from_vec3(s_fog_color, s_fog_density);
-    f32 cone = cosf(21.0f * DEG_TO_RAD);
+    f32 cone = cosf(24.0f * DEG_TO_RAD);
     for (u32 i = 0; i < 2; i++) {
         ubo.spot_pos_cone[i] = vec4_from_vec3(s_spot_pos[i], cone);
         ubo.spot_dir_intensity[i] = vec4_from_vec3(s_spot_dir, s_spot_intensity);
     }
+    ubo.shadow_mat = s_shadow_mat;
+    ubo.shadow_params = v4(s_shadow_strength, 1.0f / (f32)SHADOW_SIZE, 0.0f, 0.0f);
+    for (u32 i = 0; i < 4; i++) {
+        ubo.point_pos_radius[i] = vec4_from_vec3(s_point_pos[i], s_point_radius[i]);
+        ubo.point_color[i] = vec4_from_vec3(s_point_color[i], 0.0f);
+    }
     glNamedBufferSubData(s_camera_ubo, 0, sizeof(CameraUbo), &ubo);
+    if (s_shadow_tex) {
+        glBindTextureUnit(7, s_shadow_tex);
+    }
 
     s_view_proj = ubo.view_proj;
     s_cam_pos = cam->pos;
     s_frustum = frustum_from_view_proj(s_view_proj);
+
+    f32 tan_h = tanf(cam->fov_y * 0.5f);
+    s_sky_fwd = camera_forward(cam);
+    Vec3 cam_right = camera_right(cam);
+    Vec3 cam_up = vec3_normalize(vec3_cross(cam_right, s_sky_fwd));
+    s_sky_right = vec3_scale(cam_right, tan_h * aspect);
+    s_sky_up = vec3_scale(cam_up, tan_h);
 
     glViewport(0, 0, (GLsizei)width, (GLsizei)height);
     glClearColor(s_fog_color.x, s_fog_color.y, s_fog_color.z, 1.0f);
@@ -377,6 +425,105 @@ u32 r_video_end(void)
 {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return s_video_tex;
+}
+
+b32 r_shadow_begin(Vec3 focus)
+{
+    if (s_shadow_broken) {
+        return 0;
+    }
+    if (!s_shadow_fbo) {
+        glCreateTextures(GL_TEXTURE_2D, 1, &s_shadow_tex);
+        glTextureStorage2D(s_shadow_tex, 1, GL_DEPTH_COMPONENT32F, SHADOW_SIZE, SHADOW_SIZE);
+        glTextureParameteri(s_shadow_tex, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTextureParameteri(s_shadow_tex, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTextureParameteri(s_shadow_tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+        glTextureParameteri(s_shadow_tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        f32 border[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        glTextureParameterfv(s_shadow_tex, GL_TEXTURE_BORDER_COLOR, border);
+        glTextureParameteri(s_shadow_tex, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTextureParameteri(s_shadow_tex, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        glCreateFramebuffers(1, &s_shadow_fbo);
+        glNamedFramebufferTexture(s_shadow_fbo, GL_DEPTH_ATTACHMENT, s_shadow_tex, 0);
+        glNamedFramebufferDrawBuffer(s_shadow_fbo, GL_NONE);
+        glNamedFramebufferReadBuffer(s_shadow_fbo, GL_NONE);
+        if (glCheckNamedFramebufferStatus(s_shadow_fbo, GL_FRAMEBUFFER)
+            != GL_FRAMEBUFFER_COMPLETE) {
+            log_error("render: shadow framebuffer incomplete");
+            s_shadow_broken = 1;
+            return 0;
+        }
+    }
+
+    Vec3 qdir = vec3_normalize(v3(floorf(s_sun_dir.x * 160.0f + 0.5f) / 160.0f,
+                                  floorf(s_sun_dir.y * 160.0f + 0.5f) / 160.0f,
+                                  floorf(s_sun_dir.z * 160.0f + 0.5f) / 160.0f));
+    Vec3 to_sun = vec3_scale(qdir, -1.0f);
+    if (to_sun.y < 0.03f) {
+        s_shadow_strength = 0.0f;
+        return 0;
+    }
+    f32 light_lum = 0.30f * s_sun_color.x + 0.55f * s_sun_color.y + 0.15f * s_sun_color.z;
+    s_shadow_strength = 0.80f * f_clamp01((to_sun.y - 0.03f) / 0.10f)
+                      * f_clamp01(light_lum / 0.45f);
+
+    f32 ext = 55.0f;
+    Vec3 fwd = qdir;
+    Vec3 up_hint = f_abs(fwd.y) > 0.93f ? v3(0.0f, 0.0f, 1.0f) : v3(0.0f, 1.0f, 0.0f);
+    Vec3 side = vec3_normalize(vec3_cross(fwd, up_hint));
+    Vec3 up = vec3_cross(side, fwd);
+    f32 texel = 2.0f * ext / (f32)SHADOW_SIZE;
+    f32 sx = vec3_dot(side, focus);
+    f32 sy = vec3_dot(up, focus);
+    Vec3 snapped = vec3_add(focus,
+                            vec3_add(vec3_scale(side, floorf(sx / texel) * texel - sx),
+                                     vec3_scale(up, floorf(sy / texel) * texel - sy)));
+    Vec3 eye = vec3_sub(snapped, vec3_scale(fwd, 130.0f));
+    Mat4 view = mat4_look_at(eye, snapped, up);
+    Mat4 proj = mat4_ortho(-ext, ext, -ext, ext, 1.0f, 280.0f);
+    s_shadow_mat = mat4_mul(proj, view);
+    s_frustum = frustum_from_view_proj(s_shadow_mat);
+
+    glBindTextureUnit(7, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_shadow_fbo);
+    glViewport(0, 0, SHADOW_SIZE, SHADOW_SIZE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    s_shadow_pass = 1;
+    return 1;
+}
+
+void r_shadow_end(void)
+{
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    s_shadow_pass = 0;
+}
+
+b32 r_shadow_pass_active(void)
+{
+    return s_shadow_pass;
+}
+
+Mat4 r_shadow_matrix(void)
+{
+    return s_shadow_mat;
+}
+
+void r_draw_sky(f32 time)
+{
+    u32 program = r_shader("sky");
+    if (!program) {
+        return;
+    }
+    glUseProgram(program);
+    glProgramUniform4f(program, 1, s_sky_fwd.x, s_sky_fwd.y, s_sky_fwd.z, time);
+    glProgramUniform4f(program, 2, s_sky_right.x, s_sky_right.y, s_sky_right.z, 0.0f);
+    glProgramUniform4f(program, 3, s_sky_up.x, s_sky_up.y, s_sky_up.z, 0.0f);
+    glDepthMask(GL_FALSE);
+    glBindVertexArray(s_quad_vao);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    glDepthMask(GL_TRUE);
 }
 
 void r_end_frame(void)
@@ -457,18 +604,23 @@ void r_draw_mesh(const struct GpuMesh* mesh, Mat4 model)
     if (!frustum_test_aabb(&s_frustum, world_bounds)) {
         return;
     }
-    u32 program = r_shader("mesh");
+    u32 program = r_shader(s_shadow_pass ? "shadow" : "mesh");
     if (!program) {
         return;
     }
     glProgramUniformMatrix4fv(program, 0, 1, GL_FALSE, model.m);
+    if (s_shadow_pass) {
+        glProgramUniformMatrix4fv(program, 4, 1, GL_FALSE, s_shadow_mat.m);
+    }
     glUseProgram(program);
     glBindVertexArray(mesh->vao);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     for (u32 i = 0; i < mesh->submesh_count; i++) {
         const GpuSubmesh* sub = &mesh->submeshes[i];
-        glBindTextureUnit(0, asset_texture_gl(sub->texture_slot));
+        if (!s_shadow_pass) {
+            glBindTextureUnit(0, asset_texture_gl(sub->texture_slot));
+        }
         glDrawElements(GL_TRIANGLES, (GLsizei)sub->index_count, GL_UNSIGNED_INT,
                        (const void*)((u64)sub->first_index * sizeof(u32)));
     }

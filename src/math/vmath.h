@@ -206,6 +206,7 @@ Mat4 mat4_inverse(Mat4 m);
 Mat4 mat4_trs(Vec3 pos, Quat rot, Vec3 scale);
 Mat4 mat4_look_at(Vec3 eye, Vec3 target, Vec3 up);
 Mat4 mat4_perspective(f32 fovy_radians, f32 aspect, f32 znear, f32 zfar);
+Mat4 mat4_ortho(f32 left, f32 right, f32 bottom, f32 top, f32 znear, f32 zfar);
 Vec3 mat4_transform_point(Mat4 m, Vec3 p);
 Vec3 mat4_transform_dir(Mat4 m, Vec3 d);
 

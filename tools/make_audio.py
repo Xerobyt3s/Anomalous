@@ -175,6 +175,24 @@ def make_flap():
     write_wav("flap.wav", lowpass(samples, 0.08))
 
 
+def make_whir():
+    dur = 0.42
+    n = int(RATE * dur)
+    rng = random.Random(77)
+    samples = []
+    phase = 0.0
+    for i in range(n):
+        t = i / RATE
+        f = 92.0 + 58.0 * min(t / 0.36, 1.0)
+        phase += 2.0 * math.pi * f / RATE
+        motor = 0.55 * math.sin(phase) + 0.30 * math.sin(2.03 * phase) \
+              + 0.18 * math.sin(3.09 * phase)
+        gear = 0.22 * math.sin(phase * 9.0 + 0.6 * math.sin(phase * 0.5))
+        env = min(t / 0.04, 1.0) * min(max((dur - t) / 0.06, 0.0), 1.0)
+        samples.append((motor + gear + rng.uniform(-1, 1) * 0.06) * env)
+    write_wav("whir.wav", samples)
+
+
 def main():
     os.makedirs(AUDIO_DIR, exist_ok=True)
     make_horn()
@@ -189,6 +207,7 @@ def main():
     thunk("thump.wav", 80.0, 0.12, 0.5, 0.7, seed=13)
     make_ratchet()
     make_engine_start()
+    make_whir()
 
 
 if __name__ == "__main__":

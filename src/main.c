@@ -370,6 +370,41 @@ static void draw_carsys_panel(void)
     ui_panel_end();
 }
 
+#define DAY_LENGTH_SECONDS 1080.0f
+
+static f32 s_time_of_day = 0.34f;
+
+static void update_environment(f32 frame_dt)
+{
+    f32 warp = platform_input()->key_down[KEY_F7] || s_terminal.dev_warp ? 60.0f : 1.0f;
+    s_time_of_day += frame_dt * warp / DAY_LENGTH_SECONDS;
+    s_time_of_day -= floorf(s_time_of_day);
+
+    f32 a = (s_time_of_day - 0.25f) * 2.0f * PI32;
+    Vec3 to_sun = vec3_normalize(v3(cosf(a) * 0.9f, sinf(a), 0.38f));
+    f32 elevation = to_sun.y;
+    f32 day = f_clamp01(elevation * 4.0f + 0.08f);
+    f32 dusk = f_clamp01(1.0f - f_abs(elevation) * 4.0f);
+
+    Vec3 sun_color = vec3_lerp(v3(1.0f, 0.52f, 0.28f), v3(1.0f, 0.96f, 0.88f),
+                               f_clamp01(elevation * 2.6f));
+    sun_color = vec3_scale(sun_color, day);
+    f32 moon = f_clamp01(-elevation * 4.0f - 0.08f);
+    f32 ambient = 0.10f + 0.28f * day;
+
+    Vec3 fog = vec3_lerp(v3(0.065f, 0.085f, 0.13f), v3(0.62f, 0.68f, 0.76f), day);
+    fog = vec3_lerp(fog, v3(0.72f, 0.45f, 0.32f), dusk * 0.55f);
+    f32 fog_density = 0.0028f + 0.0009f * (1.0f - day);
+
+    Vec3 light_dir = vec3_scale(to_sun, -1.0f);
+    Vec3 light_color = sun_color;
+    if (moon > day) {
+        light_dir = to_sun;
+        light_color = vec3_scale(v3(0.50f, 0.60f, 0.80f), 0.40f * moon);
+    }
+    r_set_environment(light_dir, light_color, ambient, fog, fog_density);
+}
+
 static void update_headlights(f32 alpha)
 {
     RigidBody* body = phys_body(&s_phys, s_vehicle.body);
@@ -383,8 +418,39 @@ static void update_headlights(f32 alpha)
     Vec3 left = vec3_add(pos, quat_rotate_vec3(rot, vec3_sub(v3(-0.55f, 0.02f, -2.05f), com)));
     Vec3 right = vec3_add(pos, quat_rotate_vec3(rot, vec3_sub(v3(0.55f, 0.02f, -2.05f), com)));
     Vec3 dir = quat_rotate_vec3(rot, v3(0.0f, -0.10f, -0.99f));
-    f32 intensity = s_vehicle.effects.headlights_on ? 5.0f : 0.0f;
+    f32 rise = f_clamp01((s_carsys.popup_anim - 0.20f) / 0.55f);
+    f32 intensity = s_vehicle.effects.headlights_on ? 14.0f * rise : 0.0f;
     r_set_headlights(left, right, dir, intensity);
+}
+
+static void update_cabin_lights(f32 alpha)
+{
+    RigidBody* body = phys_body(&s_phys, s_vehicle.body);
+    if (!body) {
+        for (u32 i = 0; i < 4; i++) {
+            r_set_point_light(i, vec3_zero(), vec3_zero(), 0.0f);
+        }
+        return;
+    }
+    Vec3 pos = vec3_lerp(body->prev_pos, body->pos, alpha);
+    Quat rot = quat_slerp(body->prev_rot, body->rot, alpha);
+    Vec3 com = s_vehicle.cfg.com_offset;
+    b32 powered = s_carsys.elec.battery_charge > 0.02f;
+
+    Vec3 screen_pos = vec3_add(pos, quat_rotate_vec3(rot, vec3_sub(v3(0.30f, 0.14f, 0.14f), com)));
+    b32 screen_on = s_carsys.computer_on && s_carsys.parts[PART_COMPUTER].installed
+                    && s_terminal.powered;
+    r_set_point_light(0, screen_pos, v3(0.22f, 0.75f, 0.34f), screen_on ? 1.9f : 0.0f);
+
+    Vec3 dash_pos = vec3_add(pos, quat_rotate_vec3(rot, vec3_sub(v3(-0.25f, 0.10f, -0.18f), com)));
+    b32 dash_on = powered && s_vehicle.effects.headlights_on;
+    r_set_point_light(1, dash_pos, v3(0.65f, 0.38f, 0.16f), dash_on ? 1.3f : 0.0f);
+
+    Vec3 dome_pos = vec3_add(pos, quat_rotate_vec3(rot, vec3_sub(v3(0.0f, 0.52f, 0.12f), com)));
+    b32 dome_on = powered && (s_carsys.door_open[0] > 0.4f || s_carsys.door_open[1] > 0.4f);
+    r_set_point_light(2, dome_pos, v3(0.75f, 0.70f, 0.55f), dome_on ? 2.3f : 0.0f);
+
+    r_set_point_light(3, vec3_zero(), vec3_zero(), 0.0f);
 }
 
 static void draw_status_hud(void)
@@ -795,6 +861,12 @@ static void update_audio(f32 frame_dt)
     if (s_carsys.computer_on != prev_computer_on) {
         audio_play(SFX_THUMP, 0.35f, 1.9f);
         prev_computer_on = s_carsys.computer_on;
+    }
+    static b32 prev_lights;
+    if (s_vehicle.effects.headlights_on != prev_lights) {
+        sfx_at(SFX_WHIR, 0.45f, s_vehicle.effects.headlights_on ? 1.0f : 0.9f,
+               car_audio_point(v3(0.0f, 0.1f, -1.7f)));
+        prev_lights = s_vehicle.effects.headlights_on;
     }
 
     u32 installed = 0;
@@ -1307,11 +1379,26 @@ static void render_video_feed(f32 alpha)
     cable_render(&s_carsys.cables[CABLE_BUS]);
     vehicle_render(&s_vehicle, &s_phys, alpha);
     carsys_render(&s_carsys, &s_vehicle, &s_phys, alpha, 0.0f, 0);
+    r_draw_sky((f32)fmod(platform_time_now(), 1000.0));
     terminal_video_set(r_video_end());
+}
+
+static void render_shadow_pass(f32 alpha)
+{
+    Vec3 focus = vec3_add(s_camera.pos, vec3_scale(camera_forward(&s_camera), 16.0f));
+    if (!r_shadow_begin(focus)) {
+        return;
+    }
+    terrain_render_draw();
+    world_render(&s_world);
+    vehicle_render(&s_vehicle, &s_phys, alpha);
+    carsys_render(&s_carsys, &s_vehicle, &s_phys, alpha, 0.0f, 0);
+    r_shadow_end();
 }
 
 static void game_render(f32 alpha, const GameInput* input)
 {
+    render_shadow_pass(alpha);
     render_video_feed(alpha);
     terminal_render(&s_terminal);
     r_begin_frame(&s_camera);
@@ -1350,6 +1437,7 @@ static void game_render(f32 alpha, const GameInput* input)
     vehicle_render(&s_vehicle, &s_phys, alpha);
     carsys_render(&s_carsys, &s_vehicle, &s_phys, alpha, s_frame_dt_render,
                   s_terminal.powered ? terminal_texture(&s_terminal) : 0);
+    r_draw_sky((f32)fmod(platform_time_now(), 1000.0));
     draw_interact_highlights(alpha);
     draw_cargo_preview(alpha);
     draw_place_preview();
@@ -2693,6 +2781,7 @@ int main(int argc, char** argv)
             view.veh = &s_vehicle;
             view.phys = &s_phys;
             view.terrain = &s_terrain;
+            view.time_of_day = s_time_of_day;
             view.car_pos = term_body ? term_body->pos : vec3_zero();
             view.garage_pos = s_zone_spawn.car_pos;
             view.mission_pos = s_mission_out;
@@ -2728,6 +2817,11 @@ int main(int argc, char** argv)
                     audio_play(SFX_RATCHET, 0.5f, 1.6f);
                 }
             }
+            if (s_terminal.dev_time_request) {
+                s_terminal.dev_time_request = 0;
+                s_time_of_day = s_terminal.dev_time_value;
+                s_time_of_day -= floorf(s_time_of_day);
+            }
             for (u32 lk = 0; lk < 2; lk++) {
                 if (s_terminal.link_request[lk]) {
                     s_terminal.link_request[lk] = 0;
@@ -2744,6 +2838,7 @@ int main(int argc, char** argv)
         }
 
         update_audio((f32)frame_dt);
+        update_environment((f32)frame_dt);
         s_term_anim = f_approach_exp(s_term_anim, s_term_focus ? 1.0f : 0.0f, 7.0f, (f32)frame_dt);
         if (s_term_anim > 0.002f) {
             b32 have_screen = 0;
@@ -2784,6 +2879,7 @@ int main(int argc, char** argv)
             }
         }
         update_headlights(alpha);
+        update_cabin_lights(alpha);
         s_frame_dt_render = (f32)frame_dt;
         RigidBody* spark_body = phys_body(&s_phys, s_vehicle.body);
         if (spark_body && vec3_length(spark_body->vel) > 4.0f) {

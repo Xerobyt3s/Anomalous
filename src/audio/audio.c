@@ -208,6 +208,7 @@ static const char* s_sfx_paths[SFX_KIND_COUNT] = {
     "assets/audio/thump.wav",
     "assets/audio/flap.wav",
     "assets/audio/engine_start.wav",
+    "assets/audio/whir.wav",
 };
 
 static void sound_spatial(ma_sound* sound, f32 min_dist, f32 max_dist)

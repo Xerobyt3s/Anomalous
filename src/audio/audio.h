@@ -12,6 +12,7 @@ typedef enum SfxKind {
     SFX_THUMP,
     SFX_FLAP,
     SFX_ENGINE_START,
+    SFX_WHIR,
     SFX_KIND_COUNT,
 } SfxKind;
 

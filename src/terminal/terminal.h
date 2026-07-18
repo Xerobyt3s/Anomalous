@@ -33,6 +33,7 @@ typedef enum TermMode {
     TERM_VIDEO,
     TERM_BREACH,
     TERM_TAPES,
+    TERM_DEV,
 } TermMode;
 
 typedef enum CommsPhase {
@@ -47,6 +48,7 @@ typedef struct TermView {
     const struct Vehicle* veh;
     struct PhysWorld* phys;
     const struct Terrain* terrain;
+    f32 time_of_day;
     Vec3 car_pos;
     Vec3 garage_pos;
     Vec3 mission_pos;
@@ -146,6 +148,10 @@ typedef struct Terminal {
     f32 tapes_status_until;
     b32 tape_write_request;
     i32 tape_write_value;
+    f32 dev_tod;
+    b32 dev_warp;
+    b32 dev_time_request;
+    f32 dev_time_value;
     i32 cwd_drive;
     i32 cwd_node;
     i32 format_drive;
