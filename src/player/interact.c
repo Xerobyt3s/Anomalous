@@ -225,6 +225,15 @@ static void resolve_in_car(Candidate* best, Interact* it, struct Player* player,
                            sys->handbrake_latched ? "[E] release handbrake" : "[E] set handbrake");
     }
 
+    static const char* wiper_modes[3] = { "off", "interval", "full" };
+    Vec3 stalk_center = vec3_sub(v3(-0.48f, 0.08f, -0.28f), com);
+    Vec3 stalk_half = v3(0.05f, 0.04f, 0.06f);
+    if (ray_vs_local_box(local, stalk_center, stalk_half, &t)) {
+        char wprompt[96];
+        snprintf(wprompt, sizeof(wprompt), "[E] wipers: %s", wiper_modes[sys->wiper_mode % 3]);
+        candidate_consider(best, t, ACTION_WIPERS, stalk_center, stalk_half, 0, wprompt);
+    }
+
     Vec3 ignition_center = vec3_sub(v3(-0.22f, 0.05f, -0.28f), com);
     Vec3 ignition_half = v3(0.07f, 0.06f, 0.08f);
     if (ray_vs_local_box(local, ignition_center, ignition_half, &t)) {
@@ -825,6 +834,9 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
         it->hands.aux = sys->floppy_disk;
         it->hands.condition = sys->floppy_cond;
         sys->floppy_disk = -1;
+        break;
+    case ACTION_WIPERS:
+        sys->wiper_mode = (sys->wiper_mode + 1) % 3;
         break;
     case ACTION_TAPE_INSERT:
         sys->tape_inserted = it->hands.aux;

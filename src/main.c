@@ -18,6 +18,7 @@
 #include "world/world.h"
 #include "world/terrain.h"
 #include "world/zone.h"
+#include "world/weather.h"
 #include "player/player.h"
 #include "player/interact.h"
 #include "carsys/carsys.h"
@@ -61,6 +62,8 @@ static Player s_player;
 static CarSys s_carsys;
 static Interact s_interact;
 static Terminal s_terminal;
+static Weather s_weather;
+static Vec3 s_cam_vel_shared;
 static b32 s_term_focus;
 static f32 s_term_anim;
 static Vec3 s_tower_pos;
@@ -150,7 +153,18 @@ static void reset_car(void)
 
 static void game_tick(f32 dt, PlayerCommand cmd)
 {
+    weather_tick(&s_weather, dt);
+    s_carsys.rain_level = s_weather.rain;
     carsys_tick(&s_carsys, &s_vehicle, &s_phys, dt);
+    if (s_weather.wetness > 0.002f) {
+        RigidBody* wet_body = phys_body(&s_phys, s_vehicle.body);
+        f32 road = wet_body
+                   ? terrain_road_amount(&s_terrain, wet_body->pos.x, wet_body->pos.z) : 0.0f;
+        f32 wet_mul = 1.0f - s_weather.wetness * f_lerp(0.40f, 0.24f, road);
+        for (u32 i = 0; i < VEHICLE_WHEEL_COUNT; i++) {
+            s_vehicle.effects.tire_grip_mul[i] *= wet_mul;
+        }
+    }
     vehicle_tick(&s_vehicle, &s_phys, dt);
     phys_tick(&s_phys, dt);
     player_tick(&s_player, &s_phys, &s_vehicle, cmd, dt);
@@ -402,7 +416,17 @@ static void update_environment(f32 frame_dt)
         light_dir = to_sun;
         light_color = vec3_scale(v3(0.50f, 0.60f, 0.80f), 0.40f * moon);
     }
+
+    f32 overcast = s_weather.overcast;
+    light_color = vec3_scale(light_color, 1.0f - overcast * 0.72f);
+    ambient *= 1.0f - overcast * 0.30f;
+    f32 fog_luma = 0.30f * fog.x + 0.55f * fog.y + 0.15f * fog.z;
+    fog = vec3_lerp(fog, vec3_scale(v3(fog_luma, fog_luma, fog_luma * 1.06f), 0.85f),
+                    overcast * 0.75f);
+    fog_density += 0.0035f * overcast + 0.0030f * s_weather.rain;
+
     r_set_environment(light_dir, light_color, ambient, fog, fog_density);
+    r_set_weather(overcast, s_weather.wetness);
 }
 
 static void update_headlights(f32 alpha)
@@ -818,6 +842,7 @@ static void update_audio(f32 frame_dt)
     }
     prev_cam_pos = s_camera.pos;
     prev_cam_valid = 1;
+    s_cam_vel_shared = cam_vel;
     audio_listener_set(s_camera.pos, camera_forward(&s_camera), cam_vel);
     if (body) {
         audio_car_set(car_audio_point(v3(0.0f, 0.1f, -1.3f)), body->pos,
@@ -933,7 +958,24 @@ static void update_audio(f32 frame_dt)
     }
     audio_skid_set(f_clamp01((max_slide - 2.5f) / 6.0f), frame_dt);
     f32 road = body ? terrain_road_amount(&s_terrain, body->pos.x, body->pos.z) : 0.0f;
-    audio_rolling_set(speed, road, grounded, frame_dt);
+    audio_rolling_set(speed, road, grounded, s_weather.wetness, frame_dt);
+
+    b32 driving = player_driving(&s_player);
+    f32 rain_ext = s_weather.rain * (driving ? 0.35f : 1.0f);
+    f32 rain_roof = driving ? s_weather.rain : 0.0f;
+    audio_rain_set(rain_ext, rain_roof, frame_dt);
+
+    static f32 prev_wiper_sweep;
+    static i32 wiper_dir;
+    f32 sweep_delta = s_carsys.wiper_sweep - prev_wiper_sweep;
+    i32 new_dir = sweep_delta > 0.0005f ? 1 : (sweep_delta < -0.0005f ? -1 : wiper_dir);
+    if (new_dir != wiper_dir && wiper_dir != 0 && s_carsys.wiper_mode > 0) {
+        f32 dry = 1.0f - f_clamp01(s_carsys.windshield_wet * 3.0f);
+        sfx_at(SFX_WIPER, 0.10f + dry * 0.07f, 0.92f + dry * 0.35f + s_carsys.wiper_sweep * 0.06f,
+               car_audio_point(v3(0.0f, 0.25f, -0.45f)));
+    }
+    wiper_dir = new_dir;
+    prev_wiper_sweep = s_carsys.wiper_sweep;
 
     static i32 prev_tape = -1;
     static b32 prev_deck_play;
@@ -1380,6 +1422,9 @@ static void render_video_feed(f32 alpha)
     vehicle_render(&s_vehicle, &s_phys, alpha);
     carsys_render(&s_carsys, &s_vehicle, &s_phys, alpha, 0.0f, 0);
     r_draw_sky((f32)fmod(platform_time_now(), 1000.0));
+    carsys_render_glass(&s_carsys, &s_vehicle, &s_phys, alpha);
+    r_draw_rain(s_weather.rain, s_weather.wind, vec3_zero(),
+                (f32)fmod(platform_time_now(), 1000.0));
     terminal_video_set(r_video_end());
 }
 
@@ -1407,6 +1452,7 @@ static void game_render(f32 alpha, const GameInput* input)
     ui_begin_frame(input);
 
     if (s_term_anim >= 0.995f && s_carsys.computer_on) {
+        r_post_process((f32)fmod(platform_time_now(), 1000.0));
         Vec2 vp = r_viewport_size();
         r_blit_texture(0.0f, 0.0f, vp.x, vp.y, terminal_texture(&s_terminal), 1.0f);
         dd_text_2d(vp.x * 0.5f - 80.0f, vp.y - 10.0f, 14.0f, DD_GRAY, "ESC to look away");
@@ -1438,10 +1484,16 @@ static void game_render(f32 alpha, const GameInput* input)
     carsys_render(&s_carsys, &s_vehicle, &s_phys, alpha, s_frame_dt_render,
                   s_terminal.powered ? terminal_texture(&s_terminal) : 0);
     r_draw_sky((f32)fmod(platform_time_now(), 1000.0));
+    r_scene_grab();
+    carsys_render_glass(&s_carsys, &s_vehicle, &s_phys, alpha);
+    r_draw_rain(s_weather.rain, s_weather.wind, s_cam_vel_shared,
+                (f32)fmod(platform_time_now(), 1000.0));
+    draw_viewmodel(alpha);
+    r_set_windshield(s_carsys.windshield_wet, s_carsys.wiper_sweep, s_carsys.glass_wet);
+    r_post_process((f32)fmod(platform_time_now(), 1000.0));
     draw_interact_highlights(alpha);
     draw_cargo_preview(alpha);
     draw_place_preview();
-    draw_viewmodel(alpha);
 
     if (s_capture_pending) {
         s_capture_pending = 0;
@@ -2489,6 +2541,8 @@ int main(int argc, char** argv)
     carsys_init(&s_carsys);
     interact_init(&s_interact);
     terminal_init(&s_terminal);
+    r_shader("rain");
+    weather_init(&s_weather, 20260718ull);
     tapes_init();
     spawn_spares();
     spawn_lore_tape();
@@ -2782,6 +2836,9 @@ int main(int argc, char** argv)
             view.phys = &s_phys;
             view.terrain = &s_terrain;
             view.time_of_day = s_time_of_day;
+            view.weather_rain = s_weather.rain;
+            view.weather_wetness = s_weather.wetness;
+            view.weather_mode = (i32)s_weather.mode;
             view.car_pos = term_body ? term_body->pos : vec3_zero();
             view.garage_pos = s_zone_spawn.car_pos;
             view.mission_pos = s_mission_out;
@@ -2821,6 +2878,11 @@ int main(int argc, char** argv)
                 s_terminal.dev_time_request = 0;
                 s_time_of_day = s_terminal.dev_time_value;
                 s_time_of_day -= floorf(s_time_of_day);
+            }
+            if (s_terminal.dev_weather_request) {
+                WeatherMode wm = (WeatherMode)(s_terminal.dev_weather_request - 1);
+                s_terminal.dev_weather_request = 0;
+                weather_set_mode(&s_weather, wm);
             }
             for (u32 lk = 0; lk < 2; lk++) {
                 if (s_terminal.link_request[lk]) {

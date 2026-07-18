@@ -48,6 +48,7 @@ typedef enum InteractAction {
     ACTION_DISK_EJECT,
     ACTION_TAPE_INSERT,
     ACTION_TAPE_EJECT,
+    ACTION_WIPERS,
 } InteractAction;
 
 typedef struct Interact {

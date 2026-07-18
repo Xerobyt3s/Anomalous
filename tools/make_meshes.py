@@ -689,6 +689,43 @@ def disc_z(b, center, radius, sides):
         b.triangle(mid, ring[i], ring[(i + 1) % sides])
 
 
+def make_wiper():
+    b = MeshBuilder()
+    b.begin_material("car_trim")
+    b.box((0.20, 0.0, 0.0), (0.20, 0.011, 0.011))
+    b.box((0.315, 0.042, 0.0), (0.155, 0.009, 0.014))
+    b.box((0.255, 0.021, 0.0), (0.010, 0.024, 0.010))
+    make_double_sided(b)
+    b.write(os.path.join(MESH_DIR, "part_wiper.amsh"))
+
+
+def make_excel_glass():
+    b = MeshBuilder()
+    b.begin_material("glass")
+    quad_auto(b, (0.645, 0.190, -0.645), (-0.645, 0.190, -0.645),
+              (-0.585, 0.600, -0.085), (0.585, 0.600, -0.085))
+    quad_auto(b, (-0.635, 0.245, 1.39), (0.635, 0.245, 1.39),
+              (0.565, 0.585, 0.585), (-0.565, 0.585, 0.585))
+    for sx in (1.0, -1.0):
+        quad_auto(b, (sx * 0.625, 0.228, 0.46), (sx * 0.607, 0.259, 1.27),
+                  (sx * 0.542, 0.552, 0.56), (sx * 0.552, 0.560, 0.33))
+    make_double_sided(b)
+    b.vertices = [((p[0], p[1] + EXCEL_Y_SHIFT, p[2]), n, uv) for p, n, uv in b.vertices]
+    b.write(os.path.join(MESH_DIR, "excel_glass.amsh"))
+
+
+def make_excel_door_glass(side):
+    b = MeshBuilder()
+    b.begin_material("glass")
+    quad_auto(b, (side * 0.635, 0.208, -0.50), (side * 0.625, 0.227, 0.40),
+              (side * 0.553, 0.562, 0.28), (side * 0.563, 0.562, -0.095))
+    make_double_sided(b)
+    b.vertices = [((p[0] - side * 0.80, p[1] + EXCEL_Y_SHIFT, p[2] + 0.55), n, uv)
+                  for p, n, uv in b.vertices]
+    name = "excel_door_glass_l" if side < 0 else "excel_door_glass_r"
+    b.write(os.path.join(MESH_DIR, name + ".amsh"))
+
+
 def make_excel_extras():
     b = MeshBuilder()
     b.begin_material("excel_paint")
@@ -1070,6 +1107,10 @@ def main():
     make_excel_hood()
     make_excel_door(-1)
     make_excel_door(1)
+    make_excel_glass()
+    make_excel_door_glass(-1)
+    make_excel_door_glass(1)
+    make_wiper()
     make_excel_trunk_lid()
     make_excel_extras()
     make_excel_wheel()

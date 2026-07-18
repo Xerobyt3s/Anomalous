@@ -13,6 +13,7 @@ typedef enum SfxKind {
     SFX_FLAP,
     SFX_ENGINE_START,
     SFX_WHIR,
+    SFX_WIPER,
     SFX_KIND_COUNT,
 } SfxKind;
 
@@ -24,7 +25,8 @@ void audio_occlusion_set(f32 factor, f32 dt);
 void audio_play(SfxKind kind, f32 volume, f32 pitch);
 void audio_play_at(SfxKind kind, f32 volume, f32 pitch, Vec3 pos);
 void audio_engine_set(f32 rpm, f32 load, b32 running, b32 cranking, f32 dt);
-void audio_rolling_set(f32 speed, f32 road_amount, b32 grounded, f32 dt);
+void audio_rolling_set(f32 speed, f32 road_amount, b32 grounded, f32 wetness, f32 dt);
+void audio_rain_set(f32 exterior, f32 roof, f32 dt);
 void audio_skid_set(f32 intensity, f32 dt);
 void audio_horn_set(b32 on, f32 dt);
 

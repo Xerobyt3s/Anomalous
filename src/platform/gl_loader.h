@@ -56,6 +56,8 @@ typedef i64 GLintptr;
 #define GL_LINEAR_MIPMAP_LINEAR 0x2703
 #define GL_REPEAT 0x2901
 #define GL_RGBA8 0x8058
+#define GL_RGBA16F 0x881A
+#define GL_ALWAYS 0x0207
 #define GL_TEXTURE_MAG_FILTER 0x2800
 #define GL_TEXTURE_MIN_FILTER 0x2801
 #define GL_TEXTURE_WRAP_S 0x2802
@@ -133,6 +135,7 @@ typedef void (GL_APIENTRY *GlDebugCallback)(GLenum source, GLenum type, GLuint i
     GLFN(void, glTextureParameterfv, (GLuint texture, GLenum pname, const GLfloat* params)) \
     GLFN(void, glNamedFramebufferDrawBuffer, (GLuint framebuffer, GLenum buf)) \
     GLFN(void, glNamedFramebufferReadBuffer, (GLuint framebuffer, GLenum src)) \
+    GLFN(void, glCopyImageSubData, (GLuint srcName, GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ, GLuint dstName, GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ, GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth)) \
     GLFN(void, glBindTextureUnit, (GLuint unit, GLuint texture)) \
     GLFN(void, glDeleteTextures, (GLsizei n, const GLuint* textures)) \
     GLFN(void, glPixelStorei, (GLenum pname, GLint param)) \

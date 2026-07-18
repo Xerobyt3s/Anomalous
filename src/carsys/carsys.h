@@ -60,6 +60,12 @@ typedef struct CarSys {
     i32 tape_inserted;
     f32 tape_cond;
     b32 deck_play;
+    i32 wiper_mode;
+    f32 wiper_phase;
+    f32 wiper_sweep;
+    f32 windshield_wet;
+    f32 glass_wet;
+    f32 rain_level;
     i32 coax_target;
     i32 bus_target;
     Cable cables[CABLE_KIND_COUNT];

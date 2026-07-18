@@ -59,9 +59,23 @@ static f32 s_spot_intensity;
 static Vec3 s_point_pos[4];
 static Vec3 s_point_color[4];
 static f32 s_point_radius[4];
+static f32 s_weather_overcast;
+static f32 s_weather_wetness;
+static f32 s_shield_wet;
+static f32 s_shield_wiper;
+static f32 s_shield_incar;
+static f32 s_shield_rain;
 static Vec3 s_sky_fwd = { 0.0f, 0.0f, -1.0f };
 static Vec3 s_sky_right = { 1.0f, 0.0f, 0.0f };
 static Vec3 s_sky_up = { 0.0f, 1.0f, 0.0f };
+
+static u32 s_scene_fbo;
+static u32 s_scene_color;
+static u32 s_scene_depth;
+static u32 s_scene_copy;
+static i32 s_scene_w;
+static i32 s_scene_h;
+static b32 s_scene_broken;
 
 #define SHADOW_SIZE 2048
 
@@ -309,6 +323,20 @@ void r_set_headlights(Vec3 pos_left, Vec3 pos_right, Vec3 dir, f32 intensity)
     s_spot_intensity = intensity;
 }
 
+void r_set_weather(f32 overcast, f32 wetness)
+{
+    s_weather_overcast = f_clamp01(overcast);
+    s_weather_wetness = f_clamp01(wetness);
+}
+
+void r_set_windshield(f32 wet, f32 wiper_sweep, f32 glass_wet)
+{
+    s_shield_wet = f_clamp01(wet);
+    s_shield_wiper = f_clamp01(wiper_sweep);
+    s_shield_incar = 0.0f;
+    s_shield_rain = f_clamp01(glass_wet);
+}
+
 void r_set_point_light(u32 index, Vec3 pos, Vec3 color, f32 radius)
 {
     if (index >= 4) {
@@ -348,7 +376,8 @@ static void view_setup(const Camera* cam, f32 width, f32 height)
         ubo.spot_dir_intensity[i] = vec4_from_vec3(s_spot_dir, s_spot_intensity);
     }
     ubo.shadow_mat = s_shadow_mat;
-    ubo.shadow_params = v4(s_shadow_strength, 1.0f / (f32)SHADOW_SIZE, 0.0f, 0.0f);
+    ubo.shadow_params = v4(s_shadow_strength, 1.0f / (f32)SHADOW_SIZE,
+                           s_weather_wetness, s_weather_overcast);
     for (u32 i = 0; i < 4; i++) {
         ubo.point_pos_radius[i] = vec4_from_vec3(s_point_pos[i], s_point_radius[i]);
         ubo.point_color[i] = vec4_from_vec3(s_point_color[i], 0.0f);
@@ -377,6 +406,46 @@ static void view_setup(const Camera* cam, f32 width, f32 height)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
+static void scene_target_ensure(i32 width, i32 height)
+{
+    if (s_scene_broken || (s_scene_fbo && s_scene_w == width && s_scene_h == height)) {
+        return;
+    }
+    if (s_scene_fbo) {
+        glDeleteTextures(1, &s_scene_color);
+        glDeleteTextures(1, &s_scene_depth);
+        glDeleteTextures(1, &s_scene_copy);
+        glDeleteFramebuffers(1, &s_scene_fbo);
+    }
+    glCreateTextures(GL_TEXTURE_2D, 1, &s_scene_color);
+    glTextureStorage2D(s_scene_color, 1, GL_RGBA16F, width, height);
+    glTextureParameteri(s_scene_color, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTextureParameteri(s_scene_color, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTextureParameteri(s_scene_color, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(s_scene_color, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glCreateTextures(GL_TEXTURE_2D, 1, &s_scene_copy);
+    glTextureStorage2D(s_scene_copy, 1, GL_RGBA16F, width, height);
+    glTextureParameteri(s_scene_copy, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTextureParameteri(s_scene_copy, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTextureParameteri(s_scene_copy, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(s_scene_copy, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glCreateTextures(GL_TEXTURE_2D, 1, &s_scene_depth);
+    glTextureStorage2D(s_scene_depth, 1, GL_DEPTH_COMPONENT24, width, height);
+    glTextureParameteri(s_scene_depth, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(s_scene_depth, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glCreateFramebuffers(1, &s_scene_fbo);
+    glNamedFramebufferTexture(s_scene_fbo, GL_COLOR_ATTACHMENT0, s_scene_color, 0);
+    glNamedFramebufferTexture(s_scene_fbo, GL_DEPTH_ATTACHMENT, s_scene_depth, 0);
+    if (glCheckNamedFramebufferStatus(s_scene_fbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("render: scene framebuffer incomplete, post-processing disabled");
+        s_scene_broken = 1;
+        s_scene_fbo = 0;
+        return;
+    }
+    s_scene_w = width;
+    s_scene_h = height;
+}
+
 void r_begin_frame(const Camera* cam)
 {
     i32 width, height;
@@ -385,7 +454,65 @@ void r_begin_frame(const Camera* cam)
         width = 1;
         height = 1;
     }
+    scene_target_ensure(width, height);
+    if (!s_scene_broken && s_scene_fbo) {
+        glBindFramebuffer(GL_FRAMEBUFFER, s_scene_fbo);
+    }
     view_setup(cam, (f32)width, (f32)height);
+}
+
+void r_draw_rain(f32 intensity, f32 wind, Vec3 cam_vel, f32 time)
+{
+    if (intensity <= 0.003f) {
+        return;
+    }
+    u32 program = r_shader("rain");
+    if (!program) {
+        return;
+    }
+    glUseProgram(program);
+    glProgramUniform4f(program, 1, time, intensity, wind, 0.0f);
+    glProgramUniform4f(program, 2, cam_vel.x, cam_vel.y, cam_vel.z, 0.0f);
+    glProgramUniform4f(program, 3, s_sky_fwd.x, s_sky_fwd.y, s_sky_fwd.z, 0.0f);
+    u32 drops = (u32)(3400.0f * f_clamp01(intensity));
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glBindVertexArray(s_quad_vao);
+    glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(drops * 6));
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
+void r_post_process(f32 time)
+{
+    if (s_scene_broken || !s_scene_fbo) {
+        return;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    u32 program = r_shader("post");
+    if (!program) {
+        glViewport(0, 0, s_scene_w, s_scene_h);
+        glDisable(GL_DEPTH_TEST);
+        r_blit_texture(0.0f, s_viewport.y, s_viewport.x, -s_viewport.y, s_scene_color, 1.0f);
+        glEnable(GL_DEPTH_TEST);
+        return;
+    }
+    glProgramUniform1f(program, 1, time);
+    glProgramUniform4f(program, 2, s_shield_wet, s_shield_wiper, s_shield_incar, s_shield_rain);
+    glUseProgram(program);
+    glBindTextureUnit(0, s_scene_color);
+    glBindTextureUnit(1, s_scene_depth);
+    glViewport(0, 0, s_scene_w, s_scene_h);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_ALWAYS);
+    glDepthMask(GL_TRUE);
+    glBindVertexArray(s_quad_vao);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    glBindVertexArray(0);
+    glDepthFunc(GL_LEQUAL);
 }
 
 #define VIDEO_W 320
@@ -625,6 +752,52 @@ void r_draw_mesh(const struct GpuMesh* mesh, Mat4 model)
                        (const void*)((u64)sub->first_index * sizeof(u32)));
     }
     glDisable(GL_CULL_FACE);
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
+void r_scene_grab(void)
+{
+    if (s_scene_broken || !s_scene_fbo) {
+        return;
+    }
+    glCopyImageSubData(s_scene_color, GL_TEXTURE_2D, 0, 0, 0, 0,
+                       s_scene_copy, GL_TEXTURE_2D, 0, 0, 0, 0,
+                       s_scene_w, s_scene_h, 1);
+    glBindTextureUnit(2, s_scene_copy);
+}
+
+void r_draw_glass(const struct GpuMesh* mesh, Mat4 model)
+{
+    if (s_shadow_pass || !mesh || !mesh->loaded) {
+        return;
+    }
+    Aabb world_bounds = aabb_transform(model, mesh->bounds);
+    if (!frustum_test_aabb(&s_frustum, world_bounds)) {
+        return;
+    }
+    u32 program = r_shader("glass");
+    if (!program) {
+        return;
+    }
+    glProgramUniformMatrix4fv(program, 0, 1, GL_FALSE, model.m);
+    glProgramUniform4f(program, 4, s_shield_wet, s_shield_wiper, s_shield_rain,
+                       (f32)fmod(platform_time_now(), 1000.0));
+    glUseProgram(program);
+    glBindVertexArray(mesh->vao);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    for (u32 i = 0; i < mesh->submesh_count; i++) {
+        const GpuSubmesh* sub = &mesh->submeshes[i];
+        glDrawElements(GL_TRIANGLES, (GLsizei)sub->index_count, GL_UNSIGNED_INT,
+                       (const void*)((u64)sub->first_index * sizeof(u32)));
+    }
+    glDisable(GL_CULL_FACE);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
     glBindVertexArray(0);
     glUseProgram(0);
 }

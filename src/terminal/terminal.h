@@ -49,6 +49,9 @@ typedef struct TermView {
     struct PhysWorld* phys;
     const struct Terrain* terrain;
     f32 time_of_day;
+    f32 weather_rain;
+    f32 weather_wetness;
+    i32 weather_mode;
     Vec3 car_pos;
     Vec3 garage_pos;
     Vec3 mission_pos;
@@ -152,6 +155,10 @@ typedef struct Terminal {
     b32 dev_warp;
     b32 dev_time_request;
     f32 dev_time_value;
+    f32 dev_rain;
+    f32 dev_wet;
+    i32 dev_wmode;
+    i32 dev_weather_request;
     i32 cwd_drive;
     i32 cwd_node;
     i32 format_drive;

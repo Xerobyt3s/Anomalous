@@ -1905,14 +1905,18 @@ static void draw_dev(Terminal* term)
     f32 hours = term->dev_tod * 24.0f;
     i32 hh = (i32)hours;
     i32 mm = (i32)((hours - (f32)hh) * 60.0f);
+    static const char* wmode_names[4] = { "AUTO", "CLEAR", "DRIZZLE", "RAIN" };
     grid_text(term, 3, 4, TC_BRIGHT, "TIME      %02d:%02d  (%s)", hh, mm,
               dev_phase_name(term->dev_tod));
     grid_text(term, 4, 4, TC_GREEN, "WARP      %s", term->dev_warp ? "60X ENGAGED" : "OFF");
-    grid_text(term, 6, 4, TC_DIM, "WEATHER   CLEAR -- CONTROL MODULE NOT INSTALLED");
+    grid_text(term, 6, 4, TC_BRIGHT, "WEATHER   %s   RAIN %3.0f%%   GROUND WET %3.0f%%",
+              wmode_names[term->dev_wmode & 3], (f64)(term->dev_rain * 100.0f),
+              (f64)(term->dev_wet * 100.0f));
 
     grid_text(term, 9, 4, TC_GREEN, "[LEFT]/[RIGHT]  TIME -/+ 30 MIN");
     grid_text(term, 10, 4, TC_GREEN, "[1] DAWN   [2] NOON   [3] DUSK   [4] MIDNIGHT");
     grid_text(term, 11, 4, TC_GREEN, "[T] TOGGLE TIME WARP");
+    grid_text(term, 12, 4, TC_GREEN, "[5] WX AUTO   [6] CLEAR   [7] DRIZZLE   [8] RAIN");
 
     if (fmodf(term->blink, 1.4f) < 0.8f) {
         grid_text(term, 14, 4, TC_AMBER, "ENGINEERING BUILD -- NOT FOR FIELD UNITS");
@@ -2806,6 +2810,10 @@ void terminal_key_char(Terminal* term, char c)
             dev_request_time(term, 0.0f);
         } else if (c == 'T') {
             term->dev_warp = !term->dev_warp;
+            term->click_pending = 1;
+        } else if (c >= '5' && c <= '8') {
+            term->dev_weather_request = 1 + (c - '5');
+            term->dev_wmode = c - '5';
             term->click_pending = 1;
         }
         return;
@@ -4172,6 +4180,11 @@ void terminal_update(Terminal* term, const TermView* view, f32 dt)
     term->tower_pos = view->tower_pos;
     if (!term->dev_time_request) {
         term->dev_tod = view->time_of_day;
+    }
+    term->dev_rain = view->weather_rain;
+    term->dev_wet = view->weather_wetness;
+    if (!term->dev_weather_request) {
+        term->dev_wmode = view->weather_mode;
     }
     term->deck_docked = view->sys->parts[PART_COMPUTER].installed;
     term->deck_tape = view->sys->tape_inserted;

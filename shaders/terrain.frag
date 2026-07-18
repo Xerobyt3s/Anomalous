@@ -93,9 +93,20 @@ void main()
     float road_amount = texture(u_roadmask, mask_uv).r;
     albedo = mix(albedo, road, road_amount);
 
+    float wetness = u_shadow_params.z;
+    albedo *= 1.0 - wetness * (0.28 + road_amount * 0.22);
+
     float ndl = max(dot(n, -u_sun_dir.xyz), 0.0);
     vec3 lit = albedo * (u_sun_color_ambient.rgb * ndl * shadow_factor(v_world, ndl)
                          + vec3(u_sun_color_ambient.w));
+    if (wetness > 0.01) {
+        vec3 view = normalize(u_cam_pos.xyz - v_world);
+        vec3 rdir = reflect(-view, n);
+        float wet_spec = pow(max(dot(rdir, -u_sun_dir.xyz), 0.0), 90.0);
+        float fresnel = pow(1.0 - clamp(dot(n, view), 0.0, 1.0), 4.0);
+        lit += u_sun_color_ambient.rgb * wet_spec * wetness * (0.35 + road_amount * 0.9);
+        lit += u_fog_color_density.rgb * fresnel * wetness * road_amount * 0.5;
+    }
     lit += spot_light(v_world, n, albedo, u_spot_pos_cone[0], u_spot_dir_intensity[0]);
     lit += spot_light(v_world, n, albedo, u_spot_pos_cone[1], u_spot_dir_intensity[1]);
     for (int i = 0; i < 4; i++) {

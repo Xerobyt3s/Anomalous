@@ -257,10 +257,33 @@ void carsys_tick(CarSys* sys, struct Vehicle* veh, struct PhysWorld* world, f32 
                 || (sys->key_inserted && sys->crank_request && !sys->engine_on);
 
     electrics_tick(&sys->elec, sys->parts, rpm, idle_rpm, sys->engine_on, cranking,
-                   sys->headlight_switch, sys->deck_play, dt);
+                   sys->headlight_switch, sys->deck_play, sys->wiper_mode > 0, dt);
     if (sys->deck_play && !sys->elec.powered[CONSUMER_DECK]) {
         sys->deck_play = 0;
     }
+
+    b32 wipers_run = sys->wiper_mode > 0 && sys->elec.powered[CONSUMER_WIPERS];
+    if (wipers_run) {
+        f32 cycle = sys->wiper_mode == 1 ? 2.6f : 1.0f;
+        sys->wiper_phase += dt / cycle;
+        if (sys->wiper_phase >= 1.0f) {
+            sys->wiper_phase -= 1.0f;
+        }
+    } else {
+        sys->wiper_phase = f_approach_exp(sys->wiper_phase, 0.0f, 4.0f, dt);
+    }
+    f32 travel = sys->wiper_mode == 1 ? f_clamp01(sys->wiper_phase * 1.6f)
+                                      : sys->wiper_phase;
+    f32 prev_sweep = sys->wiper_sweep;
+    sys->wiper_sweep = travel < 0.5f ? travel * 2.0f : (1.0f - travel) * 2.0f;
+    if (wipers_run) {
+        sys->windshield_wet = f_max(sys->windshield_wet
+                                    - f_abs(sys->wiper_sweep - prev_sweep) * 0.75f, 0.0f);
+    }
+    sys->windshield_wet = f_clamp01(sys->windshield_wet + sys->rain_level * 0.05f * dt
+                                    - (1.0f - sys->rain_level) * 0.012f * dt);
+    sys->glass_wet = f_clamp01(sys->glass_wet + sys->rain_level * 0.05f * dt
+                               - (1.0f - sys->rain_level) * 0.010f * dt);
 
     if (cranking) {
         if (!sys->elec.powered[CONSUMER_STARTER] || !carsys_can_run(sys)) {

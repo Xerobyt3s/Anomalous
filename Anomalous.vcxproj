@@ -125,6 +125,7 @@
     <ClCompile Include="src\vehicle\vehicle_config.c" />
     <ClCompile Include="src\vehicle\vehicle_render.c" />
     <ClCompile Include="src\world\terrain.c" />
+    <ClCompile Include="src\world\weather.c" />
     <ClCompile Include="src\world\world.c" />
     <ClCompile Include="src\world\zone.c" />
   </ItemGroup>
@@ -169,6 +170,7 @@
     <ClInclude Include="src\vehicle\vehicle_config.h" />
     <ClInclude Include="src\vehicle\vehicle_render.h" />
     <ClInclude Include="src\world\terrain.h" />
+    <ClInclude Include="src\world\weather.h" />
     <ClInclude Include="src\world\world.h" />
     <ClInclude Include="src\world\zone.h" />
   </ItemGroup>

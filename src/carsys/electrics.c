@@ -7,11 +7,12 @@
 #define FUEL_PUMP_AMPS 4.0f
 #define HEADLIGHT_AMPS 10.0f
 #define DECK_AMPS 1.5f
+#define WIPER_AMPS 3.0f
 #define STARTER_MIN_CHARGE 0.12f
 #define CONSUMER_MIN_CHARGE 0.02f
 
 static const char* s_consumer_names[CONSUMER_COUNT] = {
-    "ignition", "starter", "fuel pump", "headlights", "tape deck",
+    "ignition", "starter", "fuel pump", "headlights", "tape deck", "wipers",
 };
 
 const char* consumer_name(Consumer consumer)
@@ -31,7 +32,8 @@ void electrics_init(Electrics* elec)
 }
 
 void electrics_tick(Electrics* elec, const PartSlot* parts, f32 rpm, f32 idle_rpm,
-                    b32 engine_on, b32 cranking, b32 headlights_switch, b32 deck_on, f32 dt)
+                    b32 engine_on, b32 cranking, b32 headlights_switch, b32 deck_on,
+                    b32 wipers_on, f32 dt)
 {
     const PartSlot* battery = &parts[PART_BATTERY];
     const PartSlot* alternator = &parts[PART_ALTERNATOR];
@@ -50,6 +52,7 @@ void electrics_tick(Electrics* elec, const PartSlot* parts, f32 rpm, f32 idle_rp
     want[CONSUMER_FUEL_PUMP] = (engine_on || cranking) ? FUEL_PUMP_AMPS : 0.0f;
     want[CONSUMER_HEADLIGHTS] = headlights_switch ? HEADLIGHT_AMPS : 0.0f;
     want[CONSUMER_DECK] = deck_on ? DECK_AMPS : 0.0f;
+    want[CONSUMER_WIPERS] = wipers_on ? WIPER_AMPS : 0.0f;
 
     f32 draw = 0.0f;
     for (u32 i = 0; i < CONSUMER_COUNT; i++) {

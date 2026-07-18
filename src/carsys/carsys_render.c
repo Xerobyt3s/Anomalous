@@ -105,6 +105,31 @@ void carsys_spawn_sparks(Vec3 pos, u32 count)
     }
 }
 
+void carsys_render_glass(const struct CarSys* sys, const struct Vehicle* veh,
+                         struct PhysWorld* world, f32 alpha)
+{
+    RigidBody* body = phys_body(world, veh->body);
+    if (!body || !veh->cfg.body_mesh[0]) {
+        return;
+    }
+    Vec3 pos = vec3_lerp(body->prev_pos, body->pos, alpha);
+    Quat rot = quat_slerp(body->prev_rot, body->rot, alpha);
+    Vec3 one = v3(1.0f, 1.0f, 1.0f);
+    Mat4 base = mat4_trs(pos, rot, one);
+    Vec3 com = veh->cfg.com_offset;
+
+    r_draw_glass(asset_mesh("excel_glass"),
+                 mat4_mul(base, mat4_trs(vec3_scale(com, -1.0f), quat_identity(), one)));
+    for (i32 side = 0; side < 2; side++) {
+        f32 sign = side == 0 ? -1.0f : 1.0f;
+        f32 open = sys ? sys->door_open[side] : 0.0f;
+        Vec3 hinge = vec3_sub(v3(sign * DOOR_HINGE_X, 0.0f, DOOR_HINGE_Z), com);
+        Quat swing = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), sign * open * DOOR_OPEN_ANGLE);
+        Mat4 door = mat4_mul(base, mat4_trs(hinge, swing, one));
+        r_draw_glass(asset_mesh(side == 0 ? "excel_door_glass_l" : "excel_door_glass_r"), door);
+    }
+}
+
 void carsys_render(const struct CarSys* sys, const struct Vehicle* veh,
                    struct PhysWorld* world, f32 alpha, f32 dt, u32 screen_texture)
 {
@@ -195,6 +220,16 @@ void carsys_render(const struct CarSys* sys, const struct Vehicle* veh,
             Mat4 key = mat4_mul(base, mat4_trs(vec3_sub(v3(-0.22f, 0.05f, -0.25f), com),
                                                quat_identity(), one));
             r_draw_mesh(asset_mesh("part_key"), key);
+        }
+
+        Vec3 wiper_axis = vec3_normalize(v3(0.0f, 0.807f, -0.591f));
+        f32 wiper_angle = -(0.20f + sys->wiper_sweep * 1.30f);
+        static const f32 wiper_px[2] = { -0.38f, 0.10f };
+        for (u32 wp = 0; wp < 2; wp++) {
+            Mat4 arm = mat4_mul(base,
+                                mat4_trs(vec3_sub(v3(wiper_px[wp], 0.150f, -0.60f), com),
+                                         quat_from_axis_angle(wiper_axis, wiper_angle), one));
+            r_draw_mesh(asset_mesh("part_wiper"), arm);
         }
 
         r_draw_mesh(asset_mesh("jack_coax"),

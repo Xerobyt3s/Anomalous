@@ -71,11 +71,20 @@ static ma_sound s_skid;
 static ma_sound s_roll_road;
 static ma_sound s_roll_grass;
 static ma_sound s_horn;
+static ma_sound s_roll_wet;
+static ma_sound s_rain_light;
+static ma_sound s_rain_heavy;
+static ma_sound s_rain_roof;
 static b32 s_loops_loaded;
+static b32 s_rain_loaded;
 static f32 s_horn_vol;
 static f32 s_skid_vol;
 static f32 s_roll_road_vol;
 static f32 s_roll_grass_vol;
+static f32 s_roll_wet_vol;
+static f32 s_rain_light_vol;
+static f32 s_rain_heavy_vol;
+static f32 s_rain_roof_vol;
 static Vec3 s_dash_pos;
 static Vec3 s_car_vel;
 static f32 s_occ = 1.0f;
@@ -209,6 +218,7 @@ static const char* s_sfx_paths[SFX_KIND_COUNT] = {
     "assets/audio/flap.wav",
     "assets/audio/engine_start.wav",
     "assets/audio/whir.wav",
+    "assets/audio/wiper.wav",
 };
 
 static void sound_spatial(ma_sound* sound, f32 min_dist, f32 max_dist)
@@ -259,7 +269,16 @@ b32 audio_init(void)
                    && load_loop(&s_skid, "assets/audio/skid.wav")
                    && load_loop(&s_roll_road, "assets/audio/roll_road.wav")
                    && load_loop(&s_roll_grass, "assets/audio/roll_grass.wav")
-                   && load_loop(&s_horn, "assets/audio/horn.wav");
+                   && load_loop(&s_horn, "assets/audio/horn.wav")
+                   && load_loop(&s_roll_wet, "assets/audio/roll_road_wet.wav");
+    s_rain_loaded = load_loop(&s_rain_light, "assets/audio/rain_light.wav")
+                  && load_loop(&s_rain_heavy, "assets/audio/rain_heavy.wav")
+                  && load_loop(&s_rain_roof, "assets/audio/rain_roof.wav");
+    if (s_rain_loaded) {
+        ma_sound_set_spatialization_enabled(&s_rain_light, MA_FALSE);
+        ma_sound_set_spatialization_enabled(&s_rain_heavy, MA_FALSE);
+        ma_sound_set_spatialization_enabled(&s_rain_roof, MA_FALSE);
+    }
 
     ArenaTemp temp = arena_temp_begin(&g_frame_arena);
     FileData set_file = platform_read_entire_file(&g_frame_arena, "assets/audio/engine_set.cfg");
@@ -361,6 +380,12 @@ void audio_shutdown(void)
         ma_sound_uninit(&s_roll_road);
         ma_sound_uninit(&s_roll_grass);
         ma_sound_uninit(&s_horn);
+        ma_sound_uninit(&s_roll_wet);
+    }
+    if (s_rain_loaded) {
+        ma_sound_uninit(&s_rain_light);
+        ma_sound_uninit(&s_rain_heavy);
+        ma_sound_uninit(&s_rain_roof);
     }
     for (u32 k = 0; k < SFX_KIND_COUNT; k++) {
         if (!s_sfx[k].loaded) {
@@ -416,6 +441,7 @@ void audio_car_set(Vec3 engine_pos, Vec3 center_pos, Vec3 dash_pos, Vec3 vel)
         sound_place(&s_roll_road, center_pos, vel);
         sound_place(&s_roll_grass, center_pos, vel);
         sound_place(&s_horn, engine_pos, vel);
+        sound_place(&s_roll_wet, center_pos, vel);
     }
     if (s_tape_active) {
         sound_place(&s_tape, dash_pos, vel);
@@ -505,21 +531,43 @@ void audio_engine_set(f32 rpm, f32 load, b32 running, b32 cranking, f32 dt)
     }
 }
 
-void audio_rolling_set(f32 speed, f32 road_amount, b32 grounded, f32 dt)
+void audio_rolling_set(f32 speed, f32 road_amount, b32 grounded, f32 wetness, f32 dt)
 {
     if (!s_ok || !s_loops_loaded) {
         return;
     }
     f32 base = grounded ? f_clamp01(speed / 40.0f) * 0.18f : 0.0f;
-    f32 road_target = base * road_amount;
-    f32 grass_target = base * (1.0f - road_amount) * 1.15f;
+    f32 wet = f_clamp01(wetness);
+    f32 road_target = base * road_amount * (1.0f - wet * 0.75f);
+    f32 wet_target = base * road_amount * wet * 1.5f;
+    f32 grass_target = base * (1.0f - road_amount) * (1.15f + wet * 0.35f);
     s_roll_road_vol = f_approach_exp(s_roll_road_vol, road_target, 8.0f, dt);
+    s_roll_wet_vol = f_approach_exp(s_roll_wet_vol, wet_target, 8.0f, dt);
     s_roll_grass_vol = f_approach_exp(s_roll_grass_vol, grass_target, 8.0f, dt);
     ma_sound_set_volume(&s_roll_road, s_roll_road_vol * s_occ);
+    ma_sound_set_volume(&s_roll_wet, s_roll_wet_vol * s_occ);
     ma_sound_set_volume(&s_roll_grass, s_roll_grass_vol * s_occ);
     f32 pitch = 0.8f + f_clamp01(speed / 35.0f) * 0.5f;
     ma_sound_set_pitch(&s_roll_road, pitch);
+    ma_sound_set_pitch(&s_roll_wet, pitch);
     ma_sound_set_pitch(&s_roll_grass, pitch);
+}
+
+void audio_rain_set(f32 exterior, f32 roof, f32 dt)
+{
+    if (!s_ok || !s_rain_loaded) {
+        return;
+    }
+    f32 ext = f_clamp01(exterior);
+    f32 light_target = f_clamp01(ext * 2.2f) * 0.34f * (1.0f - f_clamp01((ext - 0.5f) * 1.4f));
+    f32 heavy_target = f_clamp01((ext - 0.30f) / 0.55f) * 0.48f;
+    f32 roof_target = f_clamp01(roof) * 0.50f;
+    s_rain_light_vol = f_approach_exp(s_rain_light_vol, light_target, 2.5f, dt);
+    s_rain_heavy_vol = f_approach_exp(s_rain_heavy_vol, heavy_target, 2.5f, dt);
+    s_rain_roof_vol = f_approach_exp(s_rain_roof_vol, roof_target, 4.0f, dt);
+    ma_sound_set_volume(&s_rain_light, s_rain_light_vol);
+    ma_sound_set_volume(&s_rain_heavy, s_rain_heavy_vol);
+    ma_sound_set_volume(&s_rain_roof, s_rain_roof_vol);
 }
 
 void audio_horn_set(b32 on, f32 dt)

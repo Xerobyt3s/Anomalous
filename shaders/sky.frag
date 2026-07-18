@@ -17,6 +17,10 @@ layout(std140, binding = 0) uniform CameraBlock {
     vec4 u_fog_color_density;
     vec4 u_spot_pos_cone[2];
     vec4 u_spot_dir_intensity[2];
+    mat4 u_shadow_mat;
+    vec4 u_shadow_params;
+    vec4 u_point_pos_radius[4];
+    vec4 u_point_color[4];
 };
 
 out vec4 o_color;
@@ -45,9 +49,16 @@ void main()
         sky = horizon * (1.0 + ray.y * 0.35);
     }
 
+    float overcast = u_shadow_params.w;
+    float sky_luma = dot(sky, vec3(0.30, 0.55, 0.15));
+    vec3 cloud = mix(vec3(sky_luma), sky, 0.35) * mix(1.0, 0.55, overcast * day);
+    sky = mix(sky, cloud, overcast);
+
     float s = dot(ray, to_sun);
-    float glow = pow(max(s, 0.0), 24.0) * (0.16 + 0.55 * dusk);
-    float disc = smoothstep(0.99940, 0.99975, s) * step(-0.03, to_sun.y);
+    float clear_sky = 1.0 - overcast;
+    float glow = pow(max(s, 0.0), 24.0) * (0.16 + 0.55 * dusk) * clear_sky;
+    float disc = smoothstep(0.99940, 0.99975, s) * step(-0.03, to_sun.y)
+               * clear_sky * clear_sky;
     vec3 sun_c = u_sun_color_ambient.rgb;
     sky += sun_c * glow;
     sky += sun_c * disc * (3.0 + 9.0 * (1.0 - day));
@@ -58,7 +69,8 @@ void main()
         float star = hash13(cell);
         float bright = smoothstep(0.9976, 0.9995, star);
         float twinkle = 0.72 + 0.28 * sin(u_cam_fwd.w * 2.3 + star * 41.0);
-        sky += vec3(0.85, 0.9, 1.0) * bright * twinkle * night * clamp(ray.y * 3.0, 0.0, 1.0);
+        sky += vec3(0.85, 0.9, 1.0) * bright * twinkle * night
+             * clamp(ray.y * 3.0, 0.0, 1.0) * (1.0 - overcast);
     }
 
     o_color = vec4(sky, 1.0);

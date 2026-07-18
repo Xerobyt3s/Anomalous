@@ -175,6 +175,56 @@ def make_flap():
     write_wav("flap.wav", lowpass(samples, 0.08))
 
 
+def make_rain(name, seed, bed_alpha, bed_amp, crackle_per_s, crackle_amp, ping_per_s, ping_amp):
+    dur = 5.0
+    n = int(RATE * dur)
+    rng = random.Random(seed)
+    bed = lowpass([rng.uniform(-1, 1) for _ in range(n)], bed_alpha)
+    samples = []
+    for i in range(n):
+        t = i / RATE
+        wob = 1.0 + 0.16 * math.sin(2.0 * math.pi * 0.23 * t) \
+                  + 0.09 * math.sin(2.0 * math.pi * 0.61 * t + 1.7)
+        samples.append(bed[i] * bed_amp * wob)
+    for _ in range(int(crackle_per_s * dur)):
+        pos = rng.randrange(n)
+        length = rng.randint(30, 130)
+        amp = crackle_amp * rng.uniform(0.3, 1.0)
+        for j in range(length):
+            if pos + j >= n:
+                break
+            samples[pos + j] += rng.uniform(-1, 1) * amp * math.exp(-j / (length * 0.4))
+    for _ in range(int(ping_per_s * dur)):
+        pos = rng.randrange(n)
+        freq = rng.uniform(160.0, 720.0)
+        length = int(RATE * rng.uniform(0.008, 0.030))
+        amp = ping_amp * rng.uniform(0.3, 1.0)
+        for j in range(length):
+            if pos + j >= n:
+                break
+            samples[pos + j] += amp * math.sin(2.0 * math.pi * freq * j / RATE) \
+                              * math.exp(-j / (length * 0.35))
+    write_wav(name, seamless(samples, 0.4))
+
+
+def make_wiper():
+    dur = 0.5
+    n = int(RATE * dur)
+    rng = random.Random(52)
+    noise = lowpass([rng.uniform(-1, 1) for _ in range(n)], 0.28)
+    samples = []
+    for i in range(n):
+        t = i / RATE
+        arc = math.sin(math.pi * min(t / dur, 1.0))
+        squeak = 0.0
+        if t > dur * 0.62:
+            st = (t - dur * 0.62) / (dur * 0.38)
+            squeak = 0.24 * math.sin(2.0 * math.pi * (850.0 + 500.0 * st) * t) \
+                   * math.sin(math.pi * st)
+        samples.append(noise[i] * 0.8 * arc + squeak)
+    write_wav("wiper.wav", samples)
+
+
 def make_whir():
     dur = 0.42
     n = int(RATE * dur)
@@ -208,6 +258,11 @@ def main():
     make_ratchet()
     make_engine_start()
     make_whir()
+    make_rain("rain_light.wav", 61, 0.10, 0.45, 25.0, 0.20, 0.0, 0.0)
+    make_rain("rain_heavy.wav", 62, 0.22, 0.75, 140.0, 0.35, 0.0, 0.0)
+    make_rain("rain_roof.wav", 63, 0.30, 0.40, 40.0, 0.25, 90.0, 0.55)
+    noise_loop("roll_road_wet.wav", 53, 0.09, 0.0, 0.35)
+    make_wiper()
 
 
 if __name__ == "__main__":
