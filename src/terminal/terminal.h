@@ -32,6 +32,7 @@ typedef enum TermMode {
     TERM_VIEW,
     TERM_VIDEO,
     TERM_BREACH,
+    TERM_TAPES,
 } TermMode;
 
 typedef enum CommsPhase {
@@ -115,6 +116,10 @@ typedef struct Terminal {
     b32 bus_tower;
     b32 tower_breached;
     Vec3 tower_pos;
+    b32 deck_docked;
+    i32 deck_tape;
+    f32 deck_cond;
+    b32 deck_play;
     b32 breach_request;
     b32 tower_download_done;
     i32 view_pic;
@@ -123,6 +128,24 @@ typedef struct Terminal {
     f32 link_anim_t;
     f32 link_deny;
     b32 link_request[2];
+    i32 tapes_sel;
+    i32 tapes_count;
+    i32 tapes_write_track;
+    f32 tapes_write_t;
+    i32 tapes_dl_track;
+    f32 tapes_dl_t;
+    f32 tapes_click_t;
+    i32 tapes_prompt_track;
+    char tapes_dest[40];
+    u32 tapes_dest_len;
+    u32 tapes_dest_cursor;
+    i32 tapes_dest_drive;
+    i32 tapes_dest_node;
+    char tapes_dest_name[FS_NAME_MAX + 1];
+    char tapes_status[40];
+    f32 tapes_status_until;
+    b32 tape_write_request;
+    i32 tape_write_value;
     i32 cwd_drive;
     i32 cwd_node;
     i32 format_drive;

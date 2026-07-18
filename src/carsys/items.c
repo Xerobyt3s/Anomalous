@@ -23,6 +23,7 @@ static const struct {
     { "floppy disk", "part_floppy",    0.3f,  { 0.07f, 0.012f, 0.07f }, 0.0f, { 0.0f, 0.0f, 0.0f } },
     { "camera",     "part_camera",     1.5f,  { 0.12f, 0.08f, 0.075f }, 0.0f, { 0.0f, 0.0f, 0.0f } },
     { "cable reel", "part_reel",       6.0f,  { 0.12f, 0.11f, 0.12f }, 0.0f, { 0.0f, 0.0f, 0.0f } },
+    { "cassette",   "part_cassette",   0.2f,  { 0.06f, 0.012f, 0.042f }, 0.0f, { 0.0f, 0.0f, 0.0f } },
 };
 
 const char* item_name(ItemKind kind)

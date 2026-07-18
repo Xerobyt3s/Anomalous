@@ -20,6 +20,7 @@ typedef enum ItemKind {
     ITEM_FLOPPY,
     ITEM_CAMERA,
     ITEM_REEL,
+    ITEM_CASSETTE,
     ITEM_KIND_COUNT,
 } ItemKind;
 

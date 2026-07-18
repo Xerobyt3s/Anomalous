@@ -26,6 +26,7 @@
 #include "terminal/disks.h"
 #include "terminal/mapdata.h"
 #include "audio/audio.h"
+#include "audio/tapes.h"
 #include "ui/ui.h"
 
 #include <stdio.h>
@@ -467,21 +468,31 @@ static void draw_interact_prompt(void)
         dd_rect_2d_filled(cx - 59.0f, y + 27.0f, cx - 59.0f + 118.0f * charge, y + 33.0f,
                           dd_rgba(230, 160, 70, 255));
     }
-    if (s_player.state == PLAYER_ON_FOOT && s_interact.hands.kind != ITEM_NONE) {
+    b32 hands_hud = (s_player.state == PLAYER_ON_FOOT || s_player.state == PLAYER_DRIVING)
+                    && s_interact.hands.kind != ITEM_NONE;
+    if (hands_hud) {
+        const char* hints = s_player.state == PLAYER_ON_FOOT
+                            ? " | [G] drop/throw | [F] place" : "";
         if (s_interact.hands.kind == ITEM_FLOPPY) {
             dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN,
-                       "hands: floppy \"%s\" | [G] drop/throw | [F] place%s",
-                       disk_label(s_interact.hands.aux),
+                       "hands: floppy \"%s\"%s%s",
+                       disk_label(s_interact.hands.aux), hints,
+                       s_interact.has_key ? " | key in pocket" : "");
+        } else if (s_interact.hands.kind == ITEM_CASSETTE) {
+            dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN,
+                       "hands: cassette \"%s\" (%.0f%%)%s%s",
+                       tape_label(s_interact.hands.aux),
+                       (f64)(s_interact.hands.condition * 100.0f), hints,
                        s_interact.has_key ? " | key in pocket" : "");
         } else if (s_interact.hands.kind == ITEM_COMPUTER && s_carsys.computer_on) {
             dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN,
-                       "hands: terminal (on) | [E] use | [G] drop/throw | [F] place%s",
+                       "hands: terminal (on) | [E] use%s%s", hints,
                        s_interact.has_key ? " | key in pocket" : "");
         } else {
             dd_text_2d(14.0f, vp.y - 44.0f, 16.0f, DD_CYAN,
-                       "hands: %s (%.0f%%) | [G] drop/throw | [F] place%s",
+                       "hands: %s (%.0f%%)%s%s",
                        item_name(s_interact.hands.kind),
-                       (f64)(s_interact.hands.condition * 100.0f),
+                       (f64)(s_interact.hands.condition * 100.0f), hints,
                        s_interact.has_key ? " | key in pocket" : "");
         }
     } else if (s_player.state == PLAYER_ON_FOOT && s_interact.has_key) {
@@ -590,10 +601,14 @@ static void draw_cargo_preview(f32 alpha)
 
 static Vec3 hands_item_pos(void)
 {
+    b32 driving = s_player.state == PLAYER_DRIVING;
+    f32 reach = driving ? 0.40f : 0.62f;
+    f32 drop = driving ? 0.22f : 0.34f;
     Vec3 fwd = camera_forward(&s_camera);
     Vec3 right = camera_right(&s_camera);
-    Vec3 pos = vec3_add(s_camera.pos, vec3_add(vec3_scale(fwd, 0.62f), vec3_scale(right, 0.30f)));
-    pos.y -= 0.34f;
+    Vec3 pos = vec3_add(s_camera.pos, vec3_add(vec3_scale(fwd, reach),
+                                               vec3_scale(right, driving ? 0.20f : 0.30f)));
+    pos.y -= drop;
     return pos;
 }
 
@@ -619,8 +634,9 @@ static void draw_place_preview(void)
 
 static void draw_viewmodel(f32 alpha)
 {
-    if (s_player.state != PLAYER_ON_FOOT || s_interact.hands.kind == ITEM_NONE || s_free_cam
-        || s_viewfinder || s_place_active) {
+    b32 driving = s_player.state == PLAYER_DRIVING;
+    if ((s_player.state != PLAYER_ON_FOOT && !driving) || s_interact.hands.kind == ITEM_NONE
+        || s_free_cam || s_viewfinder || s_place_active) {
         return;
     }
     if (s_interact.action == ACTION_PLACE_CARGO) {
@@ -646,6 +662,9 @@ static void draw_viewmodel(f32 alpha)
     f32 scale = s_interact.hands.kind == ITEM_TIRE ? 0.45f : 0.85f;
     if (antenna_variant_for_item(s_interact.hands.kind) >= 0) {
         scale = 0.5f;
+    }
+    if (driving) {
+        scale *= 0.75f;
     }
     Quat rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), -s_camera.yaw);
     pos = vec3_sub(pos, vec3_scale(quat_rotate_vec3(rot, item_mesh_center(s_interact.hands.kind)),
@@ -686,8 +705,61 @@ static void spawn_spare(ItemKind kind, f32 condition, Vec3 offset)
     spawn_spare_aux(kind, condition, 0, offset);
 }
 
+static Vec3 car_audio_point(Vec3 chassis_local)
+{
+    RigidBody* body = phys_body(&s_phys, s_vehicle.body);
+    if (!body) {
+        return s_camera.pos;
+    }
+    return vec3_add(body->pos, quat_rotate_vec3(body->rot,
+                                                vec3_sub(chassis_local,
+                                                         s_vehicle.cfg.com_offset)));
+}
+
+static f32 audio_occlusion_at(Vec3 pos)
+{
+    Vec3 delta = vec3_sub(pos, s_camera.pos);
+    f32 dist = vec3_length(delta);
+    if (dist < 0.6f) {
+        return 1.0f;
+    }
+    Ray ray;
+    ray.origin = s_camera.pos;
+    ray.dir = vec3_scale(delta, 1.0f / dist);
+    PhysRayHit hit;
+    if (phys_raycast(&s_phys, ray, dist - 0.25f, &hit)) {
+        return 0.28f;
+    }
+    return 1.0f;
+}
+
+static void sfx_at(SfxKind kind, f32 volume, f32 pitch, Vec3 pos)
+{
+    audio_play_at(kind, volume * audio_occlusion_at(pos), pitch, pos);
+}
+
 static void update_audio(f32 frame_dt)
 {
+    RigidBody* body = phys_body(&s_phys, s_vehicle.body);
+    static Vec3 prev_cam_pos;
+    static b32 prev_cam_valid;
+    Vec3 cam_vel = vec3_zero();
+    if (prev_cam_valid && frame_dt > 0.0001f) {
+        cam_vel = vec3_scale(vec3_sub(s_camera.pos, prev_cam_pos), 1.0f / frame_dt);
+        if (vec3_length(cam_vel) > 60.0f) {
+            cam_vel = vec3_zero();
+        }
+    }
+    prev_cam_pos = s_camera.pos;
+    prev_cam_valid = 1;
+    audio_listener_set(s_camera.pos, camera_forward(&s_camera), cam_vel);
+    if (body) {
+        audio_car_set(car_audio_point(v3(0.0f, 0.1f, -1.3f)), body->pos,
+                      car_audio_point(v3(0.12f, -0.045f, -0.295f)), body->vel);
+        audio_occlusion_set(audio_occlusion_at(vec3_add(body->pos, v3(0.0f, 0.35f, 0.0f))),
+                            frame_dt);
+    }
+
     static b32 prev_door[2];
     static b32 prev_hood;
     static b32 prev_trunk;
@@ -700,22 +772,23 @@ static void update_audio(f32 frame_dt)
 
     for (u32 i = 0; i < 2; i++) {
         if (s_carsys.door_target[i] != prev_door[i]) {
-            audio_play(s_carsys.door_target[i] ? SFX_DOOR_OPEN : SFX_DOOR_CLOSE, 0.8f,
-                       i == 0 ? 1.0f : 0.96f);
+            sfx_at(s_carsys.door_target[i] ? SFX_DOOR_OPEN : SFX_DOOR_CLOSE, 0.8f,
+                   i == 0 ? 1.0f : 0.96f,
+                   car_audio_point(v3(i == 0 ? -0.85f : 0.85f, 0.0f, 0.10f)));
             prev_door[i] = s_carsys.door_target[i];
         }
     }
     if (s_carsys.hood_target != prev_hood) {
-        audio_play(SFX_HOOD, 0.7f, 1.0f);
+        sfx_at(SFX_HOOD, 0.7f, 1.0f, car_audio_point(v3(0.0f, 0.2f, -1.5f)));
         prev_hood = s_carsys.hood_target;
     }
     if (s_carsys.trunk_target != prev_trunk) {
-        audio_play(SFX_HOOD, 0.6f, 0.85f);
+        sfx_at(SFX_HOOD, 0.6f, 0.85f, car_audio_point(v3(0.0f, 0.2f, 1.74f)));
         prev_trunk = s_carsys.trunk_target;
     }
     prev_engine_on = s_carsys.engine_on;
     if (s_carsys.handbrake_latched != prev_handbrake) {
-        audio_play(SFX_THUMP, 0.4f, 1.5f);
+        sfx_at(SFX_THUMP, 0.4f, 1.5f, car_audio_point(v3(-0.13f, -0.13f, 0.33f)));
         prev_handbrake = s_carsys.handbrake_latched;
     }
     static b32 prev_computer_on;
@@ -729,13 +802,14 @@ static void update_audio(f32 frame_dt)
         installed += s_carsys.parts[k].installed ? 1u : 0u;
     }
     if (prev_installed != 0xFFFFFFFFu && installed != prev_installed) {
-        audio_play(SFX_RATCHET, 0.8f, installed > prev_installed ? 1.0f : 1.12f);
+        Vec3 at = body ? body->pos : s_camera.pos;
+        sfx_at(SFX_RATCHET, 0.8f, installed > prev_installed ? 1.0f : 1.12f, at);
     }
     prev_installed = installed;
 
     u32 cargo = carsys_cargo_count(&s_carsys);
     if (cargo != prev_cargo) {
-        audio_play(SFX_THUMP, 0.7f, 1.0f);
+        sfx_at(SFX_THUMP, 0.7f, 1.0f, car_audio_point(v3(0.0f, 0.0f, 1.74f)));
         prev_cargo = cargo;
     }
     if (s_interact.hands.kind != prev_hands) {
@@ -745,9 +819,11 @@ static void update_audio(f32 frame_dt)
         prev_hands = s_interact.hands.kind;
     }
 
-    if (s_carsys.impact_cooldown > prev_impact_cooldown + 0.05f) {
+    if (s_carsys.impact_cooldown > prev_impact_cooldown + 0.05f && body) {
         f32 vol = f_clamp(0.45f + s_carsys.last_impact_severity * 0.6f, 0.0f, 1.2f);
-        audio_play(SFX_IMPACT, vol, f_clamp(1.05f - s_carsys.last_impact_severity * 0.2f, 0.8f, 1.1f));
+        sfx_at(SFX_IMPACT, vol,
+                      f_clamp(1.05f - s_carsys.last_impact_severity * 0.2f, 0.8f, 1.1f),
+                      body->pos);
     }
     prev_impact_cooldown = s_carsys.impact_cooldown;
 
@@ -759,12 +835,13 @@ static void update_audio(f32 frame_dt)
             flat_phase[i] += f_abs(w->omega) * frame_dt / (2.0f * PI32);
             if (flat_phase[i] >= 1.0f) {
                 flat_phase[i] -= 1.0f;
-                audio_play(SFX_FLAP, f_clamp((1.0f - mul) * 2.0f, 0.1f, 0.3f), 1.0f);
+                sfx_at(SFX_FLAP, f_clamp((1.0f - mul) * 2.0f, 0.1f, 0.3f), 1.0f,
+                              car_audio_point(v3(i % 2 == 0 ? -0.7f : 0.7f, -0.3f,
+                                                 i < 2 ? -1.25f : 1.25f)));
             }
         }
     }
 
-    RigidBody* body = phys_body(&s_phys, s_vehicle.body);
     f32 speed = body ? vec3_length(body->vel) : 0.0f;
     f32 load = s_carsys.engine_on ? s_vehicle.input.throttle : 0.0f;
     audio_engine_set(drivetrain_rpm(&s_vehicle.train), load, s_carsys.engine_on,
@@ -785,6 +862,34 @@ static void update_audio(f32 frame_dt)
     audio_skid_set(f_clamp01((max_slide - 2.5f) / 6.0f), frame_dt);
     f32 road = body ? terrain_road_amount(&s_terrain, body->pos.x, body->pos.z) : 0.0f;
     audio_rolling_set(speed, road, grounded, frame_dt);
+
+    static i32 prev_tape = -1;
+    static b32 prev_deck_play;
+    static i32 loaded_track = -1;
+    Vec3 deck_pos = car_audio_point(v3(0.12f, -0.045f, -0.295f));
+    if (s_carsys.tape_inserted != prev_tape) {
+        sfx_at(SFX_THUMP, 0.35f, s_carsys.tape_inserted >= 0 ? 1.7f : 1.5f, deck_pos);
+        prev_tape = s_carsys.tape_inserted;
+    }
+    if (s_carsys.deck_play != prev_deck_play) {
+        sfx_at(SFX_THUMP, 0.30f, s_carsys.deck_play ? 2.4f : 2.0f, deck_pos);
+        prev_deck_play = s_carsys.deck_play;
+    }
+    i32 want_track = s_carsys.deck_play && s_carsys.tape_inserted > 0
+                     ? s_carsys.tape_inserted - 1 : -1;
+    if (want_track != loaded_track) {
+        if (want_track >= 0) {
+            audio_tape_play(tapes_path(want_track));
+        } else {
+            audio_tape_stop();
+        }
+        loaded_track = want_track;
+    }
+    if (loaded_track >= 0) {
+        f32 tape_speed = 0.55f + 0.45f * f_clamp01((s_carsys.elec.battery_charge - 0.02f) / 0.10f);
+        audio_tape_set(tape_speed, s_carsys.tape_cond, 0.55f, frame_dt);
+        s_carsys.tape_cond = f_max(s_carsys.tape_cond - frame_dt * 0.00035f, 0.05f);
+    }
 }
 
 static void mission_init(void)
@@ -899,6 +1004,23 @@ static void spawn_spares(void)
     spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_ARCADE, v3(5.5f, 0.0f, 2.3f));
     spawn_spare(ITEM_CAMERA, 1.0f, v3(2.2f, 0.0f, 3.1f));
     spawn_spare(ITEM_REEL, 1.0f, v3(1.8f, 0.0f, 2.7f));
+    spawn_spare_aux(ITEM_CASSETTE, 1.0f, 0, v3(2.0f, 0.0f, 3.3f));
+    spawn_spare_aux(ITEM_CASSETTE, 0.6f, 0, v3(1.7f, 0.0f, 3.5f));
+}
+
+static void spawn_lore_tape(void)
+{
+    if (tapes_count() == 0 || tapes_on_relay(0)) {
+        return;
+    }
+    Vec3 pos = vec3_add(s_tower_pos, v3(1.3f, 0.0f, 0.9f));
+    pos.y = heightfield_sample(&s_terrain.hf, pos.x, pos.z) + item_cargo_half(ITEM_CASSETTE).y
+          + 0.10f;
+    Item item;
+    item.kind = ITEM_CASSETTE;
+    item.condition = 0.78f;
+    item.aux = 1;
+    interact_spawn_pickup(&s_world, &s_phys, item, pos, 0.8f, vec3_zero());
 }
 
 static void draw_telemetry_panel(void)
@@ -1088,7 +1210,7 @@ static void update_cables(f32 dt)
             if (s_interact.cable_drag == (i32)k) {
                 s_interact.cable_drag = -1;
             }
-            audio_play(SFX_THUMP, 0.45f, 1.15f);
+            sfx_at(SFX_THUMP, 0.45f, 1.15f, car_audio_point(v3(0.3f, 0.3f, 0.0f)));
             continue;
         }
         const Vec3* anchor = cable->via_reel ? &reel_anchor : 0;
@@ -1134,7 +1256,7 @@ static void update_cables(f32 dt)
                 s_interact.cable_drag = -1;
             }
             if (was_plugged || over_arc) {
-                audio_play(SFX_THUMP, 0.45f, 1.15f);
+                sfx_at(SFX_THUMP, 0.45f, 1.15f, car_audio_point(v3(0.3f, 0.3f, 0.0f)));
             }
             continue;
         }
@@ -2279,7 +2401,9 @@ int main(int argc, char** argv)
     carsys_init(&s_carsys);
     interact_init(&s_interact);
     terminal_init(&s_terminal);
+    tapes_init();
     spawn_spares();
+    spawn_lore_tape();
     audio_init();
     mission_init();
 
@@ -2595,6 +2719,14 @@ int main(int argc, char** argv)
                 s_terminal.breach_request = 0;
                 s_tower_breached = 1;
                 audio_play(SFX_RATCHET, 0.4f, 1.4f);
+            }
+            if (s_terminal.tape_write_request) {
+                s_terminal.tape_write_request = 0;
+                if (s_carsys.tape_inserted >= 0) {
+                    s_carsys.tape_inserted = 1 + s_terminal.tape_write_value;
+                    s_carsys.deck_play = 0;
+                    audio_play(SFX_RATCHET, 0.5f, 1.6f);
+                }
             }
             for (u32 lk = 0; lk < 2; lk++) {
                 if (s_terminal.link_request[lk]) {

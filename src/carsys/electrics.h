@@ -8,6 +8,7 @@ typedef enum Consumer {
     CONSUMER_STARTER,
     CONSUMER_FUEL_PUMP,
     CONSUMER_HEADLIGHTS,
+    CONSUMER_DECK,
     CONSUMER_COUNT,
 } Consumer;
 
@@ -22,4 +23,4 @@ typedef struct Electrics {
 const char* consumer_name(Consumer consumer);
 void electrics_init(Electrics* elec);
 void electrics_tick(Electrics* elec, const PartSlot* parts, f32 rpm, f32 idle_rpm,
-                    b32 engine_on, b32 cranking, b32 headlights_switch, f32 dt);
+                    b32 engine_on, b32 cranking, b32 headlights_switch, b32 deck_on, f32 dt);

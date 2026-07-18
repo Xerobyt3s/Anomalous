@@ -6,6 +6,7 @@
 #include "physics/physics.h"
 #include "physics/heightfield.h"
 #include "terminal/disks.h"
+#include "audio/tapes.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -16,6 +17,8 @@
 #define DOOR_HINGE_X 0.80f
 #define TERM_DISK_SLOT_LOCAL v3(0.0f, -0.119f, 0.265f)
 #define TERM_DISK_SLOT_HALF v3(0.10f, 0.035f, 0.045f)
+#define DECK_LOCAL v3(0.12f, -0.045f, -0.295f)
+#define DECK_SLOT_HALF v3(0.09f, 0.05f, 0.055f)
 
 void interact_init(Interact* it)
 {
@@ -139,6 +142,25 @@ static void consider_disk_slot(Candidate* best, const Interact* it, CarSys* sys,
     }
 }
 
+static void consider_deck_slot(Candidate* best, const Interact* it, CarSys* sys, f32 t,
+                               Vec3 center, Vec3 half)
+{
+    char prompt[96];
+    if (it->hands.kind == ITEM_CASSETTE && sys->tape_inserted < 0) {
+        snprintf(prompt, sizeof(prompt), "[E] insert tape \"%s\"", tape_label(it->hands.aux));
+        candidate_consider(best, t, ACTION_TAPE_INSERT, center, half, 0, prompt);
+    } else if (sys->tape_inserted >= 0 && it->hands.kind == ITEM_NONE && it->cable_drag < 0) {
+        snprintf(prompt, sizeof(prompt), "[E] %s | hold [E] eject tape",
+                 sys->deck_play ? "stop tape" : "play tape");
+        candidate_consider(best, t, ACTION_TAPE_EJECT, center, half, 1, prompt);
+    } else if (sys->tape_inserted < 0) {
+        candidate_consider(best, t, ACTION_INFO, center, half, 0, "tape deck: empty");
+    } else {
+        snprintf(prompt, sizeof(prompt), "tape deck: \"%s\"", tape_label(sys->tape_inserted));
+        candidate_consider(best, t, ACTION_INFO, center, half, 0, prompt);
+    }
+}
+
 static void resolve_doors(Candidate* best, const struct Player* player, Vehicle* veh, CarSys* sys,
                           PhysWorld* phys, Ray local, b32 on_foot)
 {
@@ -155,6 +177,8 @@ static void resolve_doors(Candidate* best, const struct Player* player, Vehicle*
                 if (!open) {
                     taken = candidate_consider(best, t + 0.05f, ACTION_OPEN_DOOR, center,
                                                door_half, 0, "[E] open door");
+                } else if (side == 1 && sys->parts[PART_COMPUTER].installed) {
+                    taken = 0;
                 } else if (player_can_enter(player, phys, veh)) {
                     taken = candidate_consider(best, t + 0.05f, ACTION_ENTER_CAR, center,
                                                door_half, 0, "[E] enter car");
@@ -239,17 +263,34 @@ static void resolve_in_car(Candidate* best, Interact* it, struct Player* player,
             }
         }
     }
+    if (sys->parts[PART_COMPUTER].installed) {
+        Quat rest = part_computer_rest_rot();
+        Vec3 slot_center = vec3_add(term_center, quat_rotate_vec3(rest, TERM_DISK_SLOT_LOCAL));
+        if (ray_vs_local_box(local, slot_center, TERM_DISK_SLOT_HALF, &t)) {
+            consider_disk_slot(best, it, sys, t - 0.30f, slot_center, TERM_DISK_SLOT_HALF);
+        }
+    }
+
+    Vec3 deck_center = vec3_sub(DECK_LOCAL, com);
+    if (ray_vs_local_box(local, deck_center, DECK_SLOT_HALF, &t)) {
+        consider_deck_slot(best, it, sys, t - 0.15f, deck_center, DECK_SLOT_HALF);
+    }
 
     for (i32 side = 0; side < 2; side++) {
         f32 sign = side == 0 ? -1.0f : 1.0f;
         if (sys->door_open[side] < DOOR_OPEN_FOR_USE) {
             continue;
         }
-        if (player->look_yaw * sign > EXIT_LOOK_YAW && player_can_exit(player, phys, veh)) {
-            Vec3 center = vec3_sub(v3(sign * 0.95f, 0.0f, 0.10f), com);
-            if (candidate_consider(best, 0.05f, ACTION_EXIT_CAR, center,
-                                   v3(0.05f, 0.25f, 0.55f), 0, "[E] get out")) {
-                best->side = side;
+        if (player->look_yaw * sign > EXIT_LOOK_YAW) {
+            if (side == 1 && sys->parts[PART_COMPUTER].installed) {
+                continue;
+            }
+            if (player_can_exit(player, phys, veh)) {
+                Vec3 center = vec3_sub(v3(sign * 0.95f, 0.0f, 0.10f), com);
+                if (candidate_consider(best, 0.05f, ACTION_EXIT_CAR, center,
+                                       v3(0.05f, 0.25f, 0.55f), 0, "[E] get out")) {
+                    best->side = side;
+                }
             }
         }
     }
@@ -284,15 +325,21 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
                 taken = candidate_consider(best, t, ACTION_OIL_FILL, center, def->socket_half, 1,
                                            "hold [E] top up oil");
             } else if (def->removable && it->hands.kind == ITEM_NONE) {
-                if ((PartKind)k == PART_COMPUTER) {
+                if ((PartKind)k == PART_COMPUTER && sys->computer_on) {
+                    taken = candidate_consider(best, t, ACTION_TERMINAL_USE, center,
+                                               def->socket_half, 1,
+                                               "[E] use terminal | hold [E] take");
+                } else if ((PartKind)k == PART_COMPUTER) {
                     snprintf(prompt, sizeof(prompt), "tap [E] power | hold [E] take terminal (%.0f%%)",
                              (f64)(slot->condition * 100.0f));
+                    taken = candidate_consider(best, t, ACTION_REMOVE_PART, center,
+                                               def->socket_half, 1, prompt);
                 } else {
                     snprintf(prompt, sizeof(prompt), "hold [E] take %s (%.0f%%)",
                              def->name, (f64)(slot->condition * 100.0f));
+                    taken = candidate_consider(best, t, ACTION_REMOVE_PART, center,
+                                               def->socket_half, 1, prompt);
                 }
-                taken = candidate_consider(best, t, ACTION_REMOVE_PART, center, def->socket_half,
-                                           1, prompt);
             } else {
                 snprintf(prompt, sizeof(prompt), "%s %.0f%%",
                          def->name, (f64)(slot->condition * 100.0f));
@@ -593,6 +640,9 @@ static void resolve_pickups(Candidate* best, const Interact* it, CarSys* sys, Wo
         if (pick_kind == ITEM_FLOPPY) {
             snprintf(prompt, sizeof(prompt), "[E] take floppy (%s)",
                      disk_label((i32)entity->aux_data));
+        } else if (pick_kind == ITEM_CASSETTE) {
+            snprintf(prompt, sizeof(prompt), "[E] take cassette (%s)",
+                     tape_label((i32)entity->aux_data));
         } else {
             snprintf(prompt, sizeof(prompt), "[E] take %s (%.0f%%)",
                      item_name(pick_kind), (f64)(entity->aux_value * 100.0f));
@@ -716,6 +766,13 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
                 phys_body_destroy(phys, entity->body);
             }
             world_despawn(world, it->target_entity);
+        } else if (it->action == ACTION_TERMINAL_USE
+                   && sys->parts[PART_COMPUTER].installed) {
+            PartSlot* slot = &sys->parts[PART_COMPUTER];
+            it->hands.kind = ITEM_COMPUTER;
+            it->hands.condition = slot->condition;
+            it->hands.aux = 0;
+            slot->installed = 0;
         }
         break;
     }
@@ -768,6 +825,18 @@ static void interact_perform(Interact* it, CarSys* sys, World* world, PhysWorld*
         it->hands.aux = sys->floppy_disk;
         it->hands.condition = sys->floppy_cond;
         sys->floppy_disk = -1;
+        break;
+    case ACTION_TAPE_INSERT:
+        sys->tape_inserted = it->hands.aux;
+        sys->tape_cond = it->hands.condition;
+        it->hands.kind = ITEM_NONE;
+        break;
+    case ACTION_TAPE_EJECT:
+        it->hands.kind = ITEM_CASSETTE;
+        it->hands.aux = sys->tape_inserted;
+        it->hands.condition = sys->tape_cond;
+        sys->tape_inserted = -1;
+        sys->deck_play = 0;
         break;
     case ACTION_REFUEL:
         sys->fluids.fuel = f_min(sys->fluids.fuel + 0.45f, 1.0f);
@@ -825,6 +894,7 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
     snprintf(it->prompt, sizeof(it->prompt), "%s", best.prompt);
     if (!same_target) {
         it->hold_time = 0.0f;
+        it->press_latch = 0;
     }
 
     if (best.action == ACTION_CRANK) {
@@ -839,19 +909,27 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
     }
     sys->crank_request = it->crank_latch;
 
+    if (e_pressed) {
+        it->press_latch = 1;
+    }
+
     if (best.action == ACTION_TERMINAL_USE) {
         if (best.is_hold) {
             if (e_down) {
-                it->hold_time += dt;
-                if (it->hold_time >= INTERACT_HOLD_TIME) {
-                    interact_perform(it, sys, world, phys);
-                    it->hold_time = 0.0f;
+                if (it->press_latch) {
+                    it->hold_time += dt;
+                    if (it->hold_time >= INTERACT_HOLD_TIME) {
+                        interact_perform(it, sys, world, phys);
+                        it->hold_time = 0.0f;
+                        it->press_latch = 0;
+                    }
                 }
             } else {
-                if (it->hold_time > 0.0f) {
+                if (it->press_latch && it->hold_time > 0.0f) {
                     it->use_terminal_request = 1;
                 }
                 it->hold_time = 0.0f;
+                it->press_latch = 0;
             }
             it->hold_progress = it->hold_time / INTERACT_HOLD_TIME;
         } else {
@@ -859,8 +937,28 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
             it->hold_progress = 0.0f;
             if (e_pressed) {
                 it->use_terminal_request = 1;
+                it->press_latch = 0;
             }
         }
+        return;
+    }
+
+    if (best.action == ACTION_TAPE_EJECT && best.is_hold) {
+        if (!e_down) {
+            if (it->press_latch && it->hold_time > 0.0f) {
+                sys->deck_play = !sys->deck_play;
+            }
+            it->press_latch = 0;
+            it->hold_time = 0.0f;
+        } else if (it->press_latch) {
+            it->hold_time += dt;
+            if (it->hold_time >= INTERACT_HOLD_TIME) {
+                interact_perform(it, sys, world, phys);
+                it->hold_time = 0.0f;
+                it->press_latch = 0;
+            }
+        }
+        it->hold_progress = it->hold_time / INTERACT_HOLD_TIME;
         return;
     }
 
@@ -870,6 +968,7 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
         if (e_pressed && best.action == ACTION_NONE && it->hands.kind == ITEM_COMPUTER
             && sys->computer_on) {
             it->use_terminal_request = 1;
+            it->press_latch = 0;
         }
         it->hold_time = 0.0f;
         it->hold_progress = 0.0f;
@@ -878,29 +977,34 @@ void interact_update(Interact* it, struct Player* player, struct Vehicle* veh,
 
     if (best.is_hold) {
         if (e_down) {
-            it->hold_time += dt;
-            if (it->hold_time >= INTERACT_HOLD_TIME) {
-                interact_perform(it, sys, world, phys);
-                it->hold_time = 0.0f;
+            if (it->press_latch) {
+                it->hold_time += dt;
+                if (it->hold_time >= INTERACT_HOLD_TIME) {
+                    interact_perform(it, sys, world, phys);
+                    it->hold_time = 0.0f;
+                    it->press_latch = 0;
+                }
             }
         } else {
-            if (it->hold_time > 0.0f && best.action == ACTION_PICKUP) {
+            if (it->press_latch && it->hold_time > 0.0f && best.action == ACTION_PICKUP) {
                 Entity* entity = world_entity(world, best.entity);
                 if (entity && (ItemKind)entity->aux_kind == ITEM_COMPUTER) {
                     sys->computer_on = 1;
                 }
             }
-            if (it->hold_time > 0.0f && best.action == ACTION_REMOVE_PART
+            if (it->press_latch && it->hold_time > 0.0f && best.action == ACTION_REMOVE_PART
                 && best.part == PART_COMPUTER) {
                 sys->computer_on = !sys->computer_on;
             }
             it->hold_time = 0.0f;
+            it->press_latch = 0;
         }
         it->hold_progress = it->hold_time / INTERACT_HOLD_TIME;
     } else {
         it->hold_progress = 0.0f;
-        if (e_pressed) {
+        if (e_pressed && it->press_latch) {
             interact_perform(it, sys, world, phys);
+            it->press_latch = 0;
         }
     }
 }

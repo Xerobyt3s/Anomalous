@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -88,6 +88,7 @@
     <ClCompile Include="src\main.c" />
     <ClCompile Include="src\assets\assets.c" />
     <ClCompile Include="src\audio\audio.c" />
+    <ClCompile Include="src\audio\tapes.c" />
     <ClCompile Include="src\core\arena.c" />
     <ClCompile Include="src\core\log.c" />
     <ClCompile Include="src\core\config.c" />
@@ -130,6 +131,7 @@
   <ItemGroup>
     <ClInclude Include="src\assets\assets.h" />
     <ClInclude Include="src\audio\audio.h" />
+    <ClInclude Include="src\audio\tapes.h" />
     <ClInclude Include="src\assets\mesh_format.h" />
     <ClInclude Include="src\core\types.h" />
     <ClInclude Include="src\core\arena.h" />

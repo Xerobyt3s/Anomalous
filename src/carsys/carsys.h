@@ -57,6 +57,9 @@ typedef struct CarSys {
     b32 computer_on;
     i32 floppy_disk;
     f32 floppy_cond;
+    i32 tape_inserted;
+    f32 tape_cond;
+    b32 deck_play;
     i32 coax_target;
     i32 bus_target;
     Cable cables[CABLE_KIND_COUNT];

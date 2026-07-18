@@ -373,6 +373,70 @@ FsError fs_delete(Fs* fs, FsRef ref)
     return FS_OK;
 }
 
+FsError fs_rmdir(Fs* fs, FsRef ref)
+{
+    if (!fs_ref_valid(fs, ref)) {
+        return FS_ERR_NOT_FOUND;
+    }
+    if (ref.node == 0) {
+        return FS_ERR_SELF;
+    }
+    FsDrive* d = &fs->drives[ref.drive];
+    FsNode* n = &d->nodes[ref.node];
+    if (!n->is_dir) {
+        return FS_ERR_IS_DIR;
+    }
+    for (i32 i = 1; i < FS_DRIVE_NODES; i++) {
+        if (d->nodes[i].used && d->nodes[i].parent == ref.node) {
+            return FS_ERR_FULL;
+        }
+    }
+    n->used = 0;
+    return FS_OK;
+}
+
+FsError fs_move(Fs* fs, FsRef src, FsRef dst_dir, const char* dst_name)
+{
+    if (!fs_ref_valid(fs, src)) {
+        return FS_ERR_NOT_FOUND;
+    }
+    if (!fs_ref_valid(fs, dst_dir) || !fs_node(fs, dst_dir)->is_dir) {
+        return FS_ERR_NOT_READY;
+    }
+    if (!fs_name_valid(dst_name)) {
+        return FS_ERR_BAD_NAME;
+    }
+    FsDrive* sd = &fs->drives[src.drive];
+    FsNode* sn = &sd->nodes[src.node];
+    if (sn->is_dir) {
+        return FS_ERR_IS_DIR;
+    }
+    if (src.drive != dst_dir.drive) {
+        FsError err = fs_copy(fs, src, dst_dir, dst_name);
+        if (err != FS_OK) {
+            return err;
+        }
+        return fs_delete(fs, src);
+    }
+    i32 existing = fs_find_child(sd, dst_dir.node, dst_name);
+    if (existing == src.node) {
+        return FS_ERR_SELF;
+    }
+    if (existing >= 0) {
+        if (sd->nodes[existing].is_dir) {
+            return FS_ERR_IS_DIR;
+        }
+        FsRef ex = { dst_dir.drive, existing };
+        FsError err = fs_delete(fs, ex);
+        if (err != FS_OK) {
+            return err;
+        }
+    }
+    sn->parent = dst_dir.node;
+    snprintf(sn->name, sizeof(sn->name), "%s", dst_name);
+    return FS_OK;
+}
+
 FsError fs_copy(Fs* fs, FsRef src, FsRef dst_dir, const char* dst_name)
 {
     if (!fs_ref_valid(fs, src)) {
@@ -426,6 +490,7 @@ FsError fs_copy(Fs* fs, FsRef src, FsRef dst_dir, const char* dst_name)
     dn->size = sn->size;
     dn->exe = sn->exe;
     dn->pic = sn->pic;
+    dn->trk = sn->trk;
     dn->infected = sn->infected;
     dn->corrupted = sn->corrupted;
     dn->run_text = sn->run_text;

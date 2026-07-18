@@ -7,7 +7,6 @@
 
 #include <stdio.h>
 
-#define MA_NO_MP3
 #define MA_NO_FLAC
 #define MA_NO_ENCODING
 #define MA_NO_GENERATION
@@ -77,6 +76,20 @@ static f32 s_horn_vol;
 static f32 s_skid_vol;
 static f32 s_roll_road_vol;
 static f32 s_roll_grass_vol;
+static Vec3 s_dash_pos;
+static Vec3 s_car_vel;
+static f32 s_occ = 1.0f;
+static ma_sound s_tape;
+static b32 s_tape_active;
+static ma_hpf_node s_tape_hpf;
+static ma_lpf_node s_tape_lpf;
+static b32 s_tape_chain;
+static f32 s_tape_speed_sm;
+static f32 s_tape_wobble_t;
+static f32 s_tape_cutoff;
+
+#define TAPE_LPF_ORDER 4
+#define TAPE_HPF_ORDER 2
 
 static f32 synth_rand01(EngineSynth* s)
 {
@@ -197,6 +210,15 @@ static const char* s_sfx_paths[SFX_KIND_COUNT] = {
     "assets/audio/engine_start.wav",
 };
 
+static void sound_spatial(ma_sound* sound, f32 min_dist, f32 max_dist)
+{
+    ma_sound_set_spatialization_enabled(sound, MA_TRUE);
+    ma_sound_set_attenuation_model(sound, ma_attenuation_model_inverse);
+    ma_sound_set_min_distance(sound, min_dist);
+    ma_sound_set_max_distance(sound, max_dist);
+    ma_sound_set_rolloff(sound, 1.0f);
+}
+
 static b32 load_loop(ma_sound* sound, const char* path)
 {
     if (ma_sound_init_from_file(&s_engine, path, MA_SOUND_FLAG_DECODE, 0, 0, sound) != MA_SUCCESS) {
@@ -205,6 +227,7 @@ static b32 load_loop(ma_sound* sound, const char* path)
     }
     ma_sound_set_looping(sound, MA_TRUE);
     ma_sound_set_volume(sound, 0.0f);
+    sound_spatial(sound, 3.0f, 120.0f);
     ma_sound_start(sound);
     return 1;
 }
@@ -227,6 +250,7 @@ b32 audio_init(void)
                 log_warn("audio: failed to load %s", s_sfx_paths[k]);
                 break;
             }
+            sound_spatial(&s_sfx[k].voices[v], 2.0f, 90.0f);
         }
     }
 
@@ -261,6 +285,7 @@ b32 audio_init(void)
                 }
                 ma_sound_set_looping(&s_engine_set.loops[loaded], MA_TRUE);
                 ma_sound_set_volume(&s_engine_set.loops[loaded], 0.0f);
+                sound_spatial(&s_engine_set.loops[loaded], 3.0f, 160.0f);
                 ma_sound_start(&s_engine_set.loops[loaded]);
                 s_engine_set.base_rpm[loaded] = rpm;
                 loaded++;
@@ -281,11 +306,27 @@ b32 audio_init(void)
                                                     &s_engine_sound) == MA_SUCCESS;
         if (s_synth_ok) {
             ma_sound_set_volume(&s_engine_sound, 0.85f);
+            sound_spatial(&s_engine_sound, 3.0f, 160.0f);
             ma_sound_start(&s_engine_sound);
         } else {
             log_warn("audio: engine synth init failed");
         }
     }
+
+    ma_node_graph* graph = ma_engine_get_node_graph(&s_engine);
+    ma_uint32 channels = ma_engine_get_channels(&s_engine);
+    ma_uint32 rate = ma_engine_get_sample_rate(&s_engine);
+    s_tape_cutoff = 4200.0f;
+    ma_hpf_node_config hc = ma_hpf_node_config_init(channels, rate, 210.0, TAPE_HPF_ORDER);
+    ma_lpf_node_config lc = ma_lpf_node_config_init(channels, rate, (f64)s_tape_cutoff,
+                                                    TAPE_LPF_ORDER);
+    s_tape_chain = ma_hpf_node_init(graph, &hc, 0, &s_tape_hpf) == MA_SUCCESS
+                && ma_lpf_node_init(graph, &lc, 0, &s_tape_lpf) == MA_SUCCESS;
+    if (s_tape_chain) {
+        ma_node_attach_output_bus(&s_tape_hpf, 0, &s_tape_lpf, 0);
+        ma_node_attach_output_bus(&s_tape_lpf, 0, ma_engine_get_endpoint(&s_engine), 0);
+    }
+    s_tape_speed_sm = 1.0f;
 
     log_info("audio: initialized (%s, engine %s)",
              s_loops_loaded ? "loops loaded" : "missing loops",
@@ -297,6 +338,12 @@ void audio_shutdown(void)
 {
     if (!s_ok) {
         return;
+    }
+    audio_tape_stop();
+    if (s_tape_chain) {
+        ma_lpf_node_uninit(&s_tape_lpf, 0);
+        ma_hpf_node_uninit(&s_tape_hpf, 0);
+        s_tape_chain = 0;
     }
     if (s_engine_set.loaded) {
         for (u32 i = 0; i < s_engine_set.count; i++) {
@@ -326,11 +373,56 @@ void audio_shutdown(void)
     s_ok = 0;
 }
 
-void audio_play(SfxKind kind, f32 volume, f32 pitch)
+void audio_listener_set(Vec3 pos, Vec3 forward, Vec3 vel)
 {
-    if (!s_ok || !s_sfx[kind].loaded) {
+    if (!s_ok) {
         return;
     }
+    ma_engine_listener_set_position(&s_engine, 0, pos.x, pos.y, pos.z);
+    ma_engine_listener_set_direction(&s_engine, 0, forward.x, forward.y, forward.z);
+    ma_engine_listener_set_world_up(&s_engine, 0, 0.0f, 1.0f, 0.0f);
+    ma_engine_listener_set_velocity(&s_engine, 0, vel.x, vel.y, vel.z);
+}
+
+static void sound_place(ma_sound* sound, Vec3 pos, Vec3 vel)
+{
+    ma_sound_set_position(sound, pos.x, pos.y, pos.z);
+    ma_sound_set_velocity(sound, vel.x, vel.y, vel.z);
+}
+
+void audio_occlusion_set(f32 factor, f32 dt)
+{
+    s_occ = f_approach_exp(s_occ, f_clamp(factor, 0.0f, 1.0f), 9.0f, dt);
+}
+
+void audio_car_set(Vec3 engine_pos, Vec3 center_pos, Vec3 dash_pos, Vec3 vel)
+{
+    if (!s_ok) {
+        return;
+    }
+    s_dash_pos = dash_pos;
+    s_car_vel = vel;
+    if (s_engine_set.loaded) {
+        for (u32 i = 0; i < s_engine_set.count; i++) {
+            sound_place(&s_engine_set.loops[i], engine_pos, vel);
+        }
+    } else if (s_synth_ok) {
+        sound_place(&s_engine_sound, engine_pos, vel);
+    }
+    if (s_loops_loaded) {
+        sound_place(&s_starter, engine_pos, vel);
+        sound_place(&s_skid, center_pos, vel);
+        sound_place(&s_roll_road, center_pos, vel);
+        sound_place(&s_roll_grass, center_pos, vel);
+        sound_place(&s_horn, engine_pos, vel);
+    }
+    if (s_tape_active) {
+        sound_place(&s_tape, dash_pos, vel);
+    }
+}
+
+static ma_sound* sfx_voice(SfxKind kind, f32 volume, f32 pitch)
+{
     SfxBank* bank = &s_sfx[kind];
     ma_sound* voice = &bank->voices[bank->next];
     bank->next = (bank->next + 1) % SFX_VOICES;
@@ -338,6 +430,27 @@ void audio_play(SfxKind kind, f32 volume, f32 pitch)
     ma_sound_seek_to_pcm_frame(voice, 0);
     ma_sound_set_volume(voice, volume);
     ma_sound_set_pitch(voice, pitch);
+    return voice;
+}
+
+void audio_play(SfxKind kind, f32 volume, f32 pitch)
+{
+    if (!s_ok || !s_sfx[kind].loaded) {
+        return;
+    }
+    ma_sound* voice = sfx_voice(kind, volume, pitch);
+    ma_sound_set_spatialization_enabled(voice, MA_FALSE);
+    ma_sound_start(voice);
+}
+
+void audio_play_at(SfxKind kind, f32 volume, f32 pitch, Vec3 pos)
+{
+    if (!s_ok || !s_sfx[kind].loaded) {
+        return;
+    }
+    ma_sound* voice = sfx_voice(kind, volume, pitch);
+    ma_sound_set_spatialization_enabled(voice, MA_TRUE);
+    sound_place(voice, pos, vec3_zero());
     ma_sound_start(voice);
 }
 
@@ -373,7 +486,7 @@ void audio_engine_set(f32 rpm, f32 load, b32 running, b32 cranking, f32 dt)
         }
         for (u32 i = 0; i < set->count; i++) {
             set->vol[i] = f_approach_exp(set->vol[i], target[i] * set->master, 18.0f, dt);
-            ma_sound_set_volume(&set->loops[i], set->vol[i]);
+            ma_sound_set_volume(&set->loops[i], set->vol[i] * s_occ);
             if (set->vol[i] > 0.002f) {
                 ma_sound_set_pitch(&set->loops[i],
                                    f_clamp(rpm_eff / set->base_rpm[i], 0.45f, 2.3f));
@@ -384,9 +497,10 @@ void audio_engine_set(f32 rpm, f32 load, b32 running, b32 cranking, f32 dt)
         s_synth.load = f_clamp01(load);
         s_synth.running = running;
         s_synth.cranking = cranking;
+        ma_sound_set_volume(&s_engine_sound, 0.85f * s_occ);
     }
     if (s_loops_loaded) {
-        ma_sound_set_volume(&s_starter, cranking ? 0.5f : 0.0f);
+        ma_sound_set_volume(&s_starter, cranking ? 0.5f * s_occ : 0.0f);
     }
 }
 
@@ -400,8 +514,8 @@ void audio_rolling_set(f32 speed, f32 road_amount, b32 grounded, f32 dt)
     f32 grass_target = base * (1.0f - road_amount) * 1.15f;
     s_roll_road_vol = f_approach_exp(s_roll_road_vol, road_target, 8.0f, dt);
     s_roll_grass_vol = f_approach_exp(s_roll_grass_vol, grass_target, 8.0f, dt);
-    ma_sound_set_volume(&s_roll_road, s_roll_road_vol);
-    ma_sound_set_volume(&s_roll_grass, s_roll_grass_vol);
+    ma_sound_set_volume(&s_roll_road, s_roll_road_vol * s_occ);
+    ma_sound_set_volume(&s_roll_grass, s_roll_grass_vol * s_occ);
     f32 pitch = 0.8f + f_clamp01(speed / 35.0f) * 0.5f;
     ma_sound_set_pitch(&s_roll_road, pitch);
     ma_sound_set_pitch(&s_roll_grass, pitch);
@@ -413,7 +527,7 @@ void audio_horn_set(b32 on, f32 dt)
         return;
     }
     s_horn_vol = f_approach_exp(s_horn_vol, on ? 0.5f : 0.0f, 40.0f, dt);
-    ma_sound_set_volume(&s_horn, s_horn_vol);
+    ma_sound_set_volume(&s_horn, s_horn_vol * s_occ);
 }
 
 void audio_skid_set(f32 intensity, f32 dt)
@@ -422,6 +536,76 @@ void audio_skid_set(f32 intensity, f32 dt)
         return;
     }
     s_skid_vol = f_approach_exp(s_skid_vol, f_clamp01(intensity) * 0.55f, 14.0f, dt);
-    ma_sound_set_volume(&s_skid, s_skid_vol);
+    ma_sound_set_volume(&s_skid, s_skid_vol * s_occ);
     ma_sound_set_pitch(&s_skid, 0.9f + 0.25f * f_clamp01(intensity));
+}
+
+b32 audio_tape_play(const char* path)
+{
+    if (!s_ok) {
+        return 0;
+    }
+    audio_tape_stop();
+    if (ma_sound_init_from_file(&s_engine, path, MA_SOUND_FLAG_STREAM, 0, 0,
+                                &s_tape) != MA_SUCCESS) {
+        log_warn("audio: failed to stream %s", path);
+        return 0;
+    }
+    ma_sound_set_looping(&s_tape, MA_TRUE);
+    sound_spatial(&s_tape, 1.5f, 40.0f);
+    sound_place(&s_tape, s_dash_pos, s_car_vel);
+    if (s_tape_chain) {
+        ma_node_attach_output_bus(&s_tape, 0, &s_tape_hpf, 0);
+    }
+    ma_sound_set_volume(&s_tape, 0.0f);
+    ma_sound_start(&s_tape);
+    s_tape_active = 1;
+    s_tape_speed_sm = 0.4f;
+    return 1;
+}
+
+void audio_tape_stop(void)
+{
+    if (!s_tape_active) {
+        return;
+    }
+    ma_sound_uninit(&s_tape);
+    s_tape_active = 0;
+}
+
+b32 audio_tape_playing(void)
+{
+    return s_tape_active;
+}
+
+void audio_tape_set(f32 speed, f32 condition, f32 volume, f32 dt)
+{
+    if (!s_ok || !s_tape_active) {
+        return;
+    }
+    s_tape_wobble_t += dt;
+    if (s_tape_wobble_t > 1000.0f) {
+        s_tape_wobble_t -= 1000.0f;
+    }
+    f32 wear = 1.0f - f_clamp01(condition);
+    f32 wow = sinf(s_tape_wobble_t * 2.0f * PI32 * 0.6f) * (0.003f + 0.032f * wear);
+    f32 flutter = sinf(s_tape_wobble_t * 2.0f * PI32 * 6.3f
+                       + sinf(s_tape_wobble_t * 17.0f)) * 0.007f * wear;
+    s_tape_speed_sm = f_approach_exp(s_tape_speed_sm, f_clamp(speed, 0.0f, 1.2f), 5.0f, dt);
+    ma_sound_set_pitch(&s_tape, f_clamp(s_tape_speed_sm * (1.0f + wow + flutter), 0.05f, 1.6f));
+
+    f32 am = 1.0f - wear * 0.35f * (0.5f + 0.5f * sinf(s_tape_wobble_t * 2.0f * PI32 * 1.4f));
+    f32 drag = 0.30f + 0.70f * f_clamp01((s_tape_speed_sm - 0.30f) / 0.70f);
+    ma_sound_set_volume(&s_tape, f_clamp(volume * am * drag * s_occ, 0.0f, 1.0f));
+
+    if (s_tape_chain) {
+        f32 cutoff = 1900.0f + 2600.0f * f_clamp01(condition);
+        if (f_abs(cutoff - s_tape_cutoff) > 140.0f) {
+            s_tape_cutoff = cutoff;
+            ma_lpf_node_config lc = ma_lpf_node_config_init(ma_engine_get_channels(&s_engine),
+                                                            ma_engine_get_sample_rate(&s_engine),
+                                                            (f64)cutoff, TAPE_LPF_ORDER);
+            ma_lpf_node_reinit(&lc.lpf, &s_tape_lpf);
+        }
+    }
 }

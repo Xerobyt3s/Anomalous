@@ -75,6 +75,9 @@ static i32 exe_prog(const char* name)
     if (strcmp(name, "gate") == 0) {
         return FS_EXE_GATE;
     }
+    if (strcmp(name, "tapes") == 0) {
+        return FS_EXE_TAPES;
+    }
     return FS_EXE_NONE;
 }
 

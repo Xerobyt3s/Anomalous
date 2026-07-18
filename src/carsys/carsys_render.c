@@ -200,6 +200,15 @@ void carsys_render(const struct CarSys* sys, const struct Vehicle* veh,
                     mat4_mul(base, mat4_trs(vec3_sub(v3(0.32f, -0.02f, -0.75f), com),
                                             quat_identity(), one)));
 
+        Mat4 deck = mat4_mul(base, mat4_trs(vec3_sub(v3(0.12f, -0.045f, -0.295f), com),
+                                            quat_identity(), one));
+        r_draw_mesh(asset_mesh("part_deck"), deck);
+        if (sys->tape_inserted >= 0) {
+            r_draw_mesh(asset_mesh("part_cassette"),
+                        mat4_mul(deck, mat4_trs(v3(0.0f, 0.006f, 0.052f),
+                                                quat_identity(), one)));
+        }
+
         if (sys->parts[PART_ANTENNA].installed) {
             static const char* ant_meshes[3] = { "antenna_whip", "antenna_std", "antenna_array" };
             i32 variant = sys->parts[PART_ANTENNA].variant;

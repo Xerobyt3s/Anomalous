@@ -24,6 +24,7 @@ typedef enum FsExe {
     FS_EXE_VIDEO,
     FS_EXE_BREACH,
     FS_EXE_GATE,
+    FS_EXE_TAPES,
 } FsExe;
 
 typedef enum FsError {
@@ -45,6 +46,7 @@ typedef struct FsNode {
     u32 size;
     i32 exe;
     i32 pic;
+    i32 trk;
     b32 infected;
     b32 corrupted;
     const char* run_text;
@@ -88,7 +90,9 @@ FsRef fs_mkdir(Fs* fs, FsRef dir, const char* name);
 FsRef fs_mkfile_rom(Fs* fs, FsRef dir, const char* name, const char* text, u32 size, i32 exe);
 FsRef fs_mkfile_data(Fs* fs, FsRef dir, const char* name, const char* text, u32 len);
 FsError fs_copy(Fs* fs, FsRef src, FsRef dst_dir, const char* dst_name);
+FsError fs_move(Fs* fs, FsRef src, FsRef dst_dir, const char* dst_name);
 FsError fs_delete(Fs* fs, FsRef ref);
+FsError fs_rmdir(Fs* fs, FsRef ref);
 void fs_format(Fs* fs, i32 drive, const char* label);
 void fs_mount(Fs* fs, i32 drive, const char* label, u32 capacity);
 void fs_unmount(Fs* fs, i32 drive);

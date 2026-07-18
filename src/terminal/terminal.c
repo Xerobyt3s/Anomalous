@@ -3,6 +3,7 @@
 #include "terminal/fs.h"
 #include "terminal/disks.h"
 #include "terminal/mapdata.h"
+#include "audio/tapes.h"
 #include "core/log.h"
 #include "carsys/carsys.h"
 #include "vehicle/vehicle.h"
@@ -1010,6 +1011,9 @@ b32 terminal_init(Terminal* term)
     *term = zero;
     term->history_pos = -1;
     term->format_drive = -1;
+    term->tapes_write_track = -1;
+    term->tapes_dl_track = -1;
+    term->tapes_prompt_track = -1;
 
     comms_init(&s_comms);
     fs_init(&s_fs);
@@ -1511,6 +1515,375 @@ static void draw_video(Terminal* term)
     grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "SRC: COAX CAM-1   320X200 10FPS   [Q] BACK");
 }
 
+#define TAPES_LIST_MAX 24
+#define TAPES_LIST_ROWS 14
+#define TAPE_WRITE_TIME 7.0f
+#define TAPE_DL_TIME 11.0f
+
+typedef struct TapeEntry {
+    i32 drive;
+    i32 node;
+    i32 track;
+    b32 archive;
+} TapeEntry;
+
+static b32 tapes_relay_linked(const Terminal* term)
+{
+    return term->bus_state == 2 && term->bus_tower && term->tower_breached;
+}
+
+static i32 tapes_build_list(const Terminal* term, TapeEntry* out, i32 max)
+{
+    i32 n = 0;
+    for (i32 d = 0; d < FS_DRIVE_COUNT && n < max; d++) {
+        const FsDrive* drive = &s_fs.drives[d];
+        if (!drive->mounted) {
+            continue;
+        }
+        for (i32 i = 1; i < FS_DRIVE_NODES && n < max; i++) {
+            const FsNode* node = &drive->nodes[i];
+            if (!node->used || node->is_dir || node->trk <= 0) {
+                continue;
+            }
+            out[n].drive = d;
+            out[n].node = i;
+            out[n].track = node->trk - 1;
+            out[n].archive = 0;
+            n++;
+        }
+    }
+    if (tapes_relay_linked(term)) {
+        for (i32 t = 0; t < (i32)tapes_count() && n < max; t++) {
+            if (!tapes_on_relay(t)) {
+                continue;
+            }
+            out[n].drive = -1;
+            out[n].node = -1;
+            out[n].track = t;
+            out[n].archive = 1;
+            n++;
+        }
+    }
+    return n;
+}
+
+static void tapes_status_set(Terminal* term, const char* msg)
+{
+    snprintf(term->tapes_status, sizeof(term->tapes_status), "%s", msg);
+    term->tapes_status_until = term->mode_timer + 3.2f;
+}
+
+static void tapes_trk_name(i32 track, char* out, u32 size)
+{
+    const char* name = tapes_name(track);
+    u32 n = 0;
+    for (const char* p = name; *p && n < 8 && n + 5 < size; p++) {
+        char c = *p;
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+            out[n++] = c;
+        }
+    }
+    if (n == 0) {
+        out[n++] = 'T';
+    }
+    snprintf(out + n, size - n, ".TRK");
+}
+
+static void tapes_dl_finish(Terminal* term)
+{
+    i32 track = term->tapes_dl_track;
+    term->tapes_dl_track = -1;
+    FsRef dir = { term->tapes_dest_drive, term->tapes_dest_node };
+    if (!fs_ref_valid(&s_fs, dir) || !fs_node(&s_fs, dir)->is_dir) {
+        tapes_status_set(term, "TARGET PATH LOST - DOWNLOAD LOST");
+        return;
+    }
+    FsRef file = fs_mkfile_rom(&s_fs, dir, term->tapes_dest_name, 0, tapes_file_bytes(track),
+                               FS_EXE_NONE);
+    if (!fs_ref_valid(&s_fs, file)) {
+        tapes_status_set(term, "WRITE FAULT - DOWNLOAD LOST");
+        return;
+    }
+    fs_node_mut(&s_fs, file)->trk = track + 1;
+    tapes_status_set(term, "DOWNLOAD COMPLETE");
+}
+
+static b32 tapes_resolve_dest(Terminal* term, i32 track)
+{
+    const char* path = term->tapes_dest;
+    i32 pd = fs_path_drive(path);
+    if (path[0] && path[1] == ':' && (pd < 0 || !fs_drive_mounted(&s_fs, pd))) {
+        tapes_status_set(term, "DRIVE NOT READY");
+        return 0;
+    }
+    FsRef cwd = { term->cwd_drive, term->cwd_node };
+    FsRef dst = fs_resolve(&s_fs, cwd, path);
+    FsRef dir;
+    char name[32];
+    if (fs_ref_valid(&s_fs, dst) && fs_node(&s_fs, dst)->is_dir) {
+        dir = dst;
+        tapes_trk_name(track, name, sizeof(name));
+        FsRef ex = fs_resolve(&s_fs, dir, name);
+        for (u32 digit = 0; digit < 10 && fs_ref_valid(&s_fs, ex); digit++) {
+            name[strlen(name) - 5] = (char)('0' + digit);
+            ex = fs_resolve(&s_fs, dir, name);
+        }
+        if (fs_ref_valid(&s_fs, ex)) {
+            tapes_status_set(term, "TOO MANY COPIES IN TARGET DIR");
+            return 0;
+        }
+    } else if (fs_ref_valid(&s_fs, dst)) {
+        tapes_status_set(term, "FILE EXISTS");
+        return 0;
+    } else {
+        char head[FS_PATH_MAX];
+        path_split(path, head, sizeof(head), name, sizeof(name));
+        if (head[0]) {
+            dir = fs_resolve(&s_fs, cwd, head);
+            if (!fs_ref_valid(&s_fs, dir) || !fs_node(&s_fs, dir)->is_dir) {
+                tapes_status_set(term, "PATH NOT FOUND");
+                return 0;
+            }
+        } else {
+            dir = cwd;
+        }
+        if (strlen(name) > FS_NAME_MAX || !fs_name_valid(name)) {
+            tapes_status_set(term, "BAD FILE NAME (8.3)");
+            return 0;
+        }
+    }
+    if (fs_free_bytes(&s_fs, dir.drive) < tapes_file_bytes(track)) {
+        tapes_status_set(term, "DISK FULL");
+        return 0;
+    }
+    term->tapes_dest_drive = dir.drive;
+    term->tapes_dest_node = dir.node;
+    snprintf(term->tapes_dest_name, sizeof(term->tapes_dest_name), "%s", name);
+    return 1;
+}
+
+static void tapes_progress_bar(Terminal* term, i32 row, f32 frac)
+{
+    i32 width = 46;
+    grid_text(term, row, 6, TC_DIM, "[");
+    i32 filled = (i32)(frac * (f32)width);
+    for (i32 i = 0; i < width; i++) {
+        term->glyphs[row][7 + i] = i < filled ? '#' : (i == filled ? '>' : '.');
+        term->colors[row][7 + i] = i < filled ? TC_GREEN : TC_DIM;
+    }
+    grid_text(term, row, 7 + width, TC_DIM, "]");
+    grid_text(term, row + 1, (TERM_COLS - 4) / 2, TC_BRIGHT, "%3.0f%%", (f64)(frac * 100.0f));
+}
+
+static void draw_tapes_write(Terminal* term)
+{
+    grid_clear(term);
+    grid_title(term, "TAPE ARCHIVE -- WRITING");
+    grid_text(term, 3, 4, TC_DIM, "SOURCE  %s", tapes_name(term->tapes_write_track));
+    grid_text(term, 4, 4, TC_DIM, "TARGET  DECK CASSETTE");
+    f32 frac = f_clamp01(term->tapes_write_t / TAPE_WRITE_TIME);
+    tapes_progress_bar(term, 9, frac);
+    if (fmodf(term->blink, 0.9f) < 0.55f) {
+        grid_text(term, 13, 4, TC_AMBER, "WRITE IN PROGRESS -- DO NOT EJECT");
+    }
+    grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "[Q] ABORT");
+}
+
+static void draw_tapes_dl(Terminal* term)
+{
+    grid_clear(term);
+    grid_title(term, "RELAY LINK -- TRACK TRANSFER");
+    char pathstr[FS_PATH_MAX];
+    FsRef dir = { term->tapes_dest_drive, term->tapes_dest_node };
+    fs_path_string(&s_fs, dir, pathstr, sizeof(pathstr));
+    u32 plen = (u32)strlen(pathstr);
+    grid_text(term, 3, 4, TC_DIM, "SOURCE  RELAY :: %s", tapes_name(term->tapes_dl_track));
+    grid_text(term, 4, 4, TC_DIM, "TARGET  %s%s%s", pathstr,
+              plen > 0 && pathstr[plen - 1] == '\\' ? "" : "\\", term->tapes_dest_name);
+    f32 frac = f_clamp01(term->tapes_dl_t / TAPE_DL_TIME);
+    u32 total = tapes_file_bytes(term->tapes_dl_track);
+    grid_text(term, 6, 4, TC_GREEN, "%7u / %7u BYTES", (u32)(frac * (f32)total), total);
+    i32 rate = 3200 + (i32)(fmodf(term->blink * 7.3f, 1.0f) * 900.0f);
+    grid_text(term, 6, 40, TC_DIM, "%d B/S", rate);
+    tapes_progress_bar(term, 9, frac);
+    if (fmodf(term->blink, 0.9f) < 0.55f) {
+        grid_text(term, 13, 4, TC_AMBER, "TRANSFER IN PROGRESS -- DO NOT DISCONNECT");
+    }
+    grid_text(term, TERM_ROWS - 1, 1, TC_DIM, "[Q] ABORT");
+}
+
+static void draw_tapes_list(Terminal* term)
+{
+    TapeEntry entries[TAPES_LIST_MAX];
+    i32 count = tapes_build_list(term, entries, TAPES_LIST_MAX);
+    term->tapes_count = count;
+    if (term->tapes_sel >= count) {
+        term->tapes_sel = count > 0 ? count - 1 : 0;
+    }
+    if (term->tapes_sel < 0) {
+        term->tapes_sel = 0;
+    }
+
+    grid_clear(term);
+    grid_title(term, "TAPE ARCHIVE");
+
+    if (!term->deck_docked) {
+        grid_text(term, 2, 2, TC_RED, "DECK: TERMINAL NOT DOCKED");
+    } else if (term->deck_tape < 0) {
+        grid_text(term, 2, 2, TC_DIM, "DECK: NO CASSETTE");
+    } else {
+        grid_text(term, 2, 2, TC_GREEN, "DECK: \"%s\" (%.0f%%)%s", tape_label(term->deck_tape),
+                  (f64)(term->deck_cond * 100.0f),
+                  term->deck_play ? "  << ROLLING >>" : "");
+    }
+    b32 relay = tapes_relay_linked(term);
+    grid_text(term, 3, 2, relay ? TC_BRIGHT : TC_DIM,
+              relay ? "RELAY ARCHIVE ONLINE" : "NO RELAY LINK -- DOWNLOADS OFFLINE");
+    b32 buslink = term->bus_state == 2 && !term->bus_tower;
+    grid_text(term, 3, 38, buslink ? TC_GREEN : TC_DIM,
+              buslink ? "VEHICLE BUS ONLINE" : "NO VEHICLE BUS -- NO WRITES");
+
+    if (count == 0) {
+        grid_text(term, 7, 4, TC_DIM, "NO TRACK FILES ON ANY MOUNTED DRIVE.");
+        grid_text(term, 8, 4, TC_DIM, "LINK A BREACHED RELAY NODE TO DOWNLOAD TRACKS.");
+    }
+    i32 first = term->tapes_sel - (TAPES_LIST_ROWS - 1);
+    if (first < 0) {
+        first = 0;
+    }
+    for (i32 i = first; i < count && i - first < TAPES_LIST_ROWS; i++) {
+        i32 row = 5 + (i - first);
+        b32 sel = i == term->tapes_sel;
+        if (sel) {
+            grid_text(term, row, 2, TC_BRIGHT, ">");
+        }
+        const TapeEntry* e = &entries[i];
+        if (e->archive) {
+            grid_text(term, row, 4, sel ? TC_BRIGHT : TC_AMBER, "RELAY  %-20s %4uK  DOWNLOAD",
+                      tapes_name(e->track), tapes_file_bytes(e->track) / 1024);
+        } else {
+            const FsNode* node = &s_fs.drives[e->drive].nodes[e->node];
+            grid_text(term, row, 4, sel ? TC_BRIGHT : TC_GREEN, "%c:     %-20s %4uK%s",
+                      'A' + e->drive, tapes_name(e->track), node->size / 1024,
+                      node->corrupted ? "  DAMAGED" : "");
+        }
+    }
+    if (term->tapes_prompt_track >= 0) {
+        grid_text(term, TERM_ROWS - 4, 2, TC_BRIGHT, "STORE \"%s\" AS:",
+                  tapes_name(term->tapes_prompt_track));
+        grid_text(term, TERM_ROWS - 3, 2, TC_GREEN, "%s", term->tapes_dest);
+        if (fmodf(term->blink, 1.06f) < 0.53f) {
+            i32 ccol = 2 + (i32)term->tapes_dest_cursor;
+            if (ccol > TERM_COLS - 1) {
+                ccol = TERM_COLS - 1;
+            }
+            term->glyphs[TERM_ROWS - 3][ccol] = 127;
+            term->colors[TERM_ROWS - 3][ccol] = TC_BRIGHT;
+        }
+        if (term->tapes_status[0] && term->mode_timer < term->tapes_status_until) {
+            grid_text(term, TERM_ROWS - 2, 2, TC_AMBER, "%s", term->tapes_status);
+        }
+        grid_text(term, TERM_ROWS - 1, 1, TC_DIM,
+                  "[ENTER] START TRANSFER   [ENTER] ON EMPTY LINE CANCELS");
+        return;
+    }
+    if (term->tapes_status[0] && term->mode_timer < term->tapes_status_until) {
+        grid_text(term, TERM_ROWS - 3, 2, TC_AMBER, "%s", term->tapes_status);
+    }
+    grid_text(term, TERM_ROWS - 1, 1, TC_DIM,
+              "[UP/DN] SELECT   [ENTER] WRITE TO CASSETTE / DOWNLOAD   [Q] EXIT");
+}
+
+static void tapes_enter(Terminal* term)
+{
+    TapeEntry entries[TAPES_LIST_MAX];
+    i32 count = tapes_build_list(term, entries, TAPES_LIST_MAX);
+    if (term->tapes_sel < 0 || term->tapes_sel >= count) {
+        return;
+    }
+    const TapeEntry* e = &entries[term->tapes_sel];
+    if (e->archive) {
+        char name[16];
+        tapes_trk_name(e->track, name, sizeof(name));
+        term->tapes_prompt_track = e->track;
+        snprintf(term->tapes_dest, sizeof(term->tapes_dest), "A:\\%s", name);
+        term->tapes_dest_len = (u32)strlen(term->tapes_dest);
+        term->tapes_dest_cursor = term->tapes_dest_len;
+        term->click_pending = 1;
+        return;
+    }
+    const FsNode* node = &s_fs.drives[e->drive].nodes[e->node];
+    if (node->corrupted) {
+        tapes_status_set(term, "TRACK DATA DAMAGED");
+        return;
+    }
+    if (!term->deck_docked) {
+        tapes_status_set(term, "TERMINAL NOT DOCKED IN VEHICLE");
+        return;
+    }
+    if (term->bus_tower) {
+        tapes_status_set(term, "BUS FEED IS RELAY NODE");
+        return;
+    }
+    if (term->bus_state != 2) {
+        tapes_status_set(term, term->bus_state == 1 ? "BUS PORT NOT INITIALIZED - RUN LINK"
+                                                    : "NO VEHICLE BUS CABLE");
+        return;
+    }
+    if (term->deck_tape < 0) {
+        tapes_status_set(term, "NO CASSETTE IN DECK");
+        return;
+    }
+    term->tapes_write_track = node->trk - 1;
+    term->tapes_write_t = 0.0f;
+    term->tapes_click_t = 0.0f;
+    term->click_pending = 1;
+}
+
+static void update_tapes(Terminal* term, f32 dt)
+{
+    if (term->tapes_write_track >= 0) {
+        if (term->bus_state != 2 || term->bus_tower) {
+            term->tapes_write_track = -1;
+            tapes_status_set(term, "WRITE FAILED -- BUS LINK LOST");
+        } else if (!term->deck_docked || term->deck_tape < 0) {
+            term->tapes_write_track = -1;
+            tapes_status_set(term, "WRITE FAILED -- DECK LOST");
+        } else {
+            term->tapes_write_t += dt;
+            term->tapes_click_t -= dt;
+            if (term->tapes_click_t <= 0.0f) {
+                term->tapes_click_t = 0.8f;
+                term->click_pending = 1;
+            }
+            if (term->tapes_write_t >= TAPE_WRITE_TIME) {
+                term->tape_write_request = 1;
+                term->tape_write_value = term->tapes_write_track;
+                term->tapes_write_track = -1;
+                tapes_status_set(term, "WRITE COMPLETE");
+            } else {
+                draw_tapes_write(term);
+                return;
+            }
+        }
+    }
+    if (term->tapes_dl_track >= 0) {
+        if (!tapes_relay_linked(term)) {
+            term->tapes_dl_track = -1;
+            tapes_status_set(term, "RELAY LINK LOST -- TRANSFER ABORTED");
+        } else {
+            term->tapes_dl_t += dt;
+            if (term->tapes_dl_t >= TAPE_DL_TIME) {
+                tapes_dl_finish(term);
+            } else {
+                draw_tapes_dl(term);
+                return;
+            }
+        }
+    }
+    draw_tapes_list(term);
+}
+
 static void shell_del(Terminal* term, const char* path)
 {
     FsRef ref;
@@ -1589,6 +1962,136 @@ static void shell_copy(Terminal* term, const char* srcp, const char* dstp)
     default:
         term_print(term, "COPY FAILED\n");
         break;
+    }
+}
+
+static void shell_move(Terminal* term, const char* srcp, const char* dstp)
+{
+    FsRef src;
+    if (!shell_check_path(term, srcp, &src)) {
+        return;
+    }
+    if (!fs_ref_valid(&s_fs, src)) {
+        term_print(term, "FILE NOT FOUND\n");
+        return;
+    }
+    if (fs_node(&s_fs, src)->is_dir) {
+        term_print(term, "CANNOT MOVE A DIRECTORY\n");
+        return;
+    }
+    FsRef dst;
+    if (!shell_check_path(term, dstp, &dst)) {
+        return;
+    }
+    FsRef dst_dir;
+    char dst_name[TERM_INPUT_MAX + 1];
+    if (fs_ref_valid(&s_fs, dst) && fs_node(&s_fs, dst)->is_dir) {
+        dst_dir = dst;
+        snprintf(dst_name, sizeof(dst_name), "%s", fs_node(&s_fs, src)->name);
+    } else {
+        char head[TERM_INPUT_MAX + 1];
+        path_split(dstp, head, sizeof(head), dst_name, sizeof(dst_name));
+        if (head[0]) {
+            if (!shell_check_path(term, head, &dst_dir)) {
+                return;
+            }
+            if (!fs_ref_valid(&s_fs, dst_dir) || !fs_node(&s_fs, dst_dir)->is_dir) {
+                term_print(term, "PATH NOT FOUND\n");
+                return;
+            }
+        } else {
+            dst_dir.drive = term->cwd_drive;
+            dst_dir.node = term->cwd_node;
+        }
+    }
+    FsError err = fs_move(&s_fs, src, dst_dir, dst_name);
+    switch (err) {
+    case FS_OK:
+        term_print(term, "        1 FILE(S) MOVED\n");
+        break;
+    case FS_ERR_NO_SPACE:
+        term_print(term, "INSUFFICIENT DISK SPACE\n        0 FILE(S) MOVED\n");
+        break;
+    case FS_ERR_SELF:
+        term_print(term, "FILE CANNOT BE MOVED ONTO ITSELF\n");
+        break;
+    case FS_ERR_BAD_NAME:
+        term_print(term, "BAD FILE NAME\n");
+        break;
+    case FS_ERR_IS_DIR:
+        term_print(term, "ACCESS DENIED\n");
+        break;
+    case FS_ERR_FULL:
+        term_print(term, "DIRECTORY FULL\n");
+        break;
+    default:
+        term_print(term, "MOVE FAILED\n");
+        break;
+    }
+}
+
+static void shell_mkdir(Terminal* term, const char* path)
+{
+    FsRef ref;
+    if (!shell_check_path(term, path, &ref)) {
+        return;
+    }
+    if (fs_ref_valid(&s_fs, ref)) {
+        term_print(term, fs_node(&s_fs, ref)->is_dir ? "DIRECTORY ALREADY EXISTS\n"
+                                                     : "A FILE BY THAT NAME EXISTS\n");
+        return;
+    }
+    char head[TERM_INPUT_MAX + 1];
+    char name[TERM_INPUT_MAX + 1];
+    path_split(path, head, sizeof(head), name, sizeof(name));
+    FsRef dir;
+    if (head[0]) {
+        if (!shell_check_path(term, head, &dir)) {
+            return;
+        }
+        if (!fs_ref_valid(&s_fs, dir) || !fs_node(&s_fs, dir)->is_dir) {
+            term_print(term, "PATH NOT FOUND\n");
+            return;
+        }
+    } else {
+        dir.drive = term->cwd_drive;
+        dir.node = term->cwd_node;
+    }
+    if (strlen(name) > FS_NAME_MAX || !fs_name_valid(name)) {
+        term_print(term, "BAD DIRECTORY NAME\n");
+        return;
+    }
+    FsRef made = fs_mkdir(&s_fs, dir, name);
+    if (!fs_ref_valid(&s_fs, made)) {
+        term_print(term, "CANNOT CREATE DIRECTORY\n");
+    }
+}
+
+static void shell_rmdir(Terminal* term, const char* path)
+{
+    FsRef ref;
+    if (!shell_check_path(term, path, &ref)) {
+        return;
+    }
+    if (!fs_ref_valid(&s_fs, ref)) {
+        term_print(term, "PATH NOT FOUND\n");
+        return;
+    }
+    if (!fs_node(&s_fs, ref)->is_dir) {
+        term_print(term, "NOT A DIRECTORY\n");
+        return;
+    }
+    if (ref.drive == term->cwd_drive && ref.node == term->cwd_node) {
+        term_print(term, "CANNOT REMOVE CURRENT DIRECTORY\n");
+        return;
+    }
+    FsError err = fs_rmdir(&s_fs, ref);
+    if (err == FS_ERR_FULL) {
+        term_print(term, "DIRECTORY NOT EMPTY\n");
+    } else if (err == FS_ERR_SELF) {
+        term_print(term, "CANNOT REMOVE ROOT DIRECTORY\n");
+    } else if (err != FS_OK) {
+        term_print(term, "RMDIR FAILED\n");
     }
 }
 
@@ -2033,6 +2536,15 @@ static void term_launch_exe(Terminal* term, const FsNode* node)
     case FS_EXE_GATE:
         term_print(term, "GATE ACTUATOR: NO BARRIER WIRED TO THIS NODE.\n");
         break;
+    case FS_EXE_TAPES:
+        term->mode = TERM_TAPES;
+        term->tapes_sel = 0;
+        term->tapes_write_track = -1;
+        term->tapes_dl_track = -1;
+        term->tapes_prompt_track = -1;
+        term->tapes_status[0] = 0;
+        term->tapes_status_until = 0.0f;
+        break;
     default:
         term_print(term, "PROGRAM DAMAGED. CANNOT EXECUTE.\n");
         break;
@@ -2112,6 +2624,9 @@ static void term_run_command(Terminal* term, const char* cmd)
                    "  TYPE FILE       display file contents\n"
                    "  VIEW FILE       display image file\n"
                    "  COPY SRC DST    copy file\n"
+                   "  MOVE SRC DST    move file\n"
+                   "  MKDIR PATH      create directory\n"
+                   "  RMDIR PATH      remove empty directory\n"
                    "  DEL FILE        delete file\n"
                    "  RUN FILE        run program (or just type its name)\n"
                    "  CHKDSK [X:]     disk space report\n"
@@ -2146,6 +2661,24 @@ static void term_run_command(Terminal* term, const char* cmd)
             term_print(term, "SYNTAX: DEL FILE\n");
         } else {
             shell_del(term, tok[1]);
+        }
+    } else if (cmd_is(tok[0], "MOVE") || cmd_is(tok[0], "MV")) {
+        if (ntok < 3) {
+            term_print(term, "SYNTAX: MOVE SRC DST\n");
+        } else {
+            shell_move(term, tok[1], tok[2]);
+        }
+    } else if (cmd_is(tok[0], "MKDIR") || cmd_is(tok[0], "MD")) {
+        if (ntok < 2) {
+            term_print(term, "SYNTAX: MKDIR PATH\n");
+        } else {
+            shell_mkdir(term, tok[1]);
+        }
+    } else if (cmd_is(tok[0], "RMDIR") || cmd_is(tok[0], "RD")) {
+        if (ntok < 2) {
+            term_print(term, "SYNTAX: RMDIR PATH\n");
+        } else {
+            shell_rmdir(term, tok[1]);
         }
     } else if (cmd_is(tok[0], "CHKDSK")) {
         shell_chkdsk(term, ntok > 1 ? tok[1] : "");
@@ -2214,6 +2747,18 @@ void terminal_key_char(Terminal* term, char c)
         }
         return;
     }
+    if (term->mode == TERM_TAPES) {
+        if (term->tapes_prompt_track >= 0
+            && term->tapes_dest_len + 1 < sizeof(term->tapes_dest)) {
+            memmove(&term->tapes_dest[term->tapes_dest_cursor + 1],
+                    &term->tapes_dest[term->tapes_dest_cursor],
+                    term->tapes_dest_len - term->tapes_dest_cursor + 1);
+            term->tapes_dest[term->tapes_dest_cursor++] = c;
+            term->tapes_dest_len++;
+            term->click_pending = 1;
+        }
+        return;
+    }
     if (term->mode != TERM_SHELL) {
         return;
     }
@@ -2268,6 +2813,82 @@ void terminal_key_special(Terminal* term, i32 key)
             term->map_downloading = 0;
             term->mode = TERM_SHELL;
             term_print(term, "TRANSFER ABORTED.\n");
+        }
+        return;
+    }
+    if (term->mode == TERM_TAPES) {
+        if (term->tapes_prompt_track >= 0) {
+            if (key == KEY_BACKSPACE) {
+                if (term->tapes_dest_cursor > 0) {
+                    memmove(&term->tapes_dest[term->tapes_dest_cursor - 1],
+                            &term->tapes_dest[term->tapes_dest_cursor],
+                            term->tapes_dest_len - term->tapes_dest_cursor + 1);
+                    term->tapes_dest_cursor--;
+                    term->tapes_dest_len--;
+                    term->click_pending = 1;
+                }
+            } else if (key == KEY_DELETE) {
+                if (term->tapes_dest_cursor < term->tapes_dest_len) {
+                    memmove(&term->tapes_dest[term->tapes_dest_cursor],
+                            &term->tapes_dest[term->tapes_dest_cursor + 1],
+                            term->tapes_dest_len - term->tapes_dest_cursor);
+                    term->tapes_dest_len--;
+                    term->click_pending = 1;
+                }
+            } else if (key == KEY_LEFT) {
+                if (term->tapes_dest_cursor > 0) {
+                    term->tapes_dest_cursor--;
+                }
+            } else if (key == KEY_RIGHT) {
+                if (term->tapes_dest_cursor < term->tapes_dest_len) {
+                    term->tapes_dest_cursor++;
+                }
+            } else if (key == KEY_HOME) {
+                term->tapes_dest_cursor = 0;
+            } else if (key == KEY_END) {
+                term->tapes_dest_cursor = term->tapes_dest_len;
+            } else if (key == KEY_ENTER) {
+                if (term->tapes_dest_len == 0) {
+                    term->tapes_prompt_track = -1;
+                } else if (!tapes_relay_linked(term)) {
+                    tapes_status_set(term, "RELAY LINK LOST");
+                    term->tapes_prompt_track = -1;
+                } else if (tapes_resolve_dest(term, term->tapes_prompt_track)) {
+                    term->tapes_dl_track = term->tapes_prompt_track;
+                    term->tapes_prompt_track = -1;
+                    term->tapes_dl_t = 0.0f;
+                    term->click_pending = 1;
+                }
+            }
+            return;
+        }
+        if (term->tapes_dl_track >= 0 || term->tapes_write_track >= 0) {
+            if (key == KEY_Q || key == KEY_ESCAPE) {
+                if (term->tapes_dl_track >= 0) {
+                    term->tapes_dl_track = -1;
+                    tapes_status_set(term, "TRANSFER ABORTED");
+                }
+                if (term->tapes_write_track >= 0) {
+                    term->tapes_write_track = -1;
+                    tapes_status_set(term, "WRITE ABORTED");
+                }
+            }
+            return;
+        }
+        if (key == KEY_UP) {
+            if (term->tapes_sel > 0) {
+                term->tapes_sel--;
+                term->click_pending = 1;
+            }
+        } else if (key == KEY_DOWN) {
+            if (term->tapes_sel + 1 < term->tapes_count) {
+                term->tapes_sel++;
+                term->click_pending = 1;
+            }
+        } else if (key == KEY_ENTER) {
+            tapes_enter(term);
+        } else if (key == KEY_Q || key == KEY_ESCAPE) {
+            term->mode = TERM_SHELL;
         }
         return;
     }
@@ -2332,6 +2953,9 @@ void terminal_power(Terminal* term, b32 on)
     term->powered = on;
     term->history_pos = -1;
     term->format_drive = -1;
+    term->tapes_write_track = -1;
+    term->tapes_dl_track = -1;
+    term->tapes_prompt_track = -1;
     term->map_zoom = 1.0f;
     if (on) {
         term->mode = TERM_BOOT;
@@ -3473,6 +4097,10 @@ void terminal_update(Terminal* term, const TermView* view, f32 dt)
     term->bus_tower = view->bus_tower;
     term->tower_breached = view->tower_breached;
     term->tower_pos = view->tower_pos;
+    term->deck_docked = view->sys->parts[PART_COMPUTER].installed;
+    term->deck_tape = view->sys->tape_inserted;
+    term->deck_cond = view->sys->tape_cond;
+    term->deck_play = view->sys->deck_play;
     terminal_camera_mount(term, view->coax_state == 2 && view->coax_camera);
     terminal_tower_mount(term, view->bus_state == 2 && view->bus_tower && view->tower_breached);
     if (!(view->bus_tower && view->tower_breached)) {
@@ -3546,6 +4174,9 @@ void terminal_update(Terminal* term, const TermView* view, f32 dt)
         break;
     case TERM_BREACH:
         draw_breach(term, dt);
+        break;
+    case TERM_TAPES:
+        update_tapes(term, dt);
         break;
     }
 

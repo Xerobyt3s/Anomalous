@@ -46,6 +46,8 @@ typedef enum InteractAction {
     ACTION_CABLE_UNPLUG,
     ACTION_DISK_INSERT,
     ACTION_DISK_EJECT,
+    ACTION_TAPE_INSERT,
+    ACTION_TAPE_EJECT,
 } InteractAction;
 
 typedef struct Interact {
@@ -63,6 +65,7 @@ typedef struct Interact {
     f32 hold_progress;
     b32 action_is_hold;
     b32 crank_latch;
+    b32 press_latch;
     b32 use_terminal_request;
     i32 target_cable;
     i32 cable_drag;

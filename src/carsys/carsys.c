@@ -24,6 +24,7 @@ void carsys_init(CarSys* sys)
     sys->handbrake_latched = 1;
     sys->lever_anim = 1.0f;
     sys->floppy_disk = -1;
+    sys->tape_inserted = -1;
 }
 
 b32 carsys_cargo_add(CarSys* sys, Item item, Vec3 pos)
@@ -256,7 +257,10 @@ void carsys_tick(CarSys* sys, struct Vehicle* veh, struct PhysWorld* world, f32 
                 || (sys->key_inserted && sys->crank_request && !sys->engine_on);
 
     electrics_tick(&sys->elec, sys->parts, rpm, idle_rpm, sys->engine_on, cranking,
-                   sys->headlight_switch, dt);
+                   sys->headlight_switch, sys->deck_play, dt);
+    if (sys->deck_play && !sys->elec.powered[CONSUMER_DECK]) {
+        sys->deck_play = 0;
+    }
 
     if (cranking) {
         if (!sys->elec.powered[CONSUMER_STARTER] || !carsys_can_run(sys)) {
