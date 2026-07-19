@@ -8,6 +8,7 @@
 
 #define TERRAIN_CHUNK_QUADS 64
 #define TERRAIN_MAX_CHUNKS 256
+#define SCRUB_GRID 64
 
 typedef struct TerrainVertex {
     Vec3 pos;
@@ -24,6 +25,8 @@ static u32 s_vao;
 static u32 s_vbo;
 static u32 s_ebo;
 static u32 s_mask_texture;
+static u32 s_height_texture;
+static u32 s_scrub_vao;
 static u32 s_tex_grass;
 static u32 s_tex_rock;
 static u32 s_tex_road;
@@ -136,6 +139,23 @@ b32 terrain_render_init(const struct Heightfield* hf, const u8* roadmask, u32 ma
                         GL_RED, GL_UNSIGNED_BYTE, roadmask);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
+    f32* heights = arena_push_array(&g_frame_arena, f32, vertex_count);
+    for (u32 iz = 0; iz < sz; iz++) {
+        for (u32 ix = 0; ix < sx; ix++) {
+            heights[(u64)iz * sx + ix] = heightfield_height_at(hf, ix, iz);
+        }
+    }
+    glCreateTextures(GL_TEXTURE_2D, 1, &s_height_texture);
+    glTextureStorage2D(s_height_texture, 1, GL_R32F, (GLsizei)sx, (GLsizei)sz);
+    glTextureParameteri(s_height_texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTextureParameteri(s_height_texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTextureParameteri(s_height_texture, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(s_height_texture, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTextureSubImage2D(s_height_texture, 0, 0, 0, (GLsizei)sx, (GLsizei)sz,
+                        GL_RED, GL_FLOAT, heights);
+
+    glCreateVertexArrays(1, &s_scrub_vao);
+
     s_tex_grass = asset_texture_slot("grass");
     s_tex_rock = asset_texture_slot("rock");
     s_tex_road = asset_texture_slot("road");
@@ -195,15 +215,40 @@ void terrain_render_draw(void)
     glUseProgram(0);
 }
 
+void terrain_render_draw_scrub(Vec3 cam_pos, f32 time)
+{
+    if (!s_ready || r_shadow_pass_active()) {
+        return;
+    }
+    u32 program = r_shader("scrub");
+    if (!program) {
+        return;
+    }
+    glProgramUniform4f(program, 1, cam_pos.x, cam_pos.z, time, 36.0f);
+    glProgramUniform4f(program, 2, s_terrain_params.x, s_terrain_params.y,
+                       s_terrain_params.z, s_terrain_params.w);
+    glUseProgram(program);
+    glBindVertexArray(s_scrub_vao);
+    glBindTextureUnit(0, asset_texture_gl(s_tex_grass));
+    glBindTextureUnit(3, s_mask_texture);
+    glBindTextureUnit(4, s_height_texture);
+    glDisable(GL_CULL_FACE);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 12, SCRUB_GRID * SCRUB_GRID);
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
 void terrain_render_shutdown(void)
 {
     if (!s_ready) {
         return;
     }
     glDeleteVertexArrays(1, &s_vao);
+    glDeleteVertexArrays(1, &s_scrub_vao);
     glDeleteBuffers(1, &s_vbo);
     glDeleteBuffers(1, &s_ebo);
     glDeleteTextures(1, &s_mask_texture);
+    glDeleteTextures(1, &s_height_texture);
     s_ready = 0;
 }
 

@@ -244,6 +244,9 @@ void vehicle_tick(Vehicle* v, struct PhysWorld* world, f32 dt)
     f32 wheel_inertia = f_max(0.5f * cfg->wheel_mass * cfg->wheels[0].radius * cfg->wheels[0].radius, 0.05f);
     f32 total_load = 0.0f;
 
+    f32 compression_vel[VEHICLE_WHEEL_COUNT];
+    Vec3 attach_ws[VEHICLE_WHEEL_COUNT];
+
     for (u32 i = 0; i < VEHICLE_WHEEL_COUNT; i++) {
         Wheel* w = &v->wheels[i];
         const WheelConfig* wc = &cfg->wheels[i];
@@ -251,8 +254,10 @@ void vehicle_tick(Vehicle* v, struct PhysWorld* world, f32 dt)
         w->force_susp = vec3_zero();
         w->force_long = vec3_zero();
         w->force_lat = vec3_zero();
+        compression_vel[i] = 0.0f;
 
         Vec3 attach_w = vec3_add(body->pos, mat3_mul_vec3(rot, w->attach_local));
+        attach_ws[i] = attach_w;
         f32 r_eff = w->radius * v->effects.tire_radius_mul[i];
         f32 ray_len = wc->travel + r_eff;
         Ray ray;
@@ -277,35 +282,78 @@ void vehicle_tick(Vehicle* v, struct PhysWorld* world, f32 dt)
         w->contact_point = hit.point;
         w->contact_normal = hit.normal;
         f32 compression = f_clamp(ray_len - hit.t, 0.0f, wc->travel);
-        f32 compression_vel = f_clamp((compression - prev_compression) / dt,
-                                      -VEHICLE_DAMPER_VEL_CLAMP, VEHICLE_DAMPER_VEL_CLAMP);
+        compression_vel[i] = f_clamp((compression - prev_compression) / dt,
+                                     -VEHICLE_DAMPER_VEL_CLAMP, VEHICLE_DAMPER_VEL_CLAMP);
         w->compression = compression;
-        f32 susp_force = f_max(wc->spring_k * compression + wc->damper_c * compression_vel, 0.0f);
+    }
+
+    f32 arb_force[VEHICLE_WHEEL_COUNT] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    if (v->wheels[WHEEL_FL].grounded && v->wheels[WHEEL_FR].grounded) {
+        f32 d = v->wheels[WHEEL_FL].compression - v->wheels[WHEEL_FR].compression;
+        arb_force[WHEEL_FL] = cfg->arb_front * d;
+        arb_force[WHEEL_FR] = -cfg->arb_front * d;
+    }
+    if (v->wheels[WHEEL_RL].grounded && v->wheels[WHEEL_RR].grounded) {
+        f32 d = v->wheels[WHEEL_RL].compression - v->wheels[WHEEL_RR].compression;
+        arb_force[WHEEL_RL] = cfg->arb_rear * d;
+        arb_force[WHEEL_RR] = -cfg->arb_rear * d;
+    }
+
+    f32 nominal_load = cfg->mass * VEHICLE_GRAVITY * 0.25f;
+    f32 rebound_mul = f_max(cfg->damper_rebound_mul, 0.1f);
+
+    for (u32 i = 0; i < VEHICLE_WHEEL_COUNT; i++) {
+        Wheel* w = &v->wheels[i];
+        const WheelConfig* wc = &cfg->wheels[i];
+        if (!w->grounded) {
+            continue;
+        }
+        Vec3 attach_w = attach_ws[i];
+        f32 r_eff = w->radius * v->effects.tire_radius_mul[i];
+
+        f32 damper_c = wc->damper_c * (compression_vel[i] < 0.0f ? rebound_mul : 1.0f);
+        f32 susp_force = f_max(wc->spring_k * w->compression + damper_c * compression_vel[i]
+                               + arb_force[i], 0.0f);
         w->load = susp_force;
         total_load += susp_force;
-        Vec3 force_susp = vec3_scale(hit.normal, susp_force);
+        Vec3 force_susp = vec3_scale(w->contact_normal, susp_force);
         body_apply_force_at_point(body, force_susp, attach_w);
         w->force_susp = force_susp;
 
         Vec3 fwd_local = v3(sinf(w->steer_rad), 0.0f, -cosf(w->steer_rad));
         Vec3 fwd_w = mat3_mul_vec3(rot, fwd_local);
-        Vec3 n = hit.normal;
+        Vec3 n = w->contact_normal;
         Vec3 long_dir = vec3_normalize(vec3_sub(fwd_w, vec3_scale(n, vec3_dot(fwd_w, n))));
         Vec3 lat_dir = vec3_cross(n, long_dir);
 
-        Vec3 v_patch = body_velocity_at_point(body, hit.point);
+        Vec3 v_patch = body_velocity_at_point(body, w->contact_point);
         f32 v_long = vec3_dot(v_patch, long_dir);
         f32 v_lat = vec3_dot(v_patch, lat_dir);
         f32 v_wheel = w->omega * r_eff;
         f32 slip_vel = v_wheel - v_long;
-        w->slip_ratio = slip_vel / f_max(f_abs(v_long), VEHICLE_SLIP_DENOM_MIN);
-        w->slip_angle = atan2f(v_lat, f_max(f_abs(v_long), VEHICLE_SLIP_ANGLE_DENOM_MIN));
+        f32 target_ratio = slip_vel / f_max(f_abs(v_long), VEHICLE_SLIP_DENOM_MIN);
+        f32 target_angle = atan2f(v_lat, f_max(f_abs(v_long), VEHICLE_SLIP_ANGLE_DENOM_MIN));
+        f32 relax_speed = f_max(f_abs(v_long), 1.5f);
+        if (cfg->tire_relax_long > 0.001f) {
+            f32 a = f_min(dt * relax_speed / cfg->tire_relax_long, 1.0f);
+            w->slip_ratio += (target_ratio - w->slip_ratio) * a;
+        } else {
+            w->slip_ratio = target_ratio;
+        }
+        if (cfg->tire_relax_lat > 0.001f) {
+            f32 a = f_min(dt * relax_speed / cfg->tire_relax_lat, 1.0f);
+            w->slip_angle += (target_angle - w->slip_angle) * a;
+        } else {
+            w->slip_angle = target_angle;
+        }
         w->slide_long = slip_vel;
         w->slide_lat = v_lat;
         f32 patch_speed = sqrtf(v_long * v_long + v_lat * v_lat);
 
         f32 tire_load = f_min(susp_force, tire_load_clamp);
-        f32 grip_mul = v->effects.tire_grip_mul[i];
+        f32 load_sens = f_clamp(1.0f - cfg->tire_load_sens * (tire_load / nominal_load - 1.0f),
+                                0.55f, 1.25f);
+        f32 grip_mul = v->effects.tire_grip_mul[i] * load_sens;
         f32 lat_grip_mul = (v->input.handbrake && !wc->steered) ? cfg->handbrake_grip_mul : 1.0f;
         f32 limit = tp.peak_mu * tire_load * grip_mul;
         TireForces tf = tire_compute(&tp, w->slip_ratio, w->slip_angle, tire_load, grip_mul, lat_grip_mul);
@@ -328,14 +376,14 @@ void vehicle_tick(Vehicle* v, struct PhysWorld* world, f32 dt)
             if (locked) {
                 if (!w->stick_active) {
                     w->stick_active = 1;
-                    w->stick_pos = hit.point;
+                    w->stick_pos = w->contact_point;
                 }
-                Vec3 error = vec3_sub(hit.point, w->stick_pos);
+                Vec3 error = vec3_sub(w->contact_point, w->stick_pos);
                 error = vec3_sub(error, vec3_scale(n, vec3_dot(error, n)));
                 f32 fx_spring = -vec3_dot(error, long_dir) * VEHICLE_STICK_STIFFNESS;
                 fx_low = f_clamp(fx_low + fx_spring, -limit, limit);
                 if (f_abs(fx_low) >= limit * 0.999f) {
-                    w->stick_pos = vec3_lerp(w->stick_pos, hit.point, 0.05f);
+                    w->stick_pos = vec3_lerp(w->stick_pos, w->contact_point, 0.05f);
                 }
             } else {
                 w->stick_active = 0;
@@ -351,7 +399,7 @@ void vehicle_tick(Vehicle* v, struct PhysWorld* world, f32 dt)
         if (tire_mag > limit && tire_mag > 1e-6f) {
             force_tire = vec3_scale(force_tire, limit / tire_mag);
         }
-        body_apply_force_at_point(body, force_tire, hit.point);
+        body_apply_force_at_point(body, force_tire, w->contact_point);
         f32 fx_applied = vec3_dot(force_tire, long_dir);
         w->force_long = vec3_scale(long_dir, fx_applied);
         w->force_lat = vec3_scale(lat_dir, vec3_dot(force_tire, lat_dir));

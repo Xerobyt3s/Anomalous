@@ -63,6 +63,13 @@ b32 vehicle_config_load(VehicleConfig* out, const char* path)
     out->tire_peak_mu = config_get_f32(&cfg, "tire.peak_mu", 1.05f);
     out->tire_slide_mu = config_get_f32(&cfg, "tire.slide_mu", 0.8f);
     out->tire_low_speed = config_get_f32(&cfg, "tire.low_speed", 0.6f);
+    out->tire_load_sens = config_get_f32(&cfg, "tire.load_sensitivity", 0.0f);
+    out->tire_relax_long = config_get_f32(&cfg, "tire.relax_long", 0.0f);
+    out->tire_relax_lat = config_get_f32(&cfg, "tire.relax_lat", 0.0f);
+
+    out->arb_front = config_get_f32(&cfg, "suspension.arb_front", 0.0f);
+    out->arb_rear = config_get_f32(&cfg, "suspension.arb_rear", 0.0f);
+    out->damper_rebound_mul = config_get_f32(&cfg, "suspension.rebound_mul", 1.0f);
 
     f32 curve[VEHICLE_MAX_TORQUE_POINTS * 2];
     u32 pair_values = config_get_f32_list(&cfg, "engine.torque_curve", curve, VEHICLE_MAX_TORQUE_POINTS * 2);

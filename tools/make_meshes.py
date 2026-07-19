@@ -1058,21 +1058,36 @@ def make_relay_tower():
 
 def make_excel_wheel():
     b = MeshBuilder()
-    sides = 14
+    sides = 18
     tire_r = 0.28
-    rim_r = 0.175
+    lip_r = 0.19
+    dish_r = 0.185
+    hub_r = 0.058
     half_w = 0.09
+    dish_x = 0.052
 
     b.begin_material("tire")
     tube_x(b, -half_w, half_w, tire_r, sides)
-    ring_x(b, -half_w, rim_r, tire_r, sides, -1.0)
-    ring_x(b, half_w, rim_r, tire_r, sides, 1.0)
-
-    b.begin_material("alloy")
-    disc_x(b, -half_w + 0.012, rim_r + 0.012, sides, -1.0)
+    ring_x(b, -half_w, lip_r, tire_r, sides, -1.0)
+    ring_x(b, half_w, lip_r, tire_r, sides, 1.0)
 
     b.begin_material("car_trim")
-    disc_x(b, half_w - 0.012, rim_r + 0.012, sides, 1.0)
+    for sign in (-1.0, 1.0):
+        face_x = sign * half_w
+        rx = sign * dish_x
+        ring_x(b, face_x, lip_r - 0.018, lip_r, sides, sign)
+        tube_x(b, min(rx, face_x), max(rx, face_x), dish_r, sides)
+        ring_x(b, rx, hub_r, dish_r, sides, sign)
+
+    b.begin_material("alloy")
+    for sign in (-1.0, 1.0):
+        cap_x = sign * (dish_x + 0.010)
+        tube_x(b, min(sign * dish_x, cap_x), max(sign * dish_x, cap_x), hub_r, sides)
+        disc_x(b, cap_x, hub_r, sides, sign)
+        for i in range(5):
+            ang = i / 5.0 * 2.0 * math.pi + 0.3
+            b.box((sign * (dish_x + 0.006), math.cos(ang) * 0.105, math.sin(ang) * 0.105),
+                  (0.009, 0.011, 0.011))
 
     make_double_sided(b)
     b.write(os.path.join(MESH_DIR, "excel_wheel.amsh"))

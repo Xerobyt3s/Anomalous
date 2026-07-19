@@ -21,6 +21,8 @@ layout(std140, binding = 0) uniform CameraBlock {
     vec4 u_shadow_params;
     vec4 u_point_pos_radius[4];
     vec4 u_point_color[4];
+    vec4 u_sky_ambient;
+    vec4 u_ground_ambient;
 };
 
 out vec4 o_color;
@@ -32,16 +34,48 @@ float hash13(vec3 p)
     return fract((p.x + p.y) * p.z);
 }
 
+float hash12(vec2 p)
+{
+    vec3 p3 = fract(vec3(p.xyx) * 443.8975);
+    p3 += dot(p3, p3.yzx + 19.19);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float vnoise(vec2 p)
+{
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash12(i);
+    float b = hash12(i + vec2(1.0, 0.0));
+    float c = hash12(i + vec2(0.0, 1.0));
+    float d = hash12(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+float fbm(vec2 p)
+{
+    float v = 0.0;
+    float amp = 0.5;
+    for (int i = 0; i < 5; i++) {
+        v += amp * vnoise(p);
+        p = p * 2.03 + vec2(17.3, 9.1);
+        amp *= 0.5;
+    }
+    return v;
+}
+
 void main()
 {
     vec3 ray = normalize(u_cam_fwd.xyz + v_ndc.x * u_cam_right.xyz + v_ndc.y * u_cam_up.xyz);
     vec3 to_sun = -u_sun_dir.xyz;
+    float time = u_cam_fwd.w;
 
     float day = smoothstep(0.10, 0.33, u_sun_color_ambient.w);
     float dusk = clamp(1.0 - abs(to_sun.y) * 4.0, 0.0, 1.0) * day;
 
     vec3 horizon = u_fog_color_density.rgb;
-    vec3 zenith = mix(vec3(0.020, 0.030, 0.058), vec3(0.24, 0.42, 0.66), day);
+    vec3 zenith = mix(vec3(0.016, 0.024, 0.048), vec3(0.14, 0.24, 0.37), day);
 
     float h = clamp(ray.y, 0.0, 1.0);
     vec3 sky = mix(horizon, zenith, pow(h, 0.55));
@@ -51,8 +85,8 @@ void main()
 
     float overcast = u_shadow_params.w;
     float sky_luma = dot(sky, vec3(0.30, 0.55, 0.15));
-    vec3 cloud = mix(vec3(sky_luma), sky, 0.35) * mix(1.0, 0.55, overcast * day);
-    sky = mix(sky, cloud, overcast);
+    vec3 haze = mix(vec3(sky_luma), sky, 0.35) * mix(1.0, 0.55, overcast * day);
+    sky = mix(sky, haze, overcast);
 
     float s = dot(ray, to_sun);
     float clear_sky = 1.0 - overcast;
@@ -68,9 +102,25 @@ void main()
         vec3 cell = floor(ray * 340.0);
         float star = hash13(cell);
         float bright = smoothstep(0.9976, 0.9995, star);
-        float twinkle = 0.72 + 0.28 * sin(u_cam_fwd.w * 2.3 + star * 41.0);
+        float twinkle = 0.72 + 0.28 * sin(time * 2.3 + star * 41.0);
         sky += vec3(0.85, 0.9, 1.0) * bright * twinkle * night
              * clamp(ray.y * 3.0, 0.0, 1.0) * (1.0 - overcast);
+    }
+
+    if (ray.y > 0.015) {
+        vec2 cp = u_cam_pos.xz * 0.0035 + ray.xz / max(ray.y, 0.06) * 1.35;
+        cp += vec2(time * 0.0110, time * 0.0042);
+        float dcloud = fbm(cp * 0.5);
+        float cover = mix(0.62, 0.30, overcast);
+        float shape = smoothstep(cover, cover + 0.26, dcloud);
+        float fade = smoothstep(0.015, 0.14, ray.y);
+        float dense = smoothstep(cover + 0.10, cover + 0.42, dcloud);
+        vec3 bright_c = mix(vec3(0.74, 0.76, 0.80), vec3(0.48, 0.50, 0.54), overcast);
+        vec3 dark_c = mix(vec3(0.44, 0.46, 0.52), vec3(0.26, 0.28, 0.32), overcast);
+        vec3 ccol = mix(bright_c, dark_c, dense);
+        ccol *= 0.06 + 0.94 * day;
+        ccol += sun_c * pow(max(s, 0.0), 3.0) * (0.18 + 0.55 * dusk) * (1.0 - dense * 0.7);
+        sky = mix(sky, ccol, shape * fade * (0.55 + 0.40 * overcast));
     }
 
     o_color = vec4(sky, 1.0);

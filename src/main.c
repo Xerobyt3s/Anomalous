@@ -400,14 +400,14 @@ static void update_environment(f32 frame_dt)
     f32 day = f_clamp01(elevation * 4.0f + 0.08f);
     f32 dusk = f_clamp01(1.0f - f_abs(elevation) * 4.0f);
 
-    Vec3 sun_color = vec3_lerp(v3(1.0f, 0.52f, 0.28f), v3(1.0f, 0.96f, 0.88f),
+    Vec3 sun_color = vec3_lerp(v3(0.95f, 0.46f, 0.24f), v3(0.98f, 0.92f, 0.82f),
                                f_clamp01(elevation * 2.6f));
     sun_color = vec3_scale(sun_color, day);
     f32 moon = f_clamp01(-elevation * 4.0f - 0.08f);
-    f32 ambient = 0.10f + 0.28f * day;
+    f32 ambient = 0.075f + 0.215f * day;
 
-    Vec3 fog = vec3_lerp(v3(0.065f, 0.085f, 0.13f), v3(0.62f, 0.68f, 0.76f), day);
-    fog = vec3_lerp(fog, v3(0.72f, 0.45f, 0.32f), dusk * 0.55f);
+    Vec3 fog = vec3_lerp(v3(0.050f, 0.065f, 0.10f), v3(0.42f, 0.47f, 0.51f), day);
+    fog = vec3_lerp(fog, v3(0.55f, 0.35f, 0.25f), dusk * 0.55f);
     f32 fog_density = 0.0028f + 0.0009f * (1.0f - day);
 
     Vec3 light_dir = vec3_scale(to_sun, -1.0f);
@@ -1461,6 +1461,7 @@ static void game_render(f32 alpha, const GameInput* input)
     }
 
     terrain_render_draw();
+    terrain_render_draw_scrub(s_camera.pos, (f32)fmod(platform_time_now(), 1000.0));
     world_render(&s_world);
     if (!s_carsys.parts[PART_COMPUTER].installed) {
         Entity* loose = find_loose_computer();

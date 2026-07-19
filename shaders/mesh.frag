@@ -22,6 +22,8 @@ layout(std140, binding = 0) uniform CameraBlock {
     vec4 u_shadow_params;
     vec4 u_point_pos_radius[4];
     vec4 u_point_color[4];
+    vec4 u_sky_ambient;
+    vec4 u_ground_ambient;
 };
 
 out vec4 o_color;
@@ -60,7 +62,6 @@ vec3 spot_light(vec3 world, vec3 n, vec3 albedo, vec4 pos_cone, vec4 dir_intensi
     return albedo * vec3(1.0, 0.93, 0.74) * (cone * atten * ndl);
 }
 
-
 vec3 point_light(vec3 world, vec3 n, vec3 albedo, vec4 pos_radius, vec4 color)
 {
     if (pos_radius.w <= 0.0) {
@@ -73,19 +74,40 @@ vec3 point_light(vec3 world, vec3 n, vec3 albedo, vec4 pos_radius, vec4 color)
     return albedo * color.rgb * (x * x * wrap);
 }
 
+vec3 apply_fog(vec3 lit, vec3 world)
+{
+    vec3 to_frag = world - u_cam_pos.xyz;
+    float dist = length(to_frag);
+    float height_falloff = exp(-max(world.y - 6.0, 0.0) * 0.035);
+    float density = u_fog_color_density.w * mix(0.55, 1.0, height_falloff);
+    float fog_amount = 1.0 - exp(-pow(dist * density, 2.0));
+    vec3 vdir = to_frag / max(dist, 1e-4);
+    float sun_glow = pow(max(dot(vdir, -u_sun_dir.xyz), 0.0), 9.0);
+    vec3 fog_c = u_fog_color_density.rgb
+               + u_sun_color_ambient.rgb * sun_glow * 0.45 * (1.0 - u_shadow_params.w);
+    return mix(lit, fog_c, fog_amount);
+}
+
 void main()
 {
     vec3 n = normalize(v_normal);
     vec3 albedo = texture(u_albedo, v_uv).rgb;
-    float ndl = max(dot(n, -u_sun_dir.xyz), 0.0);
-    vec3 lit = albedo * (u_sun_color_ambient.rgb * ndl * shadow_factor(v_world, ndl)
-                         + vec3(u_sun_color_ambient.w));
+    vec3 view = normalize(u_cam_pos.xyz - v_world);
+    vec3 to_sun = -u_sun_dir.xyz;
+    float ndl = max(dot(n, to_sun), 0.0);
+    float shadow = shadow_factor(v_world, ndl);
+    vec3 hemi = mix(u_ground_ambient.rgb, u_sky_ambient.rgb, n.y * 0.5 + 0.5);
+    vec3 lit = albedo * (u_sun_color_ambient.rgb * ndl * shadow + hemi);
+    vec3 hlf = normalize(view + to_sun);
+    float fresnel = pow(1.0 - clamp(dot(n, view), 0.0, 1.0), 5.0);
+    float spec = pow(max(dot(n, hlf), 0.0), 48.0);
+    lit += u_sun_color_ambient.rgb * spec * (0.20 + 0.55 * fresnel)
+         * smoothstep(0.0, 0.12, ndl) * shadow;
+    lit += u_sky_ambient.rgb * fresnel * 0.30;
     lit += spot_light(v_world, n, albedo, u_spot_pos_cone[0], u_spot_dir_intensity[0]);
     lit += spot_light(v_world, n, albedo, u_spot_pos_cone[1], u_spot_dir_intensity[1]);
     for (int i = 0; i < 4; i++) {
         lit += point_light(v_world, n, albedo, u_point_pos_radius[i], u_point_color[i]);
     }
-    float dist = length(v_world - u_cam_pos.xyz);
-    float fog_amount = 1.0 - exp(-pow(dist * u_fog_color_density.w, 2.0));
-    o_color = vec4(mix(lit, u_fog_color_density.rgb, fog_amount), 1.0);
+    o_color = vec4(apply_fog(lit, v_world), 1.0);
 }

@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define MAX_SHADERS 16
+#define MAX_SHADERS 32
 #define SHADER_PATH_MAX 128
 #define HOT_RELOAD_INTERVAL 1.0
 
@@ -39,6 +39,8 @@ typedef struct CameraUbo {
     Vec4 shadow_params;
     Vec4 point_pos_radius[4];
     Vec4 point_color[4];
+    Vec4 sky_ambient;
+    Vec4 ground_ambient;
 } CameraUbo;
 
 static ShaderEntry s_shaders[MAX_SHADERS];
@@ -78,6 +80,13 @@ static i32 s_scene_h;
 static b32 s_scene_broken;
 
 #define SHADOW_SIZE 2048
+#define BLOOM_MIPS 6
+
+static u32 s_bloom_fbo;
+static u32 s_bloom_tex;
+static i32 s_bloom_w[BLOOM_MIPS];
+static i32 s_bloom_h[BLOOM_MIPS];
+static i32 s_bloom_count;
 
 static u32 s_shadow_fbo;
 static u32 s_shadow_tex;
@@ -251,6 +260,12 @@ void r_shutdown(void)
             glDeleteProgram(s_shaders[i].program);
         }
     }
+    if (s_bloom_tex) {
+        glDeleteTextures(1, &s_bloom_tex);
+    }
+    if (s_bloom_fbo) {
+        glDeleteFramebuffers(1, &s_bloom_fbo);
+    }
     glDeleteBuffers(1, &s_camera_ubo);
 }
 
@@ -382,6 +397,11 @@ static void view_setup(const Camera* cam, f32 width, f32 height)
         ubo.point_pos_radius[i] = vec4_from_vec3(s_point_pos[i], s_point_radius[i]);
         ubo.point_color[i] = vec4_from_vec3(s_point_color[i], 0.0f);
     }
+    f32 gray = f_clamp01(s_weather_overcast * 0.75f);
+    Vec3 sky_tint = vec3_lerp(v3(0.72f, 0.87f, 1.20f), v3(1.0f, 1.0f, 1.0f), gray);
+    Vec3 ground_tint = vec3_lerp(v3(0.93f, 0.82f, 0.62f), v3(1.0f, 1.0f, 1.0f), gray);
+    ubo.sky_ambient = vec4_from_vec3(vec3_scale(sky_tint, s_ambient * 1.08f), 0.0f);
+    ubo.ground_ambient = vec4_from_vec3(vec3_scale(ground_tint, s_ambient * 0.70f), 0.0f);
     glNamedBufferSubData(s_camera_ubo, 0, sizeof(CameraUbo), &ubo);
     if (s_shadow_tex) {
         glBindTextureUnit(7, s_shadow_tex);
@@ -444,6 +464,88 @@ static void scene_target_ensure(i32 width, i32 height)
     }
     s_scene_w = width;
     s_scene_h = height;
+
+    if (s_bloom_tex) {
+        glDeleteTextures(1, &s_bloom_tex);
+        s_bloom_tex = 0;
+    }
+    if (!s_bloom_fbo) {
+        glCreateFramebuffers(1, &s_bloom_fbo);
+    }
+    s_bloom_count = 0;
+    i32 mw = width / 2 > 1 ? width / 2 : 1;
+    i32 mh = height / 2 > 1 ? height / 2 : 1;
+    for (i32 i = 0; i < BLOOM_MIPS; i++) {
+        if (mw < 8 || mh < 8) {
+            break;
+        }
+        s_bloom_w[i] = mw;
+        s_bloom_h[i] = mh;
+        s_bloom_count++;
+        mw /= 2;
+        mh /= 2;
+    }
+    if (s_bloom_count > 0) {
+        glCreateTextures(GL_TEXTURE_2D, 1, &s_bloom_tex);
+        glTextureStorage2D(s_bloom_tex, s_bloom_count, GL_RGBA16F,
+                           s_bloom_w[0], s_bloom_h[0]);
+        glTextureParameteri(s_bloom_tex, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
+        glTextureParameteri(s_bloom_tex, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTextureParameteri(s_bloom_tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(s_bloom_tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+}
+
+static b32 bloom_render(void)
+{
+    if (!s_bloom_count || !s_bloom_tex) {
+        return 0;
+    }
+    u32 down = r_shader("bloom_down");
+    u32 up = r_shader("bloom_up");
+    if (!down || !up) {
+        return 0;
+    }
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_bloom_fbo);
+    glBindVertexArray(s_quad_vao);
+    glUseProgram(down);
+    for (i32 i = 0; i < s_bloom_count; i++) {
+        i32 sw = i == 0 ? s_scene_w : s_bloom_w[i - 1];
+        i32 sh = i == 0 ? s_scene_h : s_bloom_h[i - 1];
+        glNamedFramebufferTexture(s_bloom_fbo, GL_COLOR_ATTACHMENT0, s_bloom_tex, i);
+        glViewport(0, 0, s_bloom_w[i], s_bloom_h[i]);
+        if (i == 0) {
+            glBindTextureUnit(0, s_scene_color);
+        } else {
+            glTextureParameteri(s_bloom_tex, GL_TEXTURE_BASE_LEVEL, i - 1);
+            glTextureParameteri(s_bloom_tex, GL_TEXTURE_MAX_LEVEL, i - 1);
+            glBindTextureUnit(0, s_bloom_tex);
+        }
+        glProgramUniform4f(down, 1, 1.0f / (f32)sw, 1.0f / (f32)sh,
+                           i == 0 ? 1.0f : 0.0f, 0.0f);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    }
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    glUseProgram(up);
+    for (i32 i = s_bloom_count - 2; i >= 0; i--) {
+        glNamedFramebufferTexture(s_bloom_fbo, GL_COLOR_ATTACHMENT0, s_bloom_tex, i);
+        glViewport(0, 0, s_bloom_w[i], s_bloom_h[i]);
+        glTextureParameteri(s_bloom_tex, GL_TEXTURE_BASE_LEVEL, i + 1);
+        glTextureParameteri(s_bloom_tex, GL_TEXTURE_MAX_LEVEL, i + 1);
+        glBindTextureUnit(0, s_bloom_tex);
+        glProgramUniform4f(up, 1, 1.0f / (f32)s_bloom_w[i + 1],
+                           1.0f / (f32)s_bloom_h[i + 1], 0.0f, 0.0f);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    }
+    glDisable(GL_BLEND);
+    glTextureParameteri(s_bloom_tex, GL_TEXTURE_BASE_LEVEL, 0);
+    glTextureParameteri(s_bloom_tex, GL_TEXTURE_MAX_LEVEL, s_bloom_count - 1);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    return 1;
 }
 
 void r_begin_frame(const Camera* cam)
@@ -491,6 +593,7 @@ void r_post_process(f32 time)
     if (s_scene_broken || !s_scene_fbo) {
         return;
     }
+    b32 bloom_ok = bloom_render();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     u32 program = r_shader("post");
     if (!program) {
@@ -502,9 +605,13 @@ void r_post_process(f32 time)
     }
     glProgramUniform1f(program, 1, time);
     glProgramUniform4f(program, 2, s_shield_wet, s_shield_wiper, s_shield_incar, s_shield_rain);
+    glProgramUniform1f(program, 3, bloom_ok ? 1.0f : 0.0f);
     glUseProgram(program);
     glBindTextureUnit(0, s_scene_color);
     glBindTextureUnit(1, s_scene_depth);
+    if (bloom_ok) {
+        glBindTextureUnit(3, s_bloom_tex);
+    }
     glViewport(0, 0, s_scene_w, s_scene_h);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_ALWAYS);

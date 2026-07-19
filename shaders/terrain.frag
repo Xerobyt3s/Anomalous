@@ -26,9 +26,30 @@ layout(std140, binding = 0) uniform CameraBlock {
     vec4 u_shadow_params;
     vec4 u_point_pos_radius[4];
     vec4 u_point_color[4];
+    vec4 u_sky_ambient;
+    vec4 u_ground_ambient;
 };
 
 out vec4 o_color;
+
+float hash12(vec2 p)
+{
+    vec3 p3 = fract(vec3(p.xyx) * 443.8975);
+    p3 += dot(p3, p3.yzx + 19.19);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float vnoise(vec2 p)
+{
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash12(i);
+    float b = hash12(i + vec2(1.0, 0.0));
+    float c = hash12(i + vec2(0.0, 1.0));
+    float d = hash12(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
 
 float shadow_factor(vec3 world, float ndl)
 {
@@ -64,7 +85,6 @@ vec3 spot_light(vec3 world, vec3 n, vec3 albedo, vec4 pos_cone, vec4 dir_intensi
     return albedo * vec3(1.0, 0.93, 0.74) * (cone * atten * ndl);
 }
 
-
 vec3 point_light(vec3 world, vec3 n, vec3 albedo, vec4 pos_radius, vec4 color)
 {
     if (pos_radius.w <= 0.0) {
@@ -77,28 +97,56 @@ vec3 point_light(vec3 world, vec3 n, vec3 albedo, vec4 pos_radius, vec4 color)
     return albedo * color.rgb * (x * x * wrap);
 }
 
+vec3 apply_fog(vec3 lit, vec3 world)
+{
+    vec3 to_frag = world - u_cam_pos.xyz;
+    float dist = length(to_frag);
+    float height_falloff = exp(-max(world.y - 6.0, 0.0) * 0.035);
+    float density = u_fog_color_density.w * mix(0.55, 1.0, height_falloff);
+    float fog_amount = 1.0 - exp(-pow(dist * density, 2.0));
+    vec3 vdir = to_frag / max(dist, 1e-4);
+    float sun_glow = pow(max(dot(vdir, -u_sun_dir.xyz), 0.0), 9.0);
+    vec3 fog_c = u_fog_color_density.rgb
+               + u_sun_color_ambient.rgb * sun_glow * 0.45 * (1.0 - u_shadow_params.w);
+    return mix(lit, fog_c, fog_amount);
+}
+
 void main()
 {
     vec3 n = normalize(v_normal);
+    vec2 wp = v_world.xz;
 
-    vec3 grass = texture(u_grass, v_world.xz * 0.16).rgb;
-    vec3 rock = texture(u_rock, v_world.xz * 0.11).rgb;
-    vec3 road = texture(u_road, v_world.xz * 0.28).rgb;
+    vec3 grass_a = texture(u_grass, wp * 0.16).rgb;
+    vec3 grass_b = texture(u_grass, wp * 0.043).rgb;
+    float tile_break = smoothstep(0.30, 0.70, vnoise(wp * 0.021));
+    vec3 grass = mix(grass_a, grass_b, tile_break * 0.65);
+    float dry = smoothstep(0.38, 0.80, vnoise(wp * 0.009 + 13.7));
+    grass = mix(grass, grass * vec3(1.10, 1.02, 0.68), dry * 0.55);
 
-    float rockiness = 1.0 - smoothstep(0.6, 0.85, n.y);
+    vec3 rock = texture(u_rock, wp * 0.11).rgb;
+    vec3 rock_b = texture(u_rock, wp * 0.031).rgb;
+    rock = mix(rock, rock_b, tile_break * 0.5);
+    vec3 road = texture(u_road, wp * 0.28).rgb;
+
+    float slope_noise = (vnoise(wp * 0.06) - 0.5) * 0.22;
+    float rockiness = 1.0 - smoothstep(0.6 + slope_noise, 0.85 + slope_noise, n.y);
     rockiness = clamp(rockiness + smoothstep(24.0, 34.0, v_world.y) * 0.55, 0.0, 1.0);
     vec3 albedo = mix(grass, rock, rockiness);
 
-    vec2 mask_uv = (v_world.xz - u_terrain.xy) * u_terrain.zw;
+    vec2 mask_uv = (wp - u_terrain.xy) * u_terrain.zw;
     float road_amount = texture(u_roadmask, mask_uv).r;
     albedo = mix(albedo, road, road_amount);
+
+    float macro = vnoise(wp * 0.014);
+    albedo *= mix(0.84 + 0.32 * macro, 1.0, road_amount * 0.7);
 
     float wetness = u_shadow_params.z;
     albedo *= 1.0 - wetness * (0.28 + road_amount * 0.22);
 
     float ndl = max(dot(n, -u_sun_dir.xyz), 0.0);
-    vec3 lit = albedo * (u_sun_color_ambient.rgb * ndl * shadow_factor(v_world, ndl)
-                         + vec3(u_sun_color_ambient.w));
+    float shadow = shadow_factor(v_world, ndl);
+    vec3 hemi = mix(u_ground_ambient.rgb, u_sky_ambient.rgb, n.y * 0.5 + 0.5);
+    vec3 lit = albedo * (u_sun_color_ambient.rgb * ndl * shadow + hemi);
     if (wetness > 0.01) {
         vec3 view = normalize(u_cam_pos.xyz - v_world);
         vec3 rdir = reflect(-view, n);
@@ -112,7 +160,5 @@ void main()
     for (int i = 0; i < 4; i++) {
         lit += point_light(v_world, n, albedo, u_point_pos_radius[i], u_point_color[i]);
     }
-    float dist = length(v_world - u_cam_pos.xyz);
-    float fog_amount = 1.0 - exp(-pow(dist * u_fog_color_density.w, 2.0));
-    o_color = vec4(mix(lit, u_fog_color_density.rgb, fog_amount), 1.0);
+    o_color = vec4(apply_fog(lit, v_world), 1.0);
 }

@@ -21,6 +21,8 @@ layout(std140, binding = 0) uniform CameraBlock {
     vec4 u_shadow_params;
     vec4 u_point_pos_radius[4];
     vec4 u_point_color[4];
+    vec4 u_sky_ambient;
+    vec4 u_ground_ambient;
 };
 
 out vec3 v_world;

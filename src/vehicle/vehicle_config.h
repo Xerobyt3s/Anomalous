@@ -38,6 +38,13 @@ typedef struct VehicleConfig {
     f32 tire_peak_mu;
     f32 tire_slide_mu;
     f32 tire_low_speed;
+    f32 tire_load_sens;
+    f32 tire_relax_long;
+    f32 tire_relax_lat;
+
+    f32 arb_front;
+    f32 arb_rear;
+    f32 damper_rebound_mul;
 
     f32 torque_rpm[VEHICLE_MAX_TORQUE_POINTS];
     f32 torque_nm[VEHICLE_MAX_TORQUE_POINTS];
