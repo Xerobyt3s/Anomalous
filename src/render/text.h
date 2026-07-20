@@ -3,7 +3,7 @@
 #include "core/types.h"
 #include "math/vmath.h"
 
-b32  text_init(const char* ttf_path);
+b32  text_init(void);
 void text_shutdown(void);
 void text_begin_frame(void);
 void text_draw(f32 x, f32 y, f32 size, u32 color, const char* str);

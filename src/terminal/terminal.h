@@ -70,7 +70,7 @@ typedef struct TermView {
 } TermView;
 
 typedef struct Terminal {
-    u8 glyphs[TERM_ROWS][TERM_COLS];
+    u16 glyphs[TERM_ROWS][TERM_COLS];
     u8 colors[TERM_ROWS][TERM_COLS];
     char lines[TERM_LINES][TERM_COLS + 1];
     u32 line_head;

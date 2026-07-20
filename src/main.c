@@ -9,6 +9,7 @@
 #include "render/render.h"
 #include "render/debug_draw.h"
 #include "render/text.h"
+#include "render/fontchain.h"
 #include "render/terrain_render.h"
 #include "physics/heightfield.h"
 #include "physics/physics.h"
@@ -2512,7 +2513,7 @@ int main(int argc, char** argv)
     if (!platform_init("Anomalous", 1600, 900)) {
         return 1;
     }
-    if (!r_init() || !dd_init() || !text_init("assets/fonts/mono.ttf")) {
+    if (!r_init() || !dd_init() || !fontchain_init() || !text_init()) {
         platform_shutdown();
         return 1;
     }

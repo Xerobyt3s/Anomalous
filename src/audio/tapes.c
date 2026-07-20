@@ -27,23 +27,44 @@ static b32 has_audio_ext(const char* name)
 
 static void display_name(const char* file, char* out, u32 out_size)
 {
+    const char* end = file + strlen(file);
+    for (const char* p = end; p > file; p--) {
+        if (p[-1] == '.') {
+            end = p - 1;
+            break;
+        }
+    }
     u32 n = 0;
-    for (const char* p = file; *p && *p != '.' && n + 1 < out_size; p++) {
+    for (const char* p = file; p < end; p++) {
         char c = *p;
         if (c >= 'a' && c <= 'z') {
             c = (char)(c - 'a' + 'A');
         }
-        if (c == '_' || c == '-') {
+        if (c == '_') {
             c = ' ';
         }
+        u32 need = 1;
+        if ((u8)c >= 0xF0) {
+            need = 4;
+        } else if ((u8)c >= 0xE0) {
+            need = 3;
+        } else if ((u8)c >= 0xC0) {
+            need = 2;
+        }
+        if (n + need + 1 > out_size) {
+            break;
+        }
         out[n++] = c;
+    }
+    while (n && (u8)out[n - 1] == ' ') {
+        n--;
     }
     out[n] = 0;
 }
 
 static u32 real_file_bytes(const char* path)
 {
-    FILE* f = fopen(path, "rb");
+    FILE* f = (FILE*)platform_fopen(path, "rb");
     if (!f) {
         return 0;
     }
@@ -55,7 +76,7 @@ static u32 real_file_bytes(const char* path)
 
 static void scan_dir(const char* dir, b32 on_relay)
 {
-    PlatformDirEntry entries[TAPE_TRACK_MAX];
+    static PlatformDirEntry entries[TAPE_TRACK_MAX];
     u32 count = platform_list_dir(dir, entries, TAPE_TRACK_MAX);
     for (u32 i = 1; i < count; i++) {
         PlatformDirEntry key = entries[i];

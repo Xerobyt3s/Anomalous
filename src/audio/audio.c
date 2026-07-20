@@ -595,8 +595,10 @@ b32 audio_tape_play(const char* path)
         return 0;
     }
     audio_tape_stop();
-    if (ma_sound_init_from_file(&s_engine, path, MA_SOUND_FLAG_STREAM, 0, 0,
-                                &s_tape) != MA_SUCCESS) {
+    wchar_t wpath[640];
+    if (!platform_utf8_to_wide(path, (u16*)wpath, 640)
+        || ma_sound_init_from_file_w(&s_engine, wpath, MA_SOUND_FLAG_STREAM, 0, 0,
+                                     &s_tape) != MA_SUCCESS) {
         log_warn("audio: failed to stream %s", path);
         return 0;
     }

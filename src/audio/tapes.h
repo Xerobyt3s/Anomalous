@@ -2,8 +2,8 @@
 
 #include "core/types.h"
 
-#define TAPE_TRACK_MAX 40
-#define TAPE_NAME_MAX 20
+#define TAPE_TRACK_MAX 96
+#define TAPE_NAME_MAX 48
 
 void        tapes_init(void);
 u32         tapes_count(void);

@@ -112,6 +112,8 @@
     <ClCompile Include="src\render\render.c" />
     <ClCompile Include="src\render\terrain_render.c" />
     <ClCompile Include="src\render\text.c" />
+    <ClCompile Include="src\render\fontchain.c" />
+    <ClCompile Include="src\terminal\term_font.c" />
     <ClCompile Include="src\carsys\cables.c" />
     <ClCompile Include="src\terminal\comms.c" />
     <ClCompile Include="src\terminal\disks.c" />

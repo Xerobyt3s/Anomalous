@@ -9,8 +9,95 @@
 #include <stdio.h>
 #include <string.h>
 #include <io.h>
+#include <wchar.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+
+#define PLATFORM_WPATH_MAX 640
+
+u32 platform_utf8_to_wide(const char* utf8, u16* out, u32 out_count)
+{
+    u32 n = 0;
+    const u8* p = (const u8*)utf8;
+    while (*p && n + 2 < out_count) {
+        u32 cp = 0;
+        if (p[0] < 0x80) {
+            cp = p[0];
+            p += 1;
+        } else if ((p[0] & 0xE0) == 0xC0 && (p[1] & 0xC0) == 0x80) {
+            cp = ((u32)(p[0] & 0x1F) << 6) | (u32)(p[1] & 0x3F);
+            p += 2;
+        } else if ((p[0] & 0xF0) == 0xE0 && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80) {
+            cp = ((u32)(p[0] & 0x0F) << 12) | ((u32)(p[1] & 0x3F) << 6) | (u32)(p[2] & 0x3F);
+            p += 3;
+        } else if ((p[0] & 0xF8) == 0xF0 && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80
+                   && (p[3] & 0xC0) == 0x80) {
+            cp = ((u32)(p[0] & 0x07) << 18) | ((u32)(p[1] & 0x3F) << 12)
+               | ((u32)(p[2] & 0x3F) << 6) | (u32)(p[3] & 0x3F);
+            p += 4;
+        } else {
+            cp = 0xFFFD;
+            p += 1;
+        }
+        if (cp >= 0x10000) {
+            cp -= 0x10000;
+            out[n++] = (u16)(0xD800 + (cp >> 10));
+            out[n++] = (u16)(0xDC00 + (cp & 0x3FF));
+        } else {
+            out[n++] = (u16)cp;
+        }
+    }
+    out[n] = 0;
+    return n;
+}
+
+static u32 wide_to_utf8(const u16* w, char* out, u32 out_count)
+{
+    u32 n = 0;
+    for (u32 i = 0; w[i]; i++) {
+        u32 cp = w[i];
+        if (cp >= 0xD800 && cp < 0xDC00 && w[i + 1] >= 0xDC00 && w[i + 1] < 0xE000) {
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (w[i + 1] - 0xDC00);
+            i++;
+        }
+        if (cp < 0x80) {
+            if (n + 1 >= out_count) { break; }
+            out[n++] = (char)cp;
+        } else if (cp < 0x800) {
+            if (n + 2 >= out_count) { break; }
+            out[n++] = (char)(0xC0 | (cp >> 6));
+            out[n++] = (char)(0x80 | (cp & 0x3F));
+        } else if (cp < 0x10000) {
+            if (n + 3 >= out_count) { break; }
+            out[n++] = (char)(0xE0 | (cp >> 12));
+            out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[n++] = (char)(0x80 | (cp & 0x3F));
+        } else {
+            if (n + 4 >= out_count) { break; }
+            out[n++] = (char)(0xF0 | (cp >> 18));
+            out[n++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+            out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[n++] = (char)(0x80 | (cp & 0x3F));
+        }
+    }
+    out[n] = 0;
+    return n;
+}
+
+void* platform_fopen(const char* path, const char* mode)
+{
+    wchar_t wpath[PLATFORM_WPATH_MAX];
+    wchar_t wmode[16];
+    if (!platform_utf8_to_wide(path, (u16*)wpath, PLATFORM_WPATH_MAX)) {
+        return 0;
+    }
+    u32 m = 0;
+    for (; mode[m] && m < 15; m++) {
+        wmode[m] = (wchar_t)mode[m];
+    }
+    wmode[m] = 0;
+    return _wfopen(wpath, wmode);
+}
 
 static GLFWwindow* s_window;
 static GameInput s_input;
@@ -242,7 +329,7 @@ b32 platform_cursor_captured(void)
 FileData platform_read_entire_file(struct Arena* arena, const char* path)
 {
     FileData result = {0};
-    FILE* file = fopen(path, "rb");
+    FILE* file = (FILE*)platform_fopen(path, "rb");
     if (!file) {
         log_warn("file: could not open %s", path);
         return result;
@@ -269,8 +356,12 @@ FileData platform_read_entire_file(struct Arena* arena, const char* path)
 
 i64 platform_file_mtime(const char* path)
 {
+    wchar_t wpath[PLATFORM_WPATH_MAX];
+    if (!platform_utf8_to_wide(path, (u16*)wpath, PLATFORM_WPATH_MAX)) {
+        return 0;
+    }
     struct _stat64 info;
-    if (_stat64(path, &info) != 0) {
+    if (_wstat64(wpath, &info) != 0) {
         return 0;
     }
     return (i64)info.st_mtime;
@@ -280,23 +371,27 @@ u32 platform_list_dir(const char* path, PlatformDirEntry* out, u32 max_count)
 {
     char pattern[512];
     snprintf(pattern, sizeof(pattern), "%s/*", path);
-    struct _finddata_t fd;
-    intptr_t handle = _findfirst(pattern, &fd);
+    wchar_t wpattern[PLATFORM_WPATH_MAX];
+    if (!platform_utf8_to_wide(pattern, (u16*)wpattern, PLATFORM_WPATH_MAX)) {
+        return 0;
+    }
+    struct _wfinddata64_t fd;
+    intptr_t handle = _wfindfirst64(wpattern, &fd);
     if (handle == -1) {
         return 0;
     }
     u32 n = 0;
     do {
-        if (strcmp(fd.name, ".") == 0 || strcmp(fd.name, "..") == 0) {
+        if (wcscmp(fd.name, L".") == 0 || wcscmp(fd.name, L"..") == 0) {
             continue;
         }
         if (n >= max_count) {
             break;
         }
-        snprintf(out[n].name, sizeof(out[n].name), "%s", fd.name);
+        wide_to_utf8((const u16*)fd.name, out[n].name, sizeof(out[n].name));
         out[n].is_dir = (fd.attrib & _A_SUBDIR) != 0;
         n++;
-    } while (_findnext(handle, &fd) == 0);
+    } while (_wfindnext64(handle, &fd) == 0);
     _findclose(handle);
     return n;
 }
