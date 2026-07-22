@@ -30,6 +30,7 @@
 #include "audio/audio.h"
 #include "audio/tapes.h"
 #include "ui/ui.h"
+#include "editor/editor.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -38,6 +39,7 @@
 #define MAX_FRAME_DT 0.25
 #define ZONE_DIR "assets/zones/testzone"
 #define CAR_CFG_PATH "assets/cars/excel.cfg"
+#define CAR_INTERACT_CFG_PATH "assets/cars/excel_interact.cfg"
 #define SCENE_PHYS_SEED 1234u
 #define SCENE_PHYS_BODIES 24
 #define SCENE_PHYS_TICKS 1440
@@ -88,6 +90,7 @@ static b32 s_place_valid;
 static Vec3 s_place_pos;
 static f32 s_place_yaw;
 static ZoneSpawn s_zone_spawn;
+static ZonePickups s_zone_pickups;
 static Camera s_camera;
 static f32 s_fps;
 static b32 s_show_telemetry;
@@ -98,6 +101,7 @@ static b32 s_show_carsys;
 static b32 s_slow_mo;
 static b32 s_free_cam;
 static b32 s_chase_cam;
+static EditorState s_editor;
 static b32 s_pending_jump;
 static b32 s_pending_interact;
 static f32 s_frame_dt_render;
@@ -254,30 +258,12 @@ static void draw_phys_debug(f32 alpha)
     }
 }
 
-static Ray camera_mouse_ray(const Camera* cam, f32 mouse_x, f32 mouse_y)
-{
-    Vec2 vp = r_viewport_size();
-    f32 ndc_x = mouse_x / vp.x * 2.0f - 1.0f;
-    f32 ndc_y = 1.0f - mouse_y / vp.y * 2.0f;
-    f32 tan_half = tanf(cam->fov_y * 0.5f);
-    f32 aspect = vp.x / vp.y;
-    Vec3 forward = camera_forward(cam);
-    Vec3 right = camera_right(cam);
-    Vec3 up = vec3_cross(right, forward);
-    Ray ray;
-    ray.origin = cam->pos;
-    ray.dir = vec3_normalize(vec3_add(forward,
-                                      vec3_add(vec3_scale(right, ndc_x * tan_half * aspect),
-                                               vec3_scale(up, ndc_y * tan_half))));
-    return ray;
-}
-
 static void draw_mouse_ray(const GameInput* input)
 {
     if (!input->mouse_down[MOUSE_LEFT] || input->mouse_down[MOUSE_RIGHT]) {
         return;
     }
-    Ray ray = camera_mouse_ray(&s_camera, input->mouse_x, input->mouse_y);
+    Ray ray = camera_mouse_ray(&s_camera, input->mouse_x, input->mouse_y, r_viewport_size());
     PhysRayHit hit;
     if (phys_raycast(&s_phys, ray, 500.0f, &hit)) {
         dd_sphere(hit.point, 0.25f, DD_MAGENTA);
@@ -769,33 +755,6 @@ static void draw_viewmodel(f32 alpha)
     }
 }
 
-static void spawn_spare_aux(ItemKind kind, f32 condition, i32 aux, Vec3 offset)
-{
-    Quat place_rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), s_zone_spawn.car_yaw);
-    Vec3 pos = vec3_add(s_zone_spawn.car_pos, quat_rotate_vec3(place_rot, offset));
-    f32 lift = item_cargo_half(kind).y + 0.10f;
-    f32 ground = heightfield_sample(&s_terrain.hf, pos.x, pos.z);
-    Ray down;
-    down.origin = v3(pos.x, ground + 1.6f, pos.z);
-    down.dir = v3(0.0f, -1.0f, 0.0f);
-    PhysRayHit hit;
-    if (phys_raycast(&s_phys, down, 8.0f, &hit)) {
-        ground = hit.point.y;
-    }
-    pos.y = ground + lift;
-    Item item;
-    item.kind = kind;
-    item.condition = condition;
-    item.aux = aux;
-    interact_spawn_pickup(&s_world, &s_phys, item, pos,
-                          s_zone_spawn.car_yaw + offset.x * 2.0f, vec3_zero());
-}
-
-static void spawn_spare(ItemKind kind, f32 condition, Vec3 offset)
-{
-    spawn_spare_aux(kind, condition, 0, offset);
-}
-
 static Vec3 car_audio_point(Vec3 chassis_local)
 {
     RigidBody* body = phys_body(&s_phys, s_vehicle.body);
@@ -1096,46 +1055,6 @@ static void mission_draw(void)
         dd_line(vec3_add(target, v3(0.0f, 0.0f, 1.0f)), vec3_add(target, v3(0.0f, 70.0f, 1.0f)), color);
         dd_sphere(vec3_add(target, v3(0.0f, pulse, 0.0f)), 1.6f, color);
     }
-}
-
-static void spawn_spares(void)
-{
-    spawn_spare(ITEM_BATTERY, 0.9f, v3(2.6f, 0.0f, -1.0f));
-    spawn_spare(ITEM_TIRE, 1.0f, v3(3.3f, 0.0f, -0.2f));
-    spawn_spare(ITEM_TIRE, 0.65f, v3(3.4f, 0.0f, 0.9f));
-    spawn_spare(ITEM_RADIATOR, 0.85f, v3(2.8f, 0.0f, 1.8f));
-    spawn_spare(ITEM_ALTERNATOR, 0.8f, v3(3.9f, 0.0f, 1.5f));
-    spawn_spare(ITEM_JERRYCAN, 1.0f, v3(2.4f, 0.0f, 2.6f));
-    spawn_spare(ITEM_OILCAN, 1.0f, v3(3.1f, 0.0f, 2.8f));
-    spawn_spare(ITEM_COMPUTER, 1.0f, v3(4.5f, 0.0f, 0.4f));
-    spawn_spare(ITEM_ANTENNA_WHIP, 1.0f, v3(5.1f, 0.0f, 1.4f));
-    spawn_spare(ITEM_ANTENNA_STD, 0.9f, v3(5.4f, 0.0f, 0.3f));
-    spawn_spare(ITEM_ANTENNA_ARRAY, 0.8f, v3(5.8f, 0.0f, -0.9f));
-    spawn_spare(ITEM_KEY, 1.0f, v3(2.1f, 0.0f, -0.2f));
-    spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_MASTER, v3(4.3f, 0.0f, 2.4f));
-    spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_FIELD_NOTES, v3(4.6f, 0.0f, 2.7f));
-    spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_SCRATCH, v3(4.9f, 0.0f, 2.35f));
-    spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_RESCUE, v3(5.2f, 0.0f, 2.65f));
-    spawn_spare_aux(ITEM_FLOPPY, 1.0f, DISK_ARCADE, v3(5.5f, 0.0f, 2.3f));
-    spawn_spare(ITEM_CAMERA, 1.0f, v3(2.2f, 0.0f, 3.1f));
-    spawn_spare(ITEM_REEL, 1.0f, v3(1.8f, 0.0f, 2.7f));
-    spawn_spare_aux(ITEM_CASSETTE, 1.0f, 0, v3(2.0f, 0.0f, 3.3f));
-    spawn_spare_aux(ITEM_CASSETTE, 0.6f, 0, v3(1.7f, 0.0f, 3.5f));
-}
-
-static void spawn_lore_tape(void)
-{
-    if (tapes_count() == 0 || tapes_on_relay(0)) {
-        return;
-    }
-    Vec3 pos = vec3_add(s_tower_pos, v3(1.3f, 0.0f, 0.9f));
-    pos.y = heightfield_sample(&s_terrain.hf, pos.x, pos.z) + item_cargo_half(ITEM_CASSETTE).y
-          + 0.10f;
-    Item item;
-    item.kind = ITEM_CASSETTE;
-    item.condition = 0.78f;
-    item.aux = 1;
-    interact_spawn_pickup(&s_world, &s_phys, item, pos, 0.8f, vec3_zero());
 }
 
 static void draw_telemetry_panel(void)
@@ -1547,6 +1466,7 @@ static void game_render(f32 alpha, const GameInput* input)
     if (s_show_tuning) {
         draw_tuning_panel();
     }
+    editor_render(&s_editor, input, &s_camera, &s_world, &s_phys, &s_terrain, &s_vehicle);
 
     r_end_frame();
 }
@@ -1872,7 +1792,7 @@ static ZoneCheckResult zone_check_run(void)
     PhysWorld* phys = arena_push(&g_perm_arena, PhysWorld);
     phys_init(phys, &g_perm_arena, &terrain->hf);
     ZoneSpawn spawn;
-    if (!zone_load(ZONE_DIR, &g_perm_arena, world, phys, terrain, &spawn)) {
+    if (!zone_load(ZONE_DIR, &g_perm_arena, world, phys, terrain, &spawn, 0)) {
         arena_temp_end(temp);
         return result;
     }
@@ -2521,7 +2441,8 @@ int main(int argc, char** argv)
 
     world_init(&s_world, &g_perm_arena);
     phys_init(&s_phys, &g_perm_arena, &s_terrain.hf);
-    if (!zone_load(ZONE_DIR, &g_perm_arena, &s_world, &s_phys, &s_terrain, &s_zone_spawn)) {
+    if (!zone_load(ZONE_DIR, &g_perm_arena, &s_world, &s_phys, &s_terrain, &s_zone_spawn,
+                   &s_zone_pickups)) {
         platform_shutdown();
         return 1;
     }
@@ -2530,9 +2451,13 @@ int main(int argc, char** argv)
         return 1;
     }
     mapdata_init(&s_terrain.hf);
-    s_tower_pos = v3(258.0f, 0.0f, 82.0f);
-    s_tower_pos.y = heightfield_sample(&s_terrain.hf, s_tower_pos.x, s_tower_pos.z);
-    s_tower_rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), 20.0f * DEG_TO_RAD);
+    {
+        f32 tx = s_zone_spawn.tower_present ? s_zone_spawn.tower_x : 258.0f;
+        f32 tz = s_zone_spawn.tower_present ? s_zone_spawn.tower_z : 82.0f;
+        f32 tyaw = s_zone_spawn.tower_present ? s_zone_spawn.tower_yaw_deg : 20.0f;
+        s_tower_pos = v3(tx, heightfield_sample(&s_terrain.hf, tx, tz), tz);
+        s_tower_rot = quat_from_axis_angle(v3(0.0f, 1.0f, 0.0f), tyaw * DEG_TO_RAD);
+    }
     s_tower_breached = 0;
     if (!vehicle_init(&s_vehicle, &s_phys, CAR_CFG_PATH, s_zone_spawn.car_pos, s_zone_spawn.car_yaw)) {
         platform_shutdown();
@@ -2546,10 +2471,13 @@ int main(int argc, char** argv)
     r_shader("rain");
     weather_init(&s_weather, 20260718ull);
     tapes_init();
-    spawn_spares();
-    spawn_lore_tape();
+    interact_boxes_init(CAR_INTERACT_CFG_PATH);
+    interact_spawn_zone_pickups(&s_world, &s_phys, &s_terrain, &s_zone_pickups);
     audio_init();
     mission_init();
+
+    editor_init(&s_editor);
+    editor_snapshot_world(&s_world, &s_phys);
 
     camera_init(&s_camera, vec3_add(s_zone_spawn.car_pos, v3(-8.0f, 5.0f, 10.0f)));
     camera_look_at(&s_camera, s_zone_spawn.car_pos);
@@ -2575,7 +2503,7 @@ int main(int argc, char** argv)
         if (input->key_pressed[KEY_ESCAPE]) {
             if (s_term_focus) {
                 s_term_focus = 0;
-            } else {
+            } else if (!s_editor.active) {
                 platform_request_close();
             }
         }
@@ -2603,7 +2531,14 @@ int main(int argc, char** argv)
         if (input->key_pressed[KEY_F7]) {
             s_show_tuning = !s_show_tuning;
         }
-        if (input->key_pressed[KEY_C] && !s_term_focus) {
+        if (input->key_pressed[KEY_F8]) {
+            editor_toggle(&s_editor, &s_world, &s_phys);
+            if (s_editor.active) {
+                reset_car();
+                player_init(&s_player, s_zone_spawn.player_pos, s_zone_spawn.player_yaw);
+            }
+        }
+        if (input->key_pressed[KEY_C] && !s_term_focus && !s_editor.active) {
             s_chase_cam = !s_chase_cam;
         }
 
@@ -2619,7 +2554,14 @@ int main(int argc, char** argv)
         }
 
         PlayerCommand frame_cmd = {0};
-        if (s_free_cam) {
+        if (s_editor.active) {
+            editor_update(&s_editor, input, &s_camera, &s_world, &s_phys, &s_terrain,
+                          &s_vehicle, ZONE_DIR, (f32)frame_dt);
+            VehicleInput coast = {0};
+            vehicle_set_input(&s_vehicle, coast);
+            s_pending_jump = 0;
+            s_pending_interact = 0;
+        } else if (s_free_cam) {
             camera_fly_update(&s_camera, input, (f32)frame_dt);
             VehicleInput coast = {0};
             vehicle_set_input(&s_vehicle, coast);
@@ -2770,16 +2712,29 @@ int main(int argc, char** argv)
             next_cfg_poll = now + 1.0;
             vehicle_poll_config_reload(&s_vehicle, &s_phys);
         }
+        interact_boxes_poll(now);
+        for (u32 te = 0; te < s_world.entities.capacity; te++) {
+            Entity* tower = pool_at(&s_world.entities, te);
+            if (tower && (tower->flags & ENTITY_FLAG_TOWER)) {
+                s_tower_pos = tower->pos;
+                s_tower_rot = tower->rot;
+                break;
+            }
+        }
 
-        accumulator += frame_dt * (s_slow_mo ? 0.1 : 1.0);
-        while (accumulator >= FIXED_DT) {
-            PlayerCommand cmd = frame_cmd;
-            cmd.jump = s_pending_jump;
-            cmd.interact = s_pending_interact;
-            s_pending_jump = 0;
-            s_pending_interact = 0;
-            game_tick(FIXED_DT, cmd);
-            accumulator -= FIXED_DT;
+        if (s_editor.active) {
+            accumulator = 0.0;
+        } else {
+            accumulator += frame_dt * (s_slow_mo ? 0.1 : 1.0);
+            while (accumulator >= FIXED_DT) {
+                PlayerCommand cmd = frame_cmd;
+                cmd.jump = s_pending_jump;
+                cmd.interact = s_pending_interact;
+                s_pending_jump = 0;
+                s_pending_interact = 0;
+                game_tick(FIXED_DT, cmd);
+                accumulator -= FIXED_DT;
+            }
         }
 
         RigidBody* car_body = phys_body(&s_phys, s_vehicle.body);
@@ -2791,7 +2746,7 @@ int main(int argc, char** argv)
         }
 
         f32 alpha = (f32)(accumulator / FIXED_DT);
-        if (!s_free_cam) {
+        if (!s_free_cam && !s_editor.active) {
             if (s_chase_cam && player_driving(&s_player)) {
                 update_chase_camera((f32)frame_dt, alpha);
             } else {

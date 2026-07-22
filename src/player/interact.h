@@ -11,9 +11,35 @@ struct Vehicle;
 struct CarSys;
 struct World;
 struct PhysWorld;
+struct Terrain;
+struct ZonePickups;
 
 #define INTERACT_RANGE 2.6f
 #define INTERACT_HOLD_TIME 1.2f
+
+typedef enum InteractBoxId {
+    IBOX_DOOR,
+    IBOX_DOOR_PANEL,
+    IBOX_HANDBRAKE,
+    IBOX_WIPER,
+    IBOX_IGNITION,
+    IBOX_DECK,
+    IBOX_DISK_SLOT,
+    IBOX_HOOD_LATCH,
+    IBOX_HOOD_RAISED,
+    IBOX_TRUNK_LID,
+    IBOX_TRUNK_EDGE,
+    IBOX_FUEL,
+    IBOX_ANTENNA_JACK,
+    IBOX_BAY_JACK,
+    IBOX_COUNT,
+} InteractBoxId;
+
+typedef struct InteractBox {
+    char name[24];
+    Vec3 center;
+    Vec3 half;
+} InteractBox;
 
 typedef enum InteractAction {
     ACTION_NONE,
@@ -83,3 +109,11 @@ b32  interact_drop(Interact* it, struct World* world, struct PhysWorld* phys,
                    Vec3 origin, Vec3 dir, f32 power);
 Handle interact_spawn_pickup(struct World* world, struct PhysWorld* phys, Item item,
                              Vec3 pos, f32 yaw, Vec3 vel);
+void interact_spawn_zone_pickups(struct World* world, struct PhysWorld* phys,
+                                 const struct Terrain* terrain,
+                                 const struct ZonePickups* pickups);
+
+void         interact_boxes_init(const char* path);
+void         interact_boxes_poll(f64 now);
+b32          interact_boxes_save(void);
+InteractBox* interact_box(u32 id);

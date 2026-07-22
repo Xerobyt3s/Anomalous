@@ -339,6 +339,21 @@ b32 frustum_test_aabb(const Frustum* frustum, Aabb box)
     return 1;
 }
 
+f32 closest_point_on_line_to_ray(Vec3 line_point, Vec3 line_dir, Ray ray)
+{
+    Vec3 u = vec3_normalize(line_dir);
+    Vec3 v = vec3_normalize(ray.dir);
+    Vec3 w0 = vec3_sub(line_point, ray.origin);
+    f32 b = vec3_dot(u, v);
+    f32 d = vec3_dot(u, w0);
+    f32 e = vec3_dot(v, w0);
+    f32 denom = 1.0f - b * b;
+    if (denom < 1e-6f) {
+        return -d;
+    }
+    return (b * e - d) / denom;
+}
+
 b32 ray_vs_aabb(Ray ray, Aabb box, f32 max_t, f32* out_t)
 {
     f32 tmin = 0.0f;

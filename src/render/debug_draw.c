@@ -10,6 +10,7 @@
 #include <string.h>
 
 #define DD_MAX_LINE_VERTS (1u << 17)
+#define DD_MAX_OVERLAY_VERTS (1u << 12)
 #define DD_MAX_2D_VERTS (1u << 15)
 #define DD_MAX_TEXTS_3D 256
 #define DD_TEXT_BUF_MAX 256
@@ -34,6 +35,9 @@ typedef struct DdText3d {
 
 static DdVert* s_line_verts;
 static u32 s_line_vert_count;
+static DdVert* s_overlay_verts;
+static u32 s_overlay_vert_count;
+static b32 s_overlay_mode;
 static DdVert2* s_line2d_verts;
 static u32 s_line2d_vert_count;
 static DdVert2* s_tri2d_verts;
@@ -49,6 +53,7 @@ static b32 s_overflow_warned;
 b32 dd_init(void)
 {
     s_line_verts = arena_push_array(&g_perm_arena, DdVert, DD_MAX_LINE_VERTS);
+    s_overlay_verts = arena_push_array(&g_perm_arena, DdVert, DD_MAX_OVERLAY_VERTS);
     s_line2d_verts = arena_push_array(&g_perm_arena, DdVert2, DD_MAX_2D_VERTS);
     s_tri2d_verts = arena_push_array(&g_perm_arena, DdVert2, DD_MAX_2D_VERTS);
 
@@ -90,27 +95,37 @@ void dd_shutdown(void)
 void dd_begin_frame(void)
 {
     s_line_vert_count = 0;
+    s_overlay_vert_count = 0;
+    s_overlay_mode = 0;
     s_line2d_vert_count = 0;
     s_tri2d_vert_count = 0;
     s_text_3d_count = 0;
     s_overflow_warned = 0;
 }
 
+void dd_overlay(b32 enable)
+{
+    s_overlay_mode = enable;
+}
+
 void dd_line(Vec3 a, Vec3 b, u32 color)
 {
-    if (s_line_vert_count + 2 > DD_MAX_LINE_VERTS) {
+    DdVert* verts = s_overlay_mode ? s_overlay_verts : s_line_verts;
+    u32* count = s_overlay_mode ? &s_overlay_vert_count : &s_line_vert_count;
+    u32 max = s_overlay_mode ? DD_MAX_OVERLAY_VERTS : DD_MAX_LINE_VERTS;
+    if (*count + 2 > max) {
         if (!s_overflow_warned) {
-            log_warn("dd: line vertex budget exceeded (%u)", DD_MAX_LINE_VERTS);
+            log_warn("dd: line vertex budget exceeded (%u)", max);
             s_overflow_warned = 1;
         }
         return;
     }
-    DdVert* v = &s_line_verts[s_line_vert_count];
+    DdVert* v = &verts[*count];
     v[0].pos = a;
     v[0].color = color;
     v[1].pos = b;
     v[1].color = color;
-    s_line_vert_count += 2;
+    *count += 2;
 }
 
 void dd_ray(Vec3 origin, Vec3 dir, f32 length, u32 color)
@@ -311,13 +326,21 @@ void dd_rect_2d_fill_reserved(u32 slot, f32 x0, f32 y0, f32 x1, f32 y1, u32 colo
 
 void dd_flush(void)
 {
-    if (s_line_vert_count) {
+    if (s_line_vert_count || s_overlay_vert_count) {
         u32 program = r_shader("debug");
         if (program) {
-            glNamedBufferSubData(s_vbo, 0, (GLsizeiptr)(s_line_vert_count * sizeof(DdVert)), s_line_verts);
             glUseProgram(program);
             glBindVertexArray(s_vao);
-            glDrawArrays(GL_LINES, 0, (GLsizei)s_line_vert_count);
+            if (s_line_vert_count) {
+                glNamedBufferSubData(s_vbo, 0, (GLsizeiptr)(s_line_vert_count * sizeof(DdVert)), s_line_verts);
+                glDrawArrays(GL_LINES, 0, (GLsizei)s_line_vert_count);
+            }
+            if (s_overlay_vert_count) {
+                glNamedBufferSubData(s_vbo, 0, (GLsizeiptr)(s_overlay_vert_count * sizeof(DdVert)), s_overlay_verts);
+                glDisable(GL_DEPTH_TEST);
+                glDrawArrays(GL_LINES, 0, (GLsizei)s_overlay_vert_count);
+                glEnable(GL_DEPTH_TEST);
+            }
             glBindVertexArray(0);
             glUseProgram(0);
         }

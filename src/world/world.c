@@ -22,6 +22,7 @@ EntityHandle world_spawn(World* world, EntityKind kind, Vec3 pos, Quat rot, f32 
     entity->pos = pos;
     entity->rot = rot;
     entity->scale = scale;
+    entity->half = vec3_zero();
     entity->mesh = 0;
     entity->mesh_name[0] = 0;
     entity->aux_kind = 0;
@@ -42,6 +43,17 @@ Entity* world_entity(World* world, EntityHandle handle)
 void world_despawn(World* world, EntityHandle handle)
 {
     pool_free(&world->entities, handle);
+}
+
+void world_clear(World* world)
+{
+    for (u32 idx = 0; idx < world->entities.capacity; idx++) {
+        if (!pool_at(&world->entities, idx)) {
+            continue;
+        }
+        Handle handle = { idx, world->entities.gens[idx] };
+        pool_free(&world->entities, handle);
+    }
 }
 
 void world_render(World* world)

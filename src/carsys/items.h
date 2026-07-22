@@ -31,6 +31,8 @@ typedef struct Item {
 } Item;
 
 const char* item_name(ItemKind kind);
+const char* item_id(ItemKind kind);
+ItemKind    item_from_id(const char* id);
 const char* item_mesh(ItemKind kind);
 f32         item_mass(ItemKind kind);
 Vec3        item_cargo_half(ItemKind kind);

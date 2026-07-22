@@ -8,6 +8,12 @@ struct Arena;
 #define MAX_MOUSE_BUTTONS 8
 
 #define KEY_SPACE 32
+#define KEY_0 48
+#define KEY_1 49
+#define KEY_2 50
+#define KEY_3 51
+#define KEY_4 52
+#define KEY_5 53
 #define KEY_A 65
 #define KEY_C 67
 #define KEY_D 68
@@ -20,7 +26,10 @@ struct Arena;
 #define KEY_Q 81
 #define KEY_R 82
 #define KEY_S 83
+#define KEY_V 86
 #define KEY_W 87
+#define KEY_Y 89
+#define KEY_Z 90
 #define KEY_ESCAPE 256
 #define KEY_ENTER 257
 #define KEY_TAB 258

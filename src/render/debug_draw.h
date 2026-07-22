@@ -22,6 +22,7 @@ static inline u32 dd_rgba(u8 r, u8 g, u8 b, u8 a)
 b32  dd_init(void);
 void dd_shutdown(void);
 void dd_begin_frame(void);
+void dd_overlay(b32 enable);
 void dd_line(Vec3 a, Vec3 b, u32 color);
 void dd_ray(Vec3 origin, Vec3 dir, f32 length, u32 color);
 void dd_arrow(Vec3 from, Vec3 to, f32 head_size, u32 color);

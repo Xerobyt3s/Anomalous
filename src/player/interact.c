@@ -3,10 +3,16 @@
 #include "vehicle/vehicle.h"
 #include "carsys/carsys.h"
 #include "world/world.h"
+#include "world/zone.h"
+#include "world/terrain.h"
 #include "physics/physics.h"
 #include "physics/heightfield.h"
 #include "terminal/disks.h"
 #include "audio/tapes.h"
+#include "core/arena.h"
+#include "core/config.h"
+#include "core/log.h"
+#include "platform/platform.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -15,10 +21,99 @@
 #define DOOR_OPEN_FOR_USE 0.6f
 #define EXIT_LOOK_YAW 1.15f
 #define DOOR_HINGE_X 0.80f
-#define TERM_DISK_SLOT_LOCAL v3(0.0f, -0.119f, 0.265f)
-#define TERM_DISK_SLOT_HALF v3(0.10f, 0.035f, 0.045f)
-#define DECK_LOCAL v3(0.12f, -0.045f, -0.295f)
-#define DECK_SLOT_HALF v3(0.09f, 0.05f, 0.055f)
+
+static InteractBox s_boxes[IBOX_COUNT] = {
+    { "door",         { 0.78f, -0.02f, 0.10f },  { 0.10f, 0.26f, 0.62f } },
+    { "door_panel",   { 1.45f, -0.02f, -0.18f }, { 0.48f, 0.26f, 0.42f } },
+    { "handbrake",    { -0.13f, -0.13f, 0.33f }, { 0.09f, 0.10f, 0.16f } },
+    { "wiper",        { -0.48f, 0.08f, -0.28f }, { 0.05f, 0.04f, 0.06f } },
+    { "ignition",     { -0.22f, 0.05f, -0.28f }, { 0.07f, 0.06f, 0.08f } },
+    { "deck",         { 0.12f, -0.045f, -0.295f }, { 0.09f, 0.05f, 0.055f } },
+    { "disk_slot",    { 0.0f, -0.119f, 0.265f }, { 0.10f, 0.035f, 0.045f } },
+    { "hood_latch",   { 0.0f, 0.04f, -1.50f },   { 0.50f, 0.10f, 0.42f } },
+    { "hood_raised",  { 0.0f, 0.72f, -0.92f },   { 0.50f, 0.62f, 0.30f } },
+    { "trunk_lid",    { 0.0f, 0.22f, 1.73f },    { 0.50f, 0.09f, 0.31f } },
+    { "trunk_edge",   { 0.0f, 0.55f, 1.52f },    { 0.50f, 0.38f, 0.16f } },
+    { "fuel",         { 0.80f, 0.10f, 1.30f },   { 0.10f, 0.10f, 0.14f } },
+    { "antenna_jack", { 0.35f, 0.54f, 0.36f },   { 0.055f, 0.055f, 0.055f } },
+    { "bay_jack",     { 0.32f, 0.02f, -0.75f },  { 0.055f, 0.055f, 0.055f } },
+};
+
+static char s_boxes_path[256];
+static i64 s_boxes_mtime;
+static f64 s_boxes_next_poll;
+
+InteractBox* interact_box(u32 id)
+{
+    return &s_boxes[id];
+}
+
+static void interact_boxes_load(void)
+{
+    ArenaTemp temp = arena_temp_begin(&g_frame_arena);
+    FileData file = platform_read_entire_file(&g_frame_arena, s_boxes_path);
+    if (file.data) {
+        Config cfg;
+        if (config_parse(&cfg, &g_frame_arena, (const char*)file.data)) {
+            for (u32 i = 0; i < IBOX_COUNT; i++) {
+                char key[64];
+                snprintf(key, sizeof(key), "boxes.%s", s_boxes[i].name);
+                f32 vals[6];
+                if (config_get_f32_list(&cfg, key, vals, 6) == 6) {
+                    s_boxes[i].center = v3(vals[0], vals[1], vals[2]);
+                    s_boxes[i].half = v3(vals[3], vals[4], vals[5]);
+                }
+            }
+            log_info("interact: loaded boxes from %s", s_boxes_path);
+        }
+    }
+    arena_temp_end(temp);
+}
+
+void interact_boxes_init(const char* path)
+{
+    snprintf(s_boxes_path, sizeof(s_boxes_path), "%s", path);
+    s_boxes_mtime = platform_file_mtime(path);
+    if (s_boxes_mtime != 0) {
+        interact_boxes_load();
+    }
+}
+
+void interact_boxes_poll(f64 now)
+{
+    if (now < s_boxes_next_poll || !s_boxes_path[0]) {
+        return;
+    }
+    s_boxes_next_poll = now + 1.0;
+    i64 mtime = platform_file_mtime(s_boxes_path);
+    if (mtime != 0 && mtime != s_boxes_mtime) {
+        s_boxes_mtime = mtime;
+        interact_boxes_load();
+    }
+}
+
+b32 interact_boxes_save(void)
+{
+    if (!s_boxes_path[0]) {
+        return 0;
+    }
+    FILE* out = (FILE*)platform_fopen(s_boxes_path, "wb");
+    if (!out) {
+        log_warn("interact: could not write %s", s_boxes_path);
+        return 0;
+    }
+    fprintf(out, "[boxes]\n");
+    for (u32 i = 0; i < IBOX_COUNT; i++) {
+        const InteractBox* b = &s_boxes[i];
+        fprintf(out, "%s = %.3f %.3f %.3f %.3f %.3f %.3f\n", b->name,
+                (f64)b->center.x, (f64)b->center.y, (f64)b->center.z,
+                (f64)b->half.x, (f64)b->half.y, (f64)b->half.z);
+    }
+    fclose(out);
+    s_boxes_mtime = platform_file_mtime(s_boxes_path);
+    log_info("interact: saved boxes to %s", s_boxes_path);
+    return 1;
+}
 
 void interact_init(Interact* it)
 {
@@ -165,12 +260,14 @@ static void resolve_doors(Candidate* best, const struct Player* player, Vehicle*
                           PhysWorld* phys, Ray local, b32 on_foot)
 {
     Vec3 com = veh->cfg.com_offset;
-    Vec3 door_half = v3(0.10f, 0.26f, 0.62f);
+    const InteractBox* door_box = &s_boxes[IBOX_DOOR];
+    Vec3 door_half = door_box->half;
     f32 t;
     for (i32 side = 0; side < 2; side++) {
         f32 sign = side == 0 ? -1.0f : 1.0f;
         b32 open = sys->door_open[side] > DOOR_OPEN_FOR_USE;
-        Vec3 center = vec3_sub(v3(sign * 0.78f, -0.02f, 0.10f), com);
+        Vec3 center = vec3_sub(v3(sign * door_box->center.x, door_box->center.y,
+                                  door_box->center.z), com);
         if (ray_vs_local_box(local, center, door_half, &t)) {
             b32 taken = 0;
             if (on_foot) {
@@ -194,8 +291,10 @@ static void resolve_doors(Candidate* best, const struct Player* player, Vehicle*
             }
         }
         if (on_foot && open) {
-            Vec3 panel_center = vec3_sub(v3(sign * 1.45f, -0.02f, -0.18f), com);
-            Vec3 panel_half = v3(0.48f, 0.26f, 0.42f);
+            const InteractBox* panel_box = &s_boxes[IBOX_DOOR_PANEL];
+            Vec3 panel_center = vec3_sub(v3(sign * panel_box->center.x, panel_box->center.y,
+                                            panel_box->center.z), com);
+            Vec3 panel_half = panel_box->half;
             if (ray_vs_local_box(local, panel_center, panel_half, &t)
                 && candidate_consider(best, t + 0.10f, ACTION_CLOSE_DOOR, panel_center,
                                       panel_half, 0, "[E] close door")) {
@@ -218,24 +317,24 @@ static void resolve_in_car(Candidate* best, Interact* it, struct Player* player,
 
     resolve_doors(best, player, veh, sys, phys, local, 0);
 
-    Vec3 lever_center = vec3_sub(v3(-0.13f, -0.13f, 0.33f), com);
-    Vec3 lever_half = v3(0.09f, 0.10f, 0.16f);
+    Vec3 lever_center = vec3_sub(s_boxes[IBOX_HANDBRAKE].center, com);
+    Vec3 lever_half = s_boxes[IBOX_HANDBRAKE].half;
     if (ray_vs_local_box(local, lever_center, lever_half, &t)) {
         candidate_consider(best, t, ACTION_HANDBRAKE, lever_center, lever_half, 0,
                            sys->handbrake_latched ? "[E] release handbrake" : "[E] set handbrake");
     }
 
     static const char* wiper_modes[3] = { "off", "interval", "full" };
-    Vec3 stalk_center = vec3_sub(v3(-0.48f, 0.08f, -0.28f), com);
-    Vec3 stalk_half = v3(0.05f, 0.04f, 0.06f);
+    Vec3 stalk_center = vec3_sub(s_boxes[IBOX_WIPER].center, com);
+    Vec3 stalk_half = s_boxes[IBOX_WIPER].half;
     if (ray_vs_local_box(local, stalk_center, stalk_half, &t)) {
         char wprompt[96];
         snprintf(wprompt, sizeof(wprompt), "[E] wipers: %s", wiper_modes[sys->wiper_mode % 3]);
         candidate_consider(best, t, ACTION_WIPERS, stalk_center, stalk_half, 0, wprompt);
     }
 
-    Vec3 ignition_center = vec3_sub(v3(-0.22f, 0.05f, -0.28f), com);
-    Vec3 ignition_half = v3(0.07f, 0.06f, 0.08f);
+    Vec3 ignition_center = vec3_sub(s_boxes[IBOX_IGNITION].center, com);
+    Vec3 ignition_half = s_boxes[IBOX_IGNITION].half;
     if (ray_vs_local_box(local, ignition_center, ignition_half, &t)) {
         if (!sys->key_inserted) {
             if (it->has_key) {
@@ -274,15 +373,17 @@ static void resolve_in_car(Candidate* best, Interact* it, struct Player* player,
     }
     if (sys->parts[PART_COMPUTER].installed) {
         Quat rest = part_computer_rest_rot();
-        Vec3 slot_center = vec3_add(term_center, quat_rotate_vec3(rest, TERM_DISK_SLOT_LOCAL));
-        if (ray_vs_local_box(local, slot_center, TERM_DISK_SLOT_HALF, &t)) {
-            consider_disk_slot(best, it, sys, t - 0.30f, slot_center, TERM_DISK_SLOT_HALF);
+        Vec3 slot_center = vec3_add(term_center,
+                                    quat_rotate_vec3(rest, s_boxes[IBOX_DISK_SLOT].center));
+        if (ray_vs_local_box(local, slot_center, s_boxes[IBOX_DISK_SLOT].half, &t)) {
+            consider_disk_slot(best, it, sys, t - 0.30f, slot_center,
+                               s_boxes[IBOX_DISK_SLOT].half);
         }
     }
 
-    Vec3 deck_center = vec3_sub(DECK_LOCAL, com);
-    if (ray_vs_local_box(local, deck_center, DECK_SLOT_HALF, &t)) {
-        consider_deck_slot(best, it, sys, t - 0.15f, deck_center, DECK_SLOT_HALF);
+    Vec3 deck_center = vec3_sub(s_boxes[IBOX_DECK].center, com);
+    if (ray_vs_local_box(local, deck_center, s_boxes[IBOX_DECK].half, &t)) {
+        consider_deck_slot(best, it, sys, t - 0.15f, deck_center, s_boxes[IBOX_DECK].half);
     }
 
     for (i32 side = 0; side < 2; side++) {
@@ -383,15 +484,17 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
                 consider_cable_root(best, it, sys, (CableKind)pk, t - 0.45f, center, port_half);
             }
         }
-        Vec3 slot_center = vec3_add(term_base, quat_rotate_vec3(rest, TERM_DISK_SLOT_LOCAL));
-        if (ray_vs_local_box(local, slot_center, TERM_DISK_SLOT_HALF, &t)) {
-            consider_disk_slot(best, it, sys, t - 0.30f, slot_center, TERM_DISK_SLOT_HALF);
+        Vec3 slot_center = vec3_add(term_base,
+                                    quat_rotate_vec3(rest, s_boxes[IBOX_DISK_SLOT].center));
+        if (ray_vs_local_box(local, slot_center, s_boxes[IBOX_DISK_SLOT].half, &t)) {
+            consider_disk_slot(best, it, sys, t - 0.30f, slot_center,
+                               s_boxes[IBOX_DISK_SLOT].half);
         }
     }
 
     {
-        Vec3 jack_half = v3(0.055f, 0.055f, 0.055f);
-        Vec3 center = vec3_sub(ANTENNA_JACK_LOCAL, com);
+        Vec3 jack_half = s_boxes[IBOX_ANTENNA_JACK].half;
+        Vec3 center = vec3_sub(s_boxes[IBOX_ANTENNA_JACK].center, com);
         if (ray_vs_local_box(local, center, jack_half, &t)) {
             if (!sys->parts[PART_ANTENNA].installed && it->cable_drag == (i32)CABLE_COAX) {
                 candidate_consider(best, t - 0.20f, ACTION_INFO, center, jack_half, 0,
@@ -403,10 +506,10 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
             }
         }
         if (sys->hood_open >= HOOD_OPEN_FOR_BAY && sys->bus_target == BUS_TARGET_CAR) {
-            center = vec3_sub(BAY_JACK_LOCAL, com);
-            if (ray_vs_local_box(local, center, jack_half, &t)) {
-                consider_cable_jack(best, it, sys, CABLE_BUS, t - 0.20f, center, jack_half,
-                                    "vehicle bus");
+            center = vec3_sub(s_boxes[IBOX_BAY_JACK].center, com);
+            if (ray_vs_local_box(local, center, s_boxes[IBOX_BAY_JACK].half, &t)) {
+                consider_cable_jack(best, it, sys, CABLE_BUS, t - 0.20f, center,
+                                    s_boxes[IBOX_BAY_JACK].half, "vehicle bus");
             }
         }
     }
@@ -414,15 +517,15 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
     resolve_doors(best, player, veh, sys, phys, local, 1);
 
     if (sys->hood_open < 0.5f) {
-        Vec3 latch_half = v3(0.50f, 0.10f, 0.42f);
-        Vec3 latch_center = vec3_sub(v3(0.0f, 0.04f, -1.50f), com);
+        Vec3 latch_half = s_boxes[IBOX_HOOD_LATCH].half;
+        Vec3 latch_center = vec3_sub(s_boxes[IBOX_HOOD_LATCH].center, com);
         if (ray_vs_local_box(local, latch_center, latch_half, &t)) {
             candidate_consider(best, t + 0.15f, ACTION_TOGGLE_HOOD, latch_center, latch_half, 0,
                                "[E] open hood");
         }
     } else {
-        Vec3 raised_half = v3(0.50f, 0.62f, 0.30f);
-        Vec3 raised_center = vec3_sub(v3(0.0f, 0.72f, -0.92f), com);
+        Vec3 raised_half = s_boxes[IBOX_HOOD_RAISED].half;
+        Vec3 raised_center = vec3_sub(s_boxes[IBOX_HOOD_RAISED].center, com);
         if (ray_vs_local_box(local, raised_center, raised_half, &t)) {
             candidate_consider(best, t + 2.0f, ACTION_TOGGLE_HOOD, raised_center, raised_half, 0,
                                "[E] close hood");
@@ -430,15 +533,15 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
     }
 
     if (sys->trunk_open < 0.5f) {
-        Vec3 lid_half = v3(0.50f, 0.09f, 0.31f);
-        Vec3 lid_center = vec3_sub(v3(0.0f, 0.22f, 1.73f), com);
+        Vec3 lid_half = s_boxes[IBOX_TRUNK_LID].half;
+        Vec3 lid_center = vec3_sub(s_boxes[IBOX_TRUNK_LID].center, com);
         if (ray_vs_local_box(local, lid_center, lid_half, &t)) {
             candidate_consider(best, t, ACTION_TOGGLE_TRUNK, lid_center, lid_half, 0,
                                "[E] open trunk");
         }
     } else {
-        Vec3 edge_half = v3(0.50f, 0.38f, 0.16f);
-        Vec3 edge_center = vec3_sub(v3(0.0f, 0.55f, 1.52f), com);
+        Vec3 edge_half = s_boxes[IBOX_TRUNK_EDGE].half;
+        Vec3 edge_center = vec3_sub(s_boxes[IBOX_TRUNK_EDGE].center, com);
         if (ray_vs_local_box(local, edge_center, edge_half, &t)) {
             candidate_consider(best, t + 0.1f, ACTION_TOGGLE_TRUNK, edge_center, edge_half, 0,
                                "[E] close trunk");
@@ -499,8 +602,8 @@ static void resolve_car_targets(Candidate* best, const Interact* it, struct Play
         }
     }
 
-    Vec3 filler_half = v3(0.10f, 0.10f, 0.14f);
-    Vec3 filler_center = vec3_sub(v3(0.80f, 0.10f, 1.30f), com);
+    Vec3 filler_half = s_boxes[IBOX_FUEL].half;
+    Vec3 filler_center = vec3_sub(s_boxes[IBOX_FUEL].center, com);
     if (ray_vs_local_box(local, filler_center, filler_half, &t)) {
         if (it->hands.kind == ITEM_JERRYCAN) {
             if (sys->fuel_cap_open) {
@@ -554,7 +657,7 @@ static void resolve_pickups(Candidate* best, const Interact* it, CarSys* sys, Wo
             }
             Sphere slot;
             slot.center = vec3_add(entity->pos,
-                                   quat_rotate_vec3(entity->rot, TERM_DISK_SLOT_LOCAL));
+                                   quat_rotate_vec3(entity->rot, s_boxes[IBOX_DISK_SLOT].center));
             slot.radius = 0.09f;
             f32 st;
             if (ray_vs_sphere(view_ray, slot, INTERACT_RANGE, &st)) {
@@ -1045,6 +1148,35 @@ Handle interact_spawn_pickup(struct World* world, struct PhysWorld* phys, Item i
         }
     }
     return handle;
+}
+
+void interact_spawn_zone_pickups(struct World* world, struct PhysWorld* phys,
+                                 const struct Terrain* terrain,
+                                 const struct ZonePickups* pickups)
+{
+    for (u32 i = 0; i < pickups->count; i++) {
+        const ZonePickup* p = &pickups->items[i];
+        ItemKind kind = item_from_id(p->item);
+        if (kind == ITEM_NONE) {
+            log_warn("zone: unknown pickup item: %s", p->item);
+            continue;
+        }
+        f32 ground = heightfield_sample(&terrain->hf, p->x, p->z);
+        Ray down;
+        down.origin = v3(p->x, ground + 1.6f, p->z);
+        down.dir = v3(0.0f, -1.0f, 0.0f);
+        PhysRayHit hit;
+        if (phys_raycast(phys, down, 8.0f, &hit)) {
+            ground = hit.point.y;
+        }
+        Vec3 pos = v3(p->x, ground + item_cargo_half(kind).y + 0.10f, p->z);
+        Item item;
+        item.kind = kind;
+        item.condition = p->condition;
+        item.aux = p->aux;
+        interact_spawn_pickup(world, phys, item, pos, p->yaw_deg * DEG_TO_RAD, vec3_zero());
+    }
+    log_info("zone: spawned %u pickups", pickups->count);
 }
 
 b32 interact_drop(Interact* it, struct World* world, struct PhysWorld* phys, Vec3 origin,

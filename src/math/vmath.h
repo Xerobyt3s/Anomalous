@@ -178,6 +178,11 @@ static inline Vec3 quat_rotate_vec3(Quat q, Vec3 v)
     return vec3_add(vec3_add(v, vec3_scale(t, q.w)), vec3_cross(qv, t));
 }
 
+static inline f32 quat_yaw(Quat q)
+{
+    return atan2f(2.0f * (q.w * q.y + q.x * q.z), 1.0f - 2.0f * (q.y * q.y + q.x * q.x));
+}
+
 static inline Quat quat_integrate(Quat q, Vec3 angular_vel, f32 dt)
 {
     Quat omega = quat(angular_vel.x, angular_vel.y, angular_vel.z, 0.0f);
@@ -220,6 +225,7 @@ b32  aabb_vs_aabb(Aabb a, Aabb b);
 Frustum frustum_from_view_proj(Mat4 view_proj);
 b32     frustum_test_aabb(const Frustum* frustum, Aabb box);
 
+f32  closest_point_on_line_to_ray(Vec3 line_point, Vec3 line_dir, Ray ray);
 b32  ray_vs_aabb(Ray ray, Aabb box, f32 max_t, f32* out_t);
 b32  ray_vs_sphere(Ray ray, Sphere sphere, f32 max_t, f32* out_t);
 b32  ray_vs_plane(Ray ray, Plane plane, f32 max_t, f32* out_t);

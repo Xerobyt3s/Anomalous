@@ -34,6 +34,21 @@
     <Filter Include="tools">
       <UniqueIdentifier>{a1000000-0000-0000-0000-00000000000b}</UniqueIdentifier>
     </Filter>
+    <Filter Include="audio">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-00000000000c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="carsys">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-00000000000d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="player">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-00000000000e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="terminal">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-00000000000f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="editor">
+      <UniqueIdentifier>{a1000000-0000-0000-0000-000000000010}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\main.c" />
@@ -46,47 +61,8 @@
     <ClCompile Include="src\core\config.c">
       <Filter>core</Filter>
     </ClCompile>
-    <ClCompile Include="src\assets\assets.c">
-      <Filter>assets</Filter>
-    </ClCompile>
-    <ClCompile Include="src\render\terrain_render.c">
-      <Filter>render</Filter>
-    </ClCompile>
-    <ClCompile Include="src\world\terrain.c">
-      <Filter>world</Filter>
-    </ClCompile>
-    <ClCompile Include="src\world\world.c">
-      <Filter>world</Filter>
-    </ClCompile>
-    <ClCompile Include="src\world\zone.c">
-      <Filter>world</Filter>
-    </ClCompile>
     <ClCompile Include="src\core\pool.c">
       <Filter>core</Filter>
-    </ClCompile>
-    <ClCompile Include="src\ui\ui.c">
-      <Filter>ui</Filter>
-    </ClCompile>
-    <ClCompile Include="src\vehicle\drivetrain.c">
-      <Filter>vehicle</Filter>
-    </ClCompile>
-    <ClCompile Include="src\vehicle\tire.c">
-      <Filter>vehicle</Filter>
-    </ClCompile>
-    <ClCompile Include="src\vehicle\vehicle.c">
-      <Filter>vehicle</Filter>
-    </ClCompile>
-    <ClCompile Include="src\vehicle\vehicle_config.c">
-      <Filter>vehicle</Filter>
-    </ClCompile>
-    <ClCompile Include="src\physics\collide.c">
-      <Filter>physics</Filter>
-    </ClCompile>
-    <ClCompile Include="src\physics\heightfield.c">
-      <Filter>physics</Filter>
-    </ClCompile>
-    <ClCompile Include="src\physics\physics.c">
-      <Filter>physics</Filter>
     </ClCompile>
     <ClCompile Include="src\math\vmath.c">
       <Filter>math</Filter>
@@ -106,8 +82,119 @@
     <ClCompile Include="src\render\render.c">
       <Filter>render</Filter>
     </ClCompile>
+    <ClCompile Include="src\render\terrain_render.c">
+      <Filter>render</Filter>
+    </ClCompile>
     <ClCompile Include="src\render\text.c">
       <Filter>render</Filter>
+    </ClCompile>
+    <ClCompile Include="src\render\fontchain.c">
+      <Filter>render</Filter>
+    </ClCompile>
+    <ClCompile Include="src\physics\collide.c">
+      <Filter>physics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\physics\heightfield.c">
+      <Filter>physics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\physics\physics.c">
+      <Filter>physics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vehicle\drivetrain.c">
+      <Filter>vehicle</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vehicle\tire.c">
+      <Filter>vehicle</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vehicle\vehicle.c">
+      <Filter>vehicle</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vehicle\vehicle_config.c">
+      <Filter>vehicle</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vehicle\vehicle_render.c">
+      <Filter>vehicle</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\ui.c">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\assets\assets.c">
+      <Filter>assets</Filter>
+    </ClCompile>
+    <ClCompile Include="src\world\terrain.c">
+      <Filter>world</Filter>
+    </ClCompile>
+    <ClCompile Include="src\world\weather.c">
+      <Filter>world</Filter>
+    </ClCompile>
+    <ClCompile Include="src\world\world.c">
+      <Filter>world</Filter>
+    </ClCompile>
+    <ClCompile Include="src\world\zone.c">
+      <Filter>world</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\audio.c">
+      <Filter>audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\tapes.c">
+      <Filter>audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\carsys\carsys.c">
+      <Filter>carsys</Filter>
+    </ClCompile>
+    <ClCompile Include="src\carsys\carsys_render.c">
+      <Filter>carsys</Filter>
+    </ClCompile>
+    <ClCompile Include="src\carsys\electrics.c">
+      <Filter>carsys</Filter>
+    </ClCompile>
+    <ClCompile Include="src\carsys\fluids.c">
+      <Filter>carsys</Filter>
+    </ClCompile>
+    <ClCompile Include="src\carsys\items.c">
+      <Filter>carsys</Filter>
+    </ClCompile>
+    <ClCompile Include="src\carsys\parts.c">
+      <Filter>carsys</Filter>
+    </ClCompile>
+    <ClCompile Include="src\carsys\cables.c">
+      <Filter>carsys</Filter>
+    </ClCompile>
+    <ClCompile Include="src\player\interact.c">
+      <Filter>player</Filter>
+    </ClCompile>
+    <ClCompile Include="src\player\player.c">
+      <Filter>player</Filter>
+    </ClCompile>
+    <ClCompile Include="src\terminal\comms.c">
+      <Filter>terminal</Filter>
+    </ClCompile>
+    <ClCompile Include="src\terminal\disks.c">
+      <Filter>terminal</Filter>
+    </ClCompile>
+    <ClCompile Include="src\terminal\fs.c">
+      <Filter>terminal</Filter>
+    </ClCompile>
+    <ClCompile Include="src\terminal\mapdata.c">
+      <Filter>terminal</Filter>
+    </ClCompile>
+    <ClCompile Include="src\terminal\term_font.c">
+      <Filter>terminal</Filter>
+    </ClCompile>
+    <ClCompile Include="src\terminal\terminal.c">
+      <Filter>terminal</Filter>
+    </ClCompile>
+    <ClCompile Include="src\editor\editor.c">
+      <Filter>editor</Filter>
+    </ClCompile>
+    <ClCompile Include="src\editor\editor_scene.c">
+      <Filter>editor</Filter>
+    </ClCompile>
+    <ClCompile Include="src\editor\editor_brush.c">
+      <Filter>editor</Filter>
+    </ClCompile>
+    <ClCompile Include="src\editor\gizmo.c">
+      <Filter>editor</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -123,53 +210,11 @@
     <ClInclude Include="src\core\config.h">
       <Filter>core</Filter>
     </ClInclude>
-    <ClInclude Include="src\assets\assets.h">
-      <Filter>assets</Filter>
-    </ClInclude>
-    <ClInclude Include="src\assets\mesh_format.h">
-      <Filter>assets</Filter>
-    </ClInclude>
-    <ClInclude Include="src\render\terrain_render.h">
-      <Filter>render</Filter>
-    </ClInclude>
-    <ClInclude Include="src\world\terrain.h">
-      <Filter>world</Filter>
-    </ClInclude>
-    <ClInclude Include="src\world\world.h">
-      <Filter>world</Filter>
-    </ClInclude>
-    <ClInclude Include="src\world\zone.h">
-      <Filter>world</Filter>
-    </ClInclude>
     <ClInclude Include="src\core\pool.h">
       <Filter>core</Filter>
     </ClInclude>
-    <ClInclude Include="src\ui\ui.h">
-      <Filter>ui</Filter>
-    </ClInclude>
-    <ClInclude Include="src\vehicle\drivetrain.h">
-      <Filter>vehicle</Filter>
-    </ClInclude>
-    <ClInclude Include="src\vehicle\tire.h">
-      <Filter>vehicle</Filter>
-    </ClInclude>
-    <ClInclude Include="src\vehicle\vehicle.h">
-      <Filter>vehicle</Filter>
-    </ClInclude>
-    <ClInclude Include="src\vehicle\vehicle_config.h">
-      <Filter>vehicle</Filter>
-    </ClInclude>
     <ClInclude Include="src\core\rng.h">
       <Filter>core</Filter>
-    </ClInclude>
-    <ClInclude Include="src\physics\collide.h">
-      <Filter>physics</Filter>
-    </ClInclude>
-    <ClInclude Include="src\physics\heightfield.h">
-      <Filter>physics</Filter>
-    </ClInclude>
-    <ClInclude Include="src\physics\physics.h">
-      <Filter>physics</Filter>
     </ClInclude>
     <ClInclude Include="src\math\vmath.h">
       <Filter>math</Filter>
@@ -189,8 +234,119 @@
     <ClInclude Include="src\render\render.h">
       <Filter>render</Filter>
     </ClInclude>
+    <ClInclude Include="src\render\terrain_render.h">
+      <Filter>render</Filter>
+    </ClInclude>
     <ClInclude Include="src\render\text.h">
       <Filter>render</Filter>
+    </ClInclude>
+    <ClInclude Include="src\render\fontchain.h">
+      <Filter>render</Filter>
+    </ClInclude>
+    <ClInclude Include="src\physics\collide.h">
+      <Filter>physics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\physics\heightfield.h">
+      <Filter>physics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\physics\physics.h">
+      <Filter>physics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vehicle\drivetrain.h">
+      <Filter>vehicle</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vehicle\tire.h">
+      <Filter>vehicle</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vehicle\vehicle.h">
+      <Filter>vehicle</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vehicle\vehicle_config.h">
+      <Filter>vehicle</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vehicle\vehicle_render.h">
+      <Filter>vehicle</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\ui.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\assets\assets.h">
+      <Filter>assets</Filter>
+    </ClInclude>
+    <ClInclude Include="src\assets\mesh_format.h">
+      <Filter>assets</Filter>
+    </ClInclude>
+    <ClInclude Include="src\world\terrain.h">
+      <Filter>world</Filter>
+    </ClInclude>
+    <ClInclude Include="src\world\weather.h">
+      <Filter>world</Filter>
+    </ClInclude>
+    <ClInclude Include="src\world\world.h">
+      <Filter>world</Filter>
+    </ClInclude>
+    <ClInclude Include="src\world\zone.h">
+      <Filter>world</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\audio.h">
+      <Filter>audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\tapes.h">
+      <Filter>audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\carsys\carsys.h">
+      <Filter>carsys</Filter>
+    </ClInclude>
+    <ClInclude Include="src\carsys\carsys_render.h">
+      <Filter>carsys</Filter>
+    </ClInclude>
+    <ClInclude Include="src\carsys\electrics.h">
+      <Filter>carsys</Filter>
+    </ClInclude>
+    <ClInclude Include="src\carsys\fluids.h">
+      <Filter>carsys</Filter>
+    </ClInclude>
+    <ClInclude Include="src\carsys\items.h">
+      <Filter>carsys</Filter>
+    </ClInclude>
+    <ClInclude Include="src\carsys\parts.h">
+      <Filter>carsys</Filter>
+    </ClInclude>
+    <ClInclude Include="src\carsys\cables.h">
+      <Filter>carsys</Filter>
+    </ClInclude>
+    <ClInclude Include="src\player\interact.h">
+      <Filter>player</Filter>
+    </ClInclude>
+    <ClInclude Include="src\player\player.h">
+      <Filter>player</Filter>
+    </ClInclude>
+    <ClInclude Include="src\terminal\comms.h">
+      <Filter>terminal</Filter>
+    </ClInclude>
+    <ClInclude Include="src\terminal\disks.h">
+      <Filter>terminal</Filter>
+    </ClInclude>
+    <ClInclude Include="src\terminal\fs.h">
+      <Filter>terminal</Filter>
+    </ClInclude>
+    <ClInclude Include="src\terminal\mapdata.h">
+      <Filter>terminal</Filter>
+    </ClInclude>
+    <ClInclude Include="src\terminal\term_font.h">
+      <Filter>terminal</Filter>
+    </ClInclude>
+    <ClInclude Include="src\terminal\terminal.h">
+      <Filter>terminal</Filter>
+    </ClInclude>
+    <ClInclude Include="src\editor\editor.h">
+      <Filter>editor</Filter>
+    </ClInclude>
+    <ClInclude Include="src\editor\editor_brush.h">
+      <Filter>editor</Filter>
+    </ClInclude>
+    <ClInclude Include="src\editor\gizmo.h">
+      <Filter>editor</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

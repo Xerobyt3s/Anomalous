@@ -11,6 +11,7 @@ struct GpuMesh;
 
 #define ENTITY_FLAG_COLLIDES (1u << 0)
 #define ENTITY_FLAG_INTERACTABLE (1u << 1)
+#define ENTITY_FLAG_TOWER (1u << 2)
 
 typedef enum EntityKind {
     ENTITY_STATIC_MESH,
@@ -29,6 +30,7 @@ typedef struct Entity {
     Vec3 pos;
     Quat rot;
     f32 scale;
+    Vec3 half;
     const struct GpuMesh* mesh;
     char mesh_name[32];
     u32 aux_kind;
@@ -46,4 +48,5 @@ EntityHandle world_spawn(World* world, EntityKind kind, Vec3 pos, Quat rot, f32 
                          const char* mesh_name, u32 flags);
 Entity*      world_entity(World* world, EntityHandle handle);
 void         world_despawn(World* world, EntityHandle handle);
+void         world_clear(World* world);
 void         world_render(World* world);

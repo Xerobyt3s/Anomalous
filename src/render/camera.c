@@ -46,6 +46,23 @@ Mat4 camera_proj(const Camera* cam, f32 aspect)
     return mat4_perspective(cam->fov_y, aspect, cam->znear, cam->zfar);
 }
 
+Ray camera_mouse_ray(const Camera* cam, f32 mouse_x, f32 mouse_y, Vec2 viewport)
+{
+    f32 ndc_x = mouse_x / viewport.x * 2.0f - 1.0f;
+    f32 ndc_y = 1.0f - mouse_y / viewport.y * 2.0f;
+    f32 tan_half = tanf(cam->fov_y * 0.5f);
+    f32 aspect = viewport.x / viewport.y;
+    Vec3 forward = camera_forward(cam);
+    Vec3 right = camera_right(cam);
+    Vec3 up = vec3_cross(right, forward);
+    Ray ray;
+    ray.origin = cam->pos;
+    ray.dir = vec3_normalize(vec3_add(forward,
+                                      vec3_add(vec3_scale(right, ndc_x * tan_half * aspect),
+                                               vec3_scale(up, ndc_y * tan_half))));
+    return ray;
+}
+
 void camera_fly_update(Camera* cam, const struct GameInput* input, f32 dt)
 {
     const GameInput* in = input;

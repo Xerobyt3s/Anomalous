@@ -1,5 +1,7 @@
 #include "carsys/items.h"
 
+#include <string.h>
+
 static const struct {
     const char* name;
     const char* mesh;
@@ -26,9 +28,30 @@ static const struct {
     { "cassette",   "part_cassette",   0.2f,  { 0.06f, 0.012f, 0.042f }, 0.0f, { 0.0f, 0.0f, 0.0f } },
 };
 
+static const char* s_item_ids[ITEM_KIND_COUNT] = {
+    "nothing", "battery", "alternator", "radiator", "tire", "jerrycan", "oilcan",
+    "computer", "antenna_whip", "antenna_std", "antenna_array", "key", "floppy",
+    "camera", "reel", "cassette",
+};
+
 const char* item_name(ItemKind kind)
 {
     return s_items[kind].name;
+}
+
+const char* item_id(ItemKind kind)
+{
+    return s_item_ids[kind];
+}
+
+ItemKind item_from_id(const char* id)
+{
+    for (u32 k = 1; k < ITEM_KIND_COUNT; k++) {
+        if (strcmp(id, s_item_ids[k]) == 0) {
+            return (ItemKind)k;
+        }
+    }
+    return ITEM_NONE;
 }
 
 const char* item_mesh(ItemKind kind)

@@ -21,4 +21,5 @@ Vec3 camera_forward(const Camera* cam);
 Vec3 camera_right(const Camera* cam);
 Mat4 camera_view(const Camera* cam);
 Mat4 camera_proj(const Camera* cam, f32 aspect);
+Ray  camera_mouse_ray(const Camera* cam, f32 mouse_x, f32 mouse_y, Vec2 viewport);
 void camera_fly_update(Camera* cam, const struct GameInput* input, f32 dt);

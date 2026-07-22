@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <string.h>
 
 #define UI_PADDING 8.0f
 #define UI_ROW_HEIGHT 20.0f
@@ -20,9 +21,16 @@
 #define UI_HANDLE_COLOR dd_rgba(120, 170, 230, 255)
 #define UI_HANDLE_HOT_COLOR dd_rgba(170, 210, 255, 255)
 
+#define UI_MAX_PANELS 8
+
+typedef struct UiRect {
+    f32 x0, y0, x1, y1;
+} UiRect;
+
 typedef struct UiState {
     const GameInput* input;
     const void* active_id;
+    const void* active_text;
     f32 panel_x;
     f32 panel_y;
     f32 panel_width;
@@ -30,6 +38,10 @@ typedef struct UiState {
     f32 panel_start_y;
     u32 panel_bg_slot;
     b32 in_panel;
+    UiRect panels[UI_MAX_PANELS];
+    u32 panel_count;
+    UiRect prev_panels[UI_MAX_PANELS];
+    u32 prev_panel_count;
 } UiState;
 
 static UiState s_ui;
@@ -40,6 +52,32 @@ void ui_begin_frame(const struct GameInput* input)
     if (!input->mouse_down[MOUSE_LEFT]) {
         s_ui.active_id = 0;
     }
+    if (input->mouse_pressed[MOUSE_LEFT] && !ui_mouse_over_panel(input)) {
+        s_ui.active_text = 0;
+    }
+    if (input->key_pressed[KEY_ESCAPE]) {
+        s_ui.active_text = 0;
+    }
+    memcpy(s_ui.prev_panels, s_ui.panels, sizeof(s_ui.panels));
+    s_ui.prev_panel_count = s_ui.panel_count;
+    s_ui.panel_count = 0;
+}
+
+b32 ui_text_active(void)
+{
+    return s_ui.active_text != 0;
+}
+
+b32 ui_mouse_over_panel(const struct GameInput* input)
+{
+    for (u32 i = 0; i < s_ui.prev_panel_count; i++) {
+        const UiRect* r = &s_ui.prev_panels[i];
+        if (input->mouse_x >= r->x0 && input->mouse_x <= r->x1
+            && input->mouse_y >= r->y0 && input->mouse_y <= r->y1) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 void ui_panel_begin(const char* title, f32 x, f32 y, f32 width)
@@ -152,6 +190,119 @@ void ui_graph(const char* label, const f32* samples, u32 capacity, u32 head, f32
     s_ui.cursor_y += UI_GRAPH_HEIGHT + 8.0f;
 }
 
+b32 ui_button(const char* label)
+{
+    f32 x0 = s_ui.panel_x + UI_PADDING;
+    f32 x1 = s_ui.panel_x + s_ui.panel_width - UI_PADDING;
+    f32 y0 = s_ui.cursor_y;
+    f32 y1 = y0 + UI_ROW_HEIGHT + 2.0f;
+
+    const GameInput* in = s_ui.input;
+    b32 hovering = ui_mouse_in(x0, y0, x1, y1);
+    u32 fill = hovering ? dd_rgba(58, 76, 104, 255) : dd_rgba(38, 48, 62, 255);
+    dd_rect_2d_filled(x0, y0, x1, y1, fill);
+    dd_rect_2d(x0, y0, x1, y1, UI_BORDER_COLOR);
+    f32 tw = text_measure(label, UI_TEXT_SIZE);
+    text_draw(x0 + (x1 - x0 - tw) * 0.5f, y0 + UI_TEXT_SIZE + 1.0f, UI_TEXT_SIZE, UI_TITLE_COLOR, label);
+
+    s_ui.cursor_y = y1 + 4.0f;
+    return hovering && in->mouse_pressed[MOUSE_LEFT];
+}
+
+b32 ui_checkbox(const char* label, b32* value)
+{
+    f32 x0 = s_ui.panel_x + UI_PADDING;
+    f32 box = UI_TRACK_HEIGHT + 2.0f;
+    f32 y0 = s_ui.cursor_y;
+    f32 y1 = y0 + box;
+
+    const GameInput* in = s_ui.input;
+    b32 hovering = ui_mouse_in(x0, y0, s_ui.panel_x + s_ui.panel_width - UI_PADDING, y1);
+    dd_rect_2d_filled(x0, y0, x0 + box, y1, UI_TRACK_COLOR);
+    if (*value) {
+        dd_rect_2d_filled(x0 + 3.0f, y0 + 3.0f, x0 + box - 3.0f, y1 - 3.0f, UI_HANDLE_COLOR);
+    }
+    dd_rect_2d(x0, y0, x0 + box, y1, UI_BORDER_COLOR);
+    text_draw(x0 + box + 6.0f, y0 + UI_TEXT_SIZE - 1.0f, UI_TEXT_SIZE, UI_LABEL_COLOR, label);
+
+    s_ui.cursor_y = y1 + 6.0f;
+    b32 changed = 0;
+    if (hovering && in->mouse_pressed[MOUSE_LEFT]) {
+        *value = !*value;
+        changed = 1;
+    }
+    return changed;
+}
+
+b32 ui_list_item(const char* label, b32 selected)
+{
+    f32 x0 = s_ui.panel_x + UI_PADDING;
+    f32 x1 = s_ui.panel_x + s_ui.panel_width - UI_PADDING;
+    f32 y0 = s_ui.cursor_y;
+    f32 y1 = y0 + UI_ROW_HEIGHT;
+
+    const GameInput* in = s_ui.input;
+    b32 hovering = ui_mouse_in(x0, y0, x1, y1);
+    if (selected) {
+        dd_rect_2d_filled(x0, y0, x1, y1, dd_rgba(52, 88, 130, 255));
+    } else if (hovering) {
+        dd_rect_2d_filled(x0, y0, x1, y1, dd_rgba(34, 42, 54, 255));
+    }
+    text_draw(x0 + 4.0f, y0 + UI_TEXT_SIZE - 1.0f, UI_TEXT_SIZE, UI_LABEL_COLOR, label);
+
+    s_ui.cursor_y = y1 + 1.0f;
+    return hovering && in->mouse_pressed[MOUSE_LEFT];
+}
+
+b32 ui_text_field(const char* label, char* buf, u32 cap)
+{
+    f32 x0 = s_ui.panel_x + UI_PADDING;
+    f32 x1 = s_ui.panel_x + s_ui.panel_width - UI_PADDING;
+
+    text_draw(x0, s_ui.cursor_y + UI_TEXT_SIZE, UI_TEXT_SIZE, UI_LABEL_COLOR, label);
+    s_ui.cursor_y += UI_ROW_HEIGHT - 2.0f;
+
+    f32 y0 = s_ui.cursor_y;
+    f32 y1 = y0 + UI_ROW_HEIGHT;
+    const GameInput* in = s_ui.input;
+    b32 hovering = ui_mouse_in(x0, y0, x1, y1);
+    if (hovering && in->mouse_pressed[MOUSE_LEFT]) {
+        if (s_ui.active_text != buf) {
+            while (platform_next_char() != 0) {
+            }
+        }
+        s_ui.active_text = buf;
+    }
+    b32 focused = s_ui.active_text == buf;
+
+    dd_rect_2d_filled(x0, y0, x1, y1, dd_rgba(8, 10, 14, 235));
+    dd_rect_2d(x0, y0, x1, y1, focused ? UI_HANDLE_COLOR : UI_BORDER_COLOR);
+
+    b32 submitted = 0;
+    if (focused) {
+        u32 len = (u32)strlen(buf);
+        if (in->key_pressed[KEY_BACKSPACE] && len > 0) {
+            buf[len - 1] = 0;
+            len--;
+        }
+        u32 ch;
+        while ((ch = platform_next_char()) != 0) {
+            if (ch >= 32 && ch < 127 && len + 1 < cap) {
+                buf[len++] = (char)ch;
+                buf[len] = 0;
+            }
+        }
+        if (in->key_pressed[KEY_ENTER]) {
+            submitted = 1;
+            s_ui.active_text = 0;
+        }
+    }
+    text_draw(x0 + 4.0f, y0 + UI_TEXT_SIZE - 1.0f, UI_TEXT_SIZE, UI_TITLE_COLOR, buf);
+
+    s_ui.cursor_y = y1 + 6.0f;
+    return submitted;
+}
+
 void ui_panel_end(void)
 {
     f32 x0 = s_ui.panel_x;
@@ -161,4 +312,12 @@ void ui_panel_end(void)
     dd_rect_2d_fill_reserved(s_ui.panel_bg_slot, x0, y0, x1, y1, UI_BG_COLOR);
     dd_rect_2d(x0, y0, x1, y1, UI_BORDER_COLOR);
     s_ui.in_panel = 0;
+
+    if (s_ui.panel_count < UI_MAX_PANELS) {
+        UiRect* r = &s_ui.panels[s_ui.panel_count++];
+        r->x0 = x0;
+        r->y0 = y0;
+        r->x1 = x1;
+        r->y1 = y1;
+    }
 }
