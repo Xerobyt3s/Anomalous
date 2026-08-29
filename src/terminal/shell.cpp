@@ -21,7 +21,6 @@ constexpr std::string_view kHelpText =
     "  RUN FILE        run program (or just type its name)\n"
     "  CHKDSK [X:]     disk space report\n"
     "  FORMAT X:       erase a drive\n"
-    "  MISSION         current objective\n"
     "  CLS / VER / OFF\n"
     "PROGRAMS ARE .EXE FILES ON DISK. USE LS TO SEE THEM.\n";
 
@@ -679,8 +678,6 @@ void Shell::run(std::string_view command)
         } else if (!try_exe(arg1)) {
             screen_.print("FILE NOT FOUND\n");
         }
-    } else if (is_command(head, "MISSION")) {
-        request_.mission = true;
     } else if (is_command(head, "CLS")) {
         screen_.reset();
     } else if (is_command(head, "VER")) {

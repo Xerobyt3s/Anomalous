@@ -73,7 +73,6 @@ private:
     void set_mode(TermMode mode, const TermView& view);
     void launch(const FsNode& node, const TermView& view);
     void av_scan();
-    void print_objective(u32 stage);
 
     Virus virus_;
     MapData mapdata_;

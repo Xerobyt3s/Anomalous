@@ -5,6 +5,12 @@
 layout(location = 1) uniform vec4 u_cam;
 layout(location = 2) uniform vec4 u_field;
 
+// Volumes that press the grass down, two vec4 per entry:
+//   (centre.xz, underside y, unused), then the box's world XZ axes divided by their half
+//   extents, so a root is inside when both projections land within [-1, 1].
+layout(location = 3) uniform vec4 u_press[16];
+layout(location = 19) uniform int u_press_count;
+
 layout(binding = 3) uniform sampler2D u_roadmask;
 layout(binding = 4) uniform sampler2D u_height;
 
@@ -70,6 +76,8 @@ void main()
     width = max(width, minimum_width) * (fade > 0.0 ? 1.0 : 0.0);
 
     float keep = pow(1.0 / inflation, 0.75) * fade;
+    vec2 to_edge = min(uv, 1.0 - uv) / u_field.zw;
+    keep *= smoothstep(0.0, 70.0, min(to_edge.x, to_edge.y));
     keep *= step(road, 0.30);
     keep *= step(0.72, terrain_normal.y);
     keep *= 1.0 - smoothstep(24.0, 32.0, ground);
@@ -77,6 +85,20 @@ void main()
         height = 0.0;
         width = 0.0;
     }
+
+    float squash = 1.0;
+    for (int c = 0; c < u_press_count; c++) {
+        vec4 box = u_press[c * 2];
+        vec4 axes = u_press[c * 2 + 1];
+        vec2 d = root.xz - box.xy;
+        if (abs(dot(d, axes.xy)) > 1.0 || abs(dot(d, axes.zw)) > 1.0) {
+            continue;
+        }
+        float clearance = box.z - root.y - 0.02;
+        squash = min(squash, clamp(clearance / max(height, 1e-3), 0.0, 1.0));
+    }
+    height *= squash;
+    width *= step(0.004, height);
 
     vec3 lean = vec3(cos(yaw), 0.0, sin(yaw));
     vec3 sideways = vec3(-sin(yaw), 0.0, cos(yaw));
@@ -89,6 +111,7 @@ void main()
     float gust = smoothstep(0.15, 1.0, sin(along_wind * 0.020 - time * 0.33));
     float bend = (0.22 + 0.85 * gust) * sway * WIND_STRENGTH * BEND_SCALE;
     bend += (fract(phase * 0.1591) - 0.45) * 1.15 * BEND_SCALE;
+    bend += (1.0 - squash) * 1.8;
 
     float taper = 1.0 - t * t * 0.85;
     vec3 position = root;

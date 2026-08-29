@@ -157,6 +157,18 @@ bool AssetCache::upload_mesh(MeshEntry& entry)
     glVertexArrayAttribFormat(mesh.vao, 2, 2, GL_FLOAT, GL_FALSE, offsetof(AmshVertex, uv));
     glVertexArrayAttribBinding(mesh.vao, 2, 0);
 
+    if (instance_vbo_) {
+        glVertexArrayVertexBuffer(mesh.vao, 1, instance_vbo_, 0, sizeof(Mat4));
+        glVertexArrayBindingDivisor(mesh.vao, 1, 1);
+        for (u32 col = 0; col < 4; col++) {
+            const u32 attrib = 3 + col;
+            glEnableVertexArrayAttrib(mesh.vao, attrib);
+            glVertexArrayAttribFormat(mesh.vao, attrib, 4, GL_FLOAT, GL_FALSE,
+                                      col * 4 * sizeof(f32));
+            glVertexArrayAttribBinding(mesh.vao, attrib, 1);
+        }
+    }
+
     mesh.submesh_count = static_cast<u32>(data.submeshes.size());
     for (u32 i = 0; i < mesh.submesh_count; i++) {
         mesh.submeshes[i].first_index = data.submeshes[i].first_index;

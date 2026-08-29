@@ -15,6 +15,7 @@ public:
     static constexpr u32 kMaxChunks = 256;
     static constexpr u32 kScrubGrid = 512;
     static constexpr f32 kScrubFadeEnd = 38.0f;
+    static constexpr u32 kMaxPressVolumes = 8;
 
     bool init(RenderDevice& device, Arena& scratch, const Heightfield& hf,
               const u8* roadmask, u32 mask_size);
@@ -22,6 +23,9 @@ public:
 
     void draw(RenderDevice& device);
     void draw_scrub(RenderDevice& device, Vec3 cam_pos, f32 time);
+
+    void clear_press_volumes() { press_count_ = 0; }
+    void add_press_volume(Vec3 centre, Vec3 half_extents, Quat rot);
 
     u32 chunks_drawn() const { return chunks_drawn_; }
     u32 chunk_count() const { return chunk_count_; }
@@ -32,6 +36,9 @@ private:
         u32 index_count;
         Aabb bounds;
     };
+
+    Vec4 press_[kMaxPressVolumes * 2] = {};
+    u32 press_count_ = 0;
 
     Chunk chunks_[kMaxChunks];
     u32 chunk_count_ = 0;

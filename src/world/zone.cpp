@@ -7,6 +7,7 @@
 #include "physics/heightfield.h"
 #include "physics/world.h"
 #include "platform/filesystem.h"
+#include "render/tree.h"
 #include "world/entity.h"
 #include "world/terrain.h"
 
@@ -118,6 +119,36 @@ void add_mesh_collision(PhysWorld& phys, Arena& scratch, std::string_view mesh_n
     }
 }
 
+u32 tree_variant_for(Vec3 pos)
+{
+    const i32 xi = static_cast<i32>(std::floor(pos.x * 4.0f));
+    const i32 zi = static_cast<i32>(std::floor(pos.z * 4.0f));
+    u32 h = static_cast<u32>(xi * 73856093) ^ static_cast<u32>(zi * 19349663);
+    h ^= h >> 13;
+    h *= 0x85EBCA6Bu;
+    h ^= h >> 16;
+    return h % kTreeVariants;
+}
+
+void add_tree_collision(PhysWorld& phys, Arena& scratch, u32 variant, Vec3 pos, Quat rot,
+                        f32 scale)
+{
+    ArenaScope scope(scratch);
+    TreeData data;
+    if (!tree_generate(variant, scratch, data)) {
+        return;
+    }
+    const Mat3 rotation = quat_to_mat3(rot);
+    for (u32 i = 0; i + 2 < data.trunk_index_count; i += 3) {
+        Vec3 tri[3];
+        for (u32 k = 0; k < 3; k++) {
+            const Vec3 local = data.vertices[data.indices[i + k]].pos * scale;
+            tri[k] = pos + rotation * local;
+        }
+        phys.add_static_tri(tri[0], tri[1], tri[2]);
+    }
+}
+
 void spawn_entity(World& world, PhysWorld& phys, Arena& scratch, const Terrain& terrain,
                   std::string_view line)
 {
@@ -141,7 +172,16 @@ void spawn_entity(World& world, PhysWorld& phys, Arena& scratch, const Terrain& 
     const Quat rot = quat_from_euler(yaw_deg * kDegToRad, pitch_deg * kDegToRad,
                                      roll_deg * kDegToRad);
 
-    world.spawn(kind, pos, rot, scale, mesh_name, kEntityFlagCollides);
+    const EntityHandle handle = world.spawn(kind, pos, rot, scale, mesh_name,
+                                            kEntityFlagCollides);
+    if (kind == EntityKind::Tree) {
+        const u32 variant = tree_variant_for(pos);
+        if (Entity* e = world.entity(handle)) {
+            e->aux_kind = variant;
+        }
+        add_tree_collision(phys, scratch, variant, pos, rot, scale);
+        return;
+    }
     add_mesh_collision(phys, scratch, mesh_name, kind, pos, rot, scale);
 }
 

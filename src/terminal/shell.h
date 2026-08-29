@@ -33,12 +33,11 @@ struct ShellRequest {
     FsRef launch_ref{kFsDriveA, -1};
     i32 view_pic = -1;
     FixedString<kFsNameMax + 1> view_name;
-    bool mission = false;
     bool power_off = false;
 
     bool any() const
     {
-        return launch_ref.node >= 0 || view_pic > 0 || mission || power_off;
+        return launch_ref.node >= 0 || view_pic > 0 || power_off;
     }
 };
 

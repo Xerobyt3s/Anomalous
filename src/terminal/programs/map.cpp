@@ -135,9 +135,6 @@ void MapProgram::rebuild_lidar(const TermView& view)
 
     if (lidar_tier_ >= 1) {
         add_marker_column(view, view.garage_pos, 2.0f);
-        if (view.mission_stage == 1 || view.mission_stage == 2) {
-            add_marker_column(view, view.mission_pos, 3.0f);
-        }
     }
     points_dirty_ = true;
 }
@@ -174,9 +171,6 @@ void MapProgram::rebuild_lidar_wide(const TermView& view)
 
     if (lidar_tier_ >= 1) {
         add_marker_column(view, view.garage_pos, 2.0f);
-        if (view.mission_stage == 1 || view.mission_stage == 2) {
-            add_marker_column(view, view.mission_pos, 3.0f);
-        }
     }
     points_dirty_ = true;
 }
@@ -410,18 +404,10 @@ void MapProgram::update(const ProgramContext& ctx, const TermView& view, f32 dt)
     }
 
     if (view.antenna_tier >= 1) {
-        const Vec3 marks[2] = {view.garage_pos, view.mission_pos};
-        static const char* kLabels[2] = {"G", "X"};
-        const bool show[2] = {true, view.mission_stage == 1 || view.mission_stage == 2};
-        for (u32 m = 0; m < 2; m++) {
-            if (!show[m] || (m == 1 && std::fmod(ctx.blink, 0.7f) > 0.45f)) {
-                continue;
-            }
-            Vec3 top = marks[m];
-            top.y = hf.sample(top.x, top.z) + 52.0f;
-            if (project(vp, top, row, col)) {
-                s.grid_text(row, col, TC_AMBER, "%s", kLabels[m]);
-            }
+        Vec3 top = view.garage_pos;
+        top.y = hf.sample(top.x, top.z) + 52.0f;
+        if (project(vp, top, row, col)) {
+            s.grid_text(row, col, TC_AMBER, "G");
         }
     }
 
@@ -432,7 +418,7 @@ void MapProgram::update(const ProgramContext& ctx, const TermView& view, f32 dt)
         s.grid_text(last_row, 1, TC_DIM, "[M] WIDE RANGE   < > ORBIT   ^ v ZOOM   %s",
                     auto_orbit_ ? "AUTO" : "    ");
     }
-    s.grid_text(last_row, static_cast<i32>(kTermCols) - 20, TC_DIM, "@ CAR  G GAR  X OBJ");
+    s.grid_text(last_row, static_cast<i32>(kTermCols) - 15, TC_DIM, "@ CAR   G GARAGE");
 }
 
 void MapProgram::key_char(const ProgramContext& ctx, const TermView& view, char c)

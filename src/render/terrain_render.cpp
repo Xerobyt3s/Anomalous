@@ -222,12 +222,30 @@ void TerrainRenderer::draw_scrub(RenderDevice& device, Vec3 cam_pos, f32 time)
     }
     glProgramUniform4f(program, 1, cam_pos.x, cam_pos.z, time, kScrubFadeEnd);
     glProgramUniform4f(program, 2, params_.x, params_.y, params_.z, params_.w);
+    glProgramUniform1i(program, 19, static_cast<i32>(press_count_));
+    if (press_count_ > 0) {
+        glProgramUniform4fv(program, 3, static_cast<GLsizei>(press_count_ * 2), &press_[0].x);
+    }
     device.use_program(program);
     device.bind_vao(scrub_vao_);
     device.bind_texture(3, mask_texture_);
     device.bind_texture(4, height_texture_);
     device.set_cull(false);
     glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 12, kScrubGrid * kScrubGrid);
+}
+
+void TerrainRenderer::add_press_volume(Vec3 centre, Vec3 half_extents, Quat rot)
+{
+    if (press_count_ >= kMaxPressVolumes
+        || half_extents.x < 1e-3f || half_extents.z < 1e-3f) {
+        return;
+    }
+    const Vec3 ax = rotate(rot, Vec3{1.0f, 0.0f, 0.0f});
+    const Vec3 az = rotate(rot, Vec3{0.0f, 0.0f, 1.0f});
+    press_[press_count_ * 2] = Vec4{centre.x, centre.z, centre.y - half_extents.y, 0.0f};
+    press_[press_count_ * 2 + 1] = Vec4{ax.x / half_extents.x, ax.z / half_extents.x,
+                                        az.x / half_extents.z, az.z / half_extents.z};
+    press_count_++;
 }
 
 void TerrainRenderer::shutdown()

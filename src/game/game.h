@@ -14,6 +14,7 @@
 #include "player/player.h"
 #include "render/camera.h"
 #include "render/device.h"
+#include "render/tree.h"
 #include "terminal/disks.h"
 #include "terminal/term_render.h"
 #include "terminal/terminal.h"
@@ -131,6 +132,9 @@ private:
     void draw_hud(DebugDraw& debug, TextRenderer& text, Vec2 viewport, f32 frame_dt);
     void draw_debug_overlays(DebugDraw& debug);
     void bind_entity_meshes(RenderDevice& device);
+    void draw_entities(RenderDevice& device);
+    void collect_trees();
+    void update_grass_press(TerrainRenderer& terrain_renderer);
     void draw_vehicle(RenderDevice& device);
     void draw_viewmodel(RenderDevice& device);
 
@@ -146,6 +150,7 @@ private:
     TapeLibrary tapes_;
     Audio audio_;
     CarSysRenderer car_render_;
+    TreeRenderer tree_render_;
     DiskStore disks_;
     Terminal terminal_{tapes_};
     TermRenderer term_render_;

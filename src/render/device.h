@@ -39,6 +39,7 @@ struct DrawStats {
     u32 meshes_submitted = 0;
     u32 meshes_culled = 0;
     u32 draw_calls = 0;
+    u32 instanced_submeshes = 0;
     u32 program_binds = 0;
     u32 vao_binds = 0;
     u32 texture_binds = 0;
@@ -49,6 +50,7 @@ public:
     static constexpr i32 kShadowSize = 2048;
     static constexpr i32 kBloomMips = 6;
     static constexpr u32 kPointLights = 4;
+    static constexpr u32 kMaxMeshDraws = 2048;
     static constexpr i32 kVideoWidth = 320;
     static constexpr i32 kVideoHeight = 200;
 
@@ -83,6 +85,7 @@ public:
 
     void draw_sky(f32 time);
     void draw_mesh(const GpuMesh* mesh, const Mat4& model);
+    void flush_meshes();
     void draw_glass(const GpuMesh* mesh, const Mat4& model, f32 time);
     void draw_rain(f32 intensity, f32 wind, Vec3 cam_vel, f32 time);
     void scene_grab();
@@ -130,6 +133,17 @@ private:
     f32 time_seconds_ = 0.0f;
     DrawStats stats_;
     StateCache state_;
+
+    struct MeshDraw {
+        const GpuMesh* mesh = nullptr;
+        Mat4 model = mat4_identity();
+    };
+
+    MeshDraw mesh_queue_[kMaxMeshDraws];
+    Mat4 instance_staging_[kMaxMeshDraws];
+    u32 mesh_queue_count_ = 0;
+    u32 instance_vbo_ = 0;
+    u32 instance_cursor_ = 0;
 
     u32 video_fbo_ = 0;
     u32 video_tex_ = 0;

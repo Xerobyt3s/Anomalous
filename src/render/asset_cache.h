@@ -17,6 +17,7 @@ public:
     static constexpr u32 kMaxMeshes = 64;
 
     void init(FileWatcher& watcher, Arena& scratch);
+    void set_instance_buffer(u32 vbo) { instance_vbo_ = vbo; }
     void shutdown();
 
     u32 texture_slot(std::string_view name);
@@ -52,6 +53,7 @@ private:
     MeshEntry meshes_[kMaxMeshes];
     FileWatcher* watcher_ = nullptr;
     Arena* scratch_ = nullptr;
+    u32 instance_vbo_ = 0;
     u32 white_texture_ = 0;
     u32 reload_count_ = 0;
 };

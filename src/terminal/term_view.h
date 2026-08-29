@@ -35,8 +35,6 @@ struct TermView {
 
     Vec3 car_pos;
     Vec3 garage_pos;
-    Vec3 mission_pos;
-    u32 mission_stage = 0;
     f32 speed_kmh = 0.0f;
     f32 rpm = 0.0f;
     f32 orbit = 0.0f;

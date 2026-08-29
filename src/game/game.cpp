@@ -25,6 +25,10 @@ constexpr f32 kPlaceNormalY = 0.55f;
 constexpr f32 kEngineAudioLocal[3] = {0.0f, 0.10f, -1.55f};
 constexpr f32 kDashAudioLocal[3] = {0.0f, 0.35f, -0.35f};
 constexpr Vec3 kTowerPortLocal{0.0f, 1.35f, 0.62f};
+constexpr Vec3 kCarPressLocal{0.0f, 0.60f, 0.0f};
+constexpr Vec3 kCarPressHalf{1.02f, 1.00f, 2.20f};
+constexpr f32 kGrassPressRange = 90.0f;
+constexpr Vec3 kBuildingPressMargin{0.6f, 0.0f, 0.6f};
 constexpr Vec3 kTerminalScreenOffset{0.0f, 0.047f, 0.170f};
 constexpr Vec3 kTerminalScreenScale{0.304f, 0.19f, 1.0f};
 
@@ -80,6 +84,9 @@ bool Game::init(RenderDevice& device, FontChain& fonts, Arena& perm, Arena& scra
     terminal_.mapdata().init(terrain_.heightfield());
     if (!term_render_.init(fonts, scratch)) {
         log_error("game: terminal renderer init failed");
+        return false;
+    }
+    if (!tree_render_.init(scratch)) {
         return false;
     }
 
@@ -652,10 +659,62 @@ void Game::bind_entity_meshes(RenderDevice& device)
     Pool<Entity>& pool = world_.entities();
     for (u32 idx : pool.live_indices()) {
         Entity* e = pool.at(idx);
-        if (!e || e->mesh || e->mesh_name.empty() || e->kind == EntityKind::Trigger) {
+        if (!e || e->mesh || e->mesh_name.empty() || e->kind == EntityKind::Trigger
+            || e->kind == EntityKind::Tree) {
             continue;
         }
         e->mesh = device.assets().mesh(e->mesh_name.view());
+    }
+}
+
+void Game::draw_entities(RenderDevice& device)
+{
+    const Pool<Entity>& pool = world_.entities();
+    for (u32 idx : pool.live_indices()) {
+        const Entity* e = pool.at(idx);
+        if (e && e->mesh && e->kind != EntityKind::Tree) {
+            device.draw_mesh(e->mesh,
+                             mat4_trs(e->pos, e->rot, Vec3{e->scale, e->scale, e->scale}));
+        }
+    }
+}
+
+void Game::collect_trees()
+{
+    tree_render_.begin_frame();
+    const Pool<Entity>& pool = world_.entities();
+    for (u32 idx : pool.live_indices()) {
+        const Entity* e = pool.at(idx);
+        if (e && e->kind == EntityKind::Tree) {
+            tree_render_.submit(e->aux_kind,
+                                mat4_trs(e->pos, e->rot, Vec3{e->scale, e->scale, e->scale}));
+        }
+    }
+}
+
+void Game::update_grass_press(TerrainRenderer& terrain_renderer)
+{
+    terrain_renderer.clear_press_volumes();
+
+    if (const RigidBody* body = phys_.body(vehicle_.body())) {
+        const Vec3 com = vehicle_.config().com_offset;
+        const Vec3 centre = body->pos + rotate(body->rot, kCarPressLocal - com);
+        terrain_renderer.add_press_volume(centre, kCarPressHalf, body->rot);
+    }
+
+    const Pool<Entity>& pool = world_.entities();
+    for (u32 idx : pool.live_indices()) {
+        const Entity* e = pool.at(idx);
+        if (!e || e->kind != EntityKind::Building || !e->mesh || !e->mesh->loaded) {
+            continue;
+        }
+        if (distance_sq(e->pos, camera_.pos) > kGrassPressRange * kGrassPressRange) {
+            continue;
+        }
+        const Aabb& b = e->mesh->bounds;
+        const Vec3 local_centre = (b.min + b.max) * 0.5f * e->scale;
+        const Vec3 half = (b.max - b.min) * 0.5f * e->scale + kBuildingPressMargin;
+        terrain_renderer.add_press_volume(e->pos + rotate(e->rot, local_centre), half, e->rot);
     }
 }
 
@@ -921,13 +980,7 @@ void Game::render_video_feed(RenderDevice& device, TerrainRenderer& terrain_rend
     }
 
     terrain_renderer.draw(device);
-    const Pool<Entity>& pool = world_.entities();
-    for (u32 idx : pool.live_indices()) {
-        const Entity* e = pool.at(idx);
-        if (e && e->mesh) {
-            device.draw_mesh(e->mesh, mat4_trs(e->pos, e->rot, Vec3{e->scale, e->scale, e->scale}));
-        }
-    }
+    draw_entities(device);
     carsys_.cables[CABLE_COAX].render(device);
     carsys_.cables[CABLE_BUS].render(device);
     draw_vehicle(device);
@@ -977,8 +1030,14 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
     device.set_weather(weather_.wetness(), weather_.overcast());
     device.set_windshield(carsys_.windshield_wet, carsys_.wiper_sweep, carsys_.glass_wet);
 
+    collect_trees();
+
     if (device.shadow_begin(camera_.pos)) {
         terrain_renderer.draw(device);
+        draw_entities(device);
+        tree_render_.draw(device);
+        draw_vehicle(device);
+        car_render_.draw(device, carsys_, vehicle_, phys_, alpha_, 0.0f, 0);
         device.shadow_end();
     }
 
@@ -986,25 +1045,21 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
     device.begin_frame(camera_, static_cast<i32>(viewport.x), static_cast<i32>(viewport.y));
     device.draw_sky(time);
     terrain_renderer.draw(device);
+    update_grass_press(terrain_renderer);
     terrain_renderer.draw_scrub(device, camera_.pos, time);
 
-    const Pool<Entity>& pool = world_.entities();
-    for (u32 idx : pool.live_indices()) {
-        const Entity* e = pool.at(idx);
-        if (!e || !e->mesh) {
-            continue;
-        }
-        device.draw_mesh(e->mesh, mat4_trs(e->pos, e->rot, Vec3{e->scale, e->scale, e->scale}));
-    }
-
+    draw_entities(device);
+    tree_render_.draw(device);
     draw_vehicle(device);
     draw_viewmodel(device);
     draw_loose_terminal(device, screen_texture);
     draw_place_preview(device, debug);
     car_render_.draw(device, carsys_, vehicle_, phys_, alpha_, frame_dt, screen_texture);
-    device.draw_rain(weather_.rain(), weather_.wind(), cam_vel_, time);
     carsys_.cables[CABLE_COAX].render(device);
     carsys_.cables[CABLE_BUS].render(device);
+    device.flush_meshes();
+
+    device.draw_rain(weather_.rain(), weather_.wind(), cam_vel_, time);
     car_render_.draw_glass(device, carsys_, vehicle_, phys_, alpha_, time);
 
     draw_debug_overlays(debug);
@@ -1219,8 +1274,6 @@ void Game::build_term_view(const Input& input, TermView& out) const
     out.weather_mode = static_cast<i32>(weather_.mode());
     out.car_pos = body ? body->pos : Vec3{};
     out.garage_pos = spawn_.car_pos;
-    out.mission_pos = tower_pos_;
-    out.mission_stage = 0;
     out.speed_kmh = f_abs(vehicle_.forward_speed(phys_)) * 3.6f;
     out.rpm = drivetrain_rpm(vehicle_.train());
     out.orbit = term_focus_ ? (input.down(Key::Right) ? 1.0f : 0.0f)

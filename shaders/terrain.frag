@@ -19,6 +19,7 @@ const vec3 ALBEDO_GRASS = vec3(0.068, 0.104, 0.036);
 const vec3 ALBEDO_DRY = vec3(0.150, 0.125, 0.060);
 const vec3 ALBEDO_ROCK = vec3(0.088, 0.082, 0.074);
 const vec3 ALBEDO_ROAD = vec3(0.052, 0.052, 0.056);
+const float EDGE_FADE_METRES = 70.0;
 
 float vnoise(vec2 p)
 {
@@ -125,5 +126,12 @@ void main()
     for (int i = 0; i < 4; i++) {
         lit += point_light(v_world, n, albedo, u_point_pos_radius[i], u_point_color[i]);
     }
+
+    // Dissolve the last stretch of the heightfield into the horizon so the field boundary
+    // is not a hard line against the sky.
+    vec2 to_edge = min(mask_uv, 1.0 - mask_uv) / u_terrain.zw;
+    float edge = smoothstep(0.0, EDGE_FADE_METRES, min(to_edge.x, to_edge.y));
+    lit = mix(u_fog_color_density.rgb, lit, edge);
+
     o_color = vec4(lit, 1.0);
 }

@@ -393,13 +393,6 @@ TEST(shell, cls_clears_the_scrollback)
     CHECK(b.shell.screen().line_count() == 0);
 }
 
-TEST(shell, mission_raises_a_request)
-{
-    Bench b;
-    b.run("MISSION");
-    CHECK(b.shell.take_request().mission);
-}
-
 TEST(shell, view_needs_an_image_file)
 {
     Bench b;

@@ -4,6 +4,8 @@
 #include "core/log.h"
 #include "platform/gl_loader.h"
 
+#include <algorithm>
+
 namespace anom {
 namespace {
 
@@ -46,7 +48,13 @@ void RenderDevice::set_environment(const Environment& env)
 bool RenderDevice::init(FileWatcher& watcher, Arena& scratch)
 {
     shaders_.init(watcher, scratch);
+
+    glCreateBuffers(1, &instance_vbo_);
+    glNamedBufferStorage(instance_vbo_, kMaxMeshDraws * sizeof(Mat4), nullptr,
+                         GL_DYNAMIC_STORAGE_BIT);
+
     assets_.init(watcher, scratch);
+    assets_.set_instance_buffer(instance_vbo_);
 
     glCreateBuffers(1, &camera_ubo_);
     glNamedBufferStorage(camera_ubo_, sizeof(CameraUbo), nullptr, GL_DYNAMIC_STORAGE_BIT);
@@ -81,6 +89,7 @@ void RenderDevice::shutdown()
         glDeleteBuffers(1, &quad_ebo_);
     }
     if (camera_ubo_) { glDeleteBuffers(1, &camera_ubo_); }
+    if (instance_vbo_) { glDeleteBuffers(1, &instance_vbo_); }
 }
 
 void RenderDevice::use_program(u32 program)
@@ -357,6 +366,7 @@ void RenderDevice::begin_frame(const Camera& cam, i32 fb_width, i32 fb_height)
         fb_height = 1;
     }
     stats_ = DrawStats{};
+    instance_cursor_ = 0;
     reset_state_cache();
     scene_target_ensure(fb_width, fb_height);
     if (!scene_broken_ && scene_fbo_) {
@@ -367,12 +377,14 @@ void RenderDevice::begin_frame(const Camera& cam, i32 fb_width, i32 fb_height)
 
 void RenderDevice::end_frame()
 {
+    flush_meshes();
     use_program(0);
     bind_vao(0);
 }
 
 bool RenderDevice::video_begin(const Camera& cam)
 {
+    flush_meshes();
     if (video_broken_) {
         return false;
     }
@@ -403,6 +415,7 @@ bool RenderDevice::video_begin(const Camera& cam)
 
 u32 RenderDevice::video_end()
 {
+    flush_meshes();
     use_program(0);
     bind_vao(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -519,6 +532,7 @@ bool RenderDevice::shadow_begin(Vec3 focus)
 
 void RenderDevice::shadow_end()
 {
+    flush_meshes();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     shadow_pass_ = false;
     reset_state_cache();
@@ -548,33 +562,78 @@ void RenderDevice::draw_mesh(const GpuMesh* mesh, const Mat4& model)
         stats_.meshes_culled++;
         return;
     }
+    if (mesh_queue_count_ >= kMaxMeshDraws) {
+        flush_meshes();
+    }
+    mesh_queue_[mesh_queue_count_++] = MeshDraw{mesh, model};
+}
 
-    const u32 program = shaders_.program(shadow_pass_ ? "shadow" : "mesh");
+void RenderDevice::flush_meshes()
+{
+    if (mesh_queue_count_ == 0) {
+        return;
+    }
+    const u32 count = mesh_queue_count_;
+    mesh_queue_count_ = 0;
+
+    const u32 program = shaders_.program(shadow_pass_ ? "shadow_inst" : "mesh");
     if (!program) {
         return;
     }
-    glProgramUniformMatrix4fv(program, 0, 1, GL_FALSE, model.m);
+
+    std::sort(mesh_queue_, mesh_queue_ + count, [](const MeshDraw& a, const MeshDraw& b) {
+        return a.mesh < b.mesh;
+    });
+
     if (shadow_pass_) {
-        glProgramUniformMatrix4fv(program, 4, 1, GL_FALSE, shadow_mat_.m);
+        glProgramUniformMatrix4fv(program, 0, 1, GL_FALSE, shadow_mat_.m);
     }
     use_program(program);
-    bind_vao(mesh->vao);
     set_cull(true);
 
-    for (u32 i = 0; i < mesh->submesh_count; i++) {
-        const GpuSubmesh& sub = mesh->submeshes[i];
-        if (!shadow_pass_) {
-            bind_texture0(assets_.texture_gl(sub.texture_slot));
+    u32 first = 0;
+    while (first < count) {
+        const GpuMesh* mesh = mesh_queue_[first].mesh;
+        u32 run = 1;
+        while (first + run < count && mesh_queue_[first + run].mesh == mesh) {
+            run++;
         }
-        stats_.draw_calls++;
-        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(sub.index_count), GL_UNSIGNED_INT,
-                       reinterpret_cast<const void*>(static_cast<u64>(sub.first_index)
-                                                     * sizeof(u32)));
+        if (instance_cursor_ + run > kMaxMeshDraws) {
+            instance_cursor_ = 0;
+        }
+
+        for (u32 i = 0; i < run; i++) {
+            instance_staging_[i] = mesh_queue_[first + i].model;
+        }
+
+        const u32 base = instance_cursor_;
+        glNamedBufferSubData(instance_vbo_, static_cast<GLintptr>(base * sizeof(Mat4)),
+                             static_cast<GLsizeiptr>(run * sizeof(Mat4)), instance_staging_);
+        instance_cursor_ += run;
+
+        glVertexArrayVertexBuffer(mesh->vao, 1, instance_vbo_,
+                                  static_cast<GLintptr>(base * sizeof(Mat4)), sizeof(Mat4));
+        bind_vao(mesh->vao);
+        for (u32 s = 0; s < mesh->submesh_count; s++) {
+            const GpuSubmesh& sub = mesh->submeshes[s];
+            if (!shadow_pass_) {
+                bind_texture0(assets_.texture_gl(sub.texture_slot));
+            }
+            stats_.draw_calls++;
+            stats_.instanced_submeshes += run;
+            glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(sub.index_count),
+                                    GL_UNSIGNED_INT,
+                                    reinterpret_cast<const void*>(
+                                        static_cast<u64>(sub.first_index) * sizeof(u32)),
+                                    static_cast<GLsizei>(run));
+        }
+        first += run;
     }
 }
 
 void RenderDevice::draw_glass(const GpuMesh* mesh, const Mat4& model, f32 time)
 {
+    flush_meshes();
     if (shadow_pass_ || !mesh || !mesh->loaded) {
         return;
     }
@@ -607,6 +666,7 @@ void RenderDevice::draw_glass(const GpuMesh* mesh, const Mat4& model, f32 time)
 
 void RenderDevice::draw_rain(f32 intensity, f32 wind, Vec3 cam_vel, f32 time)
 {
+    flush_meshes();
     if (intensity <= 0.003f) {
         return;
     }
@@ -632,6 +692,7 @@ void RenderDevice::draw_rain(f32 intensity, f32 wind, Vec3 cam_vel, f32 time)
 
 void RenderDevice::scene_grab()
 {
+    flush_meshes();
     if (scene_broken_ || !scene_fbo_) {
         return;
     }

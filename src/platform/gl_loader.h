@@ -155,6 +155,8 @@ typedef void (GL_APIENTRY *GlDebugCallback)(GLenum source, GLenum type, GLuint i
     GLFN(void, glProgramUniformMatrix4fv, (GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLfloat* value)) \
     GLFN(void, glProgramUniform4f, (GLuint program, GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3)) \
     GLFN(void, glProgramUniform1f, (GLuint program, GLint location, GLfloat v0)) \
+    GLFN(void, glProgramUniform4fv, (GLuint program, GLint location, GLsizei count, const GLfloat* value)) \
+    GLFN(void, glProgramUniform1i, (GLuint program, GLint location, GLint v0)) \
     GLFN(void, glGenerateTextureMipmap, (GLuint texture)) \
     GLFN(void, glProgramUniform3f, (GLuint program, GLint location, GLfloat v0, GLfloat v1, GLfloat v2)) \
     GLFN(void, glCreateFramebuffers, (GLsizei n, GLuint* framebuffers)) \
@@ -165,6 +167,8 @@ typedef void (GL_APIENTRY *GlDebugCallback)(GLenum source, GLenum type, GLuint i
     GLFN(void, glBindFramebuffer, (GLenum target, GLuint framebuffer)) \
     GLFN(void, glVertexArrayBindingDivisor, (GLuint vao, GLuint binding_index, GLuint divisor)) \
     GLFN(void, glDrawArraysInstanced, (GLenum mode, GLint first, GLsizei count, GLsizei instance_count)) \
+    GLFN(void, glDrawElementsInstanced, (GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instance_count)) \
+    GLFN(GLint, glGetUniformLocation, (GLuint program, const GLchar* name)) \
     GLFN(void, glPolygonMode, (GLenum face, GLenum mode)) \
     GLFN(void, glReadPixels, (GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels)) \
     GLFN(void, glFinish, (void))

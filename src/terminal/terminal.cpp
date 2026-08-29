@@ -7,16 +7,6 @@
 #include <cmath>
 
 namespace anom {
-namespace {
-
-constexpr const char* kObjectives[4] = {
-    "OBJECTIVE: RESTORE THE VEHICLE AND GET MOVING.\n",
-    "OBJECTIVE: REACH THE MARKED SITE. SEE MAP.\n",
-    "OBJECTIVE: RETURN TO THE GARAGE. SEE MAP.\n",
-    "OBJECTIVE: COMPLETE. AWAITING FURTHER TASKING.\n",
-};
-
-} // namespace
 
 void Terminal::init(Arena& arena, DiskStore& disks)
 {
@@ -104,11 +94,6 @@ f32 Terminal::pixelate()
 f32 Terminal::virus_fx() const
 {
     return powered_ && virus_.active() && virus_.bursting() ? 1.0f : 0.0f;
-}
-
-void Terminal::print_objective(u32 stage)
-{
-    shell_.screen().print(kObjectives[stage < 4 ? stage : 3]);
 }
 
 void Terminal::av_scan()
@@ -295,9 +280,6 @@ void Terminal::update(const TermView& view, f32 dt)
     }
 
     const ShellRequest req = shell_.take_request();
-    if (req.mission) {
-        print_objective(view.mission_stage);
-    }
     if (req.power_off) {
         wants_off_ = true;
         request_.power_off = true;

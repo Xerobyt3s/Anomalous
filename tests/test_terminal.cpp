@@ -57,7 +57,6 @@ struct Rig {
         view.terrain = &terrain;
         view.car_pos = Vec3{0.0f, 0.0f, 0.0f};
         view.garage_pos = Vec3{20.0f, 0.0f, 20.0f};
-        view.mission_pos = Vec3{-40.0f, 0.0f, 60.0f};
         return true;
     }
 
@@ -467,18 +466,6 @@ TEST(terminal, a_damaged_program_refuses_to_run)
     rig.command("LINK");
     CHECK(rig.term.mode() == TermMode::Shell);
     CHECK(rig.said("PROGRAM DAMAGED"));
-}
-
-TEST(terminal, mission_prints_the_objective)
-{
-    Rig rig;
-    CHECK(rig.setup());
-    rig.boot();
-
-    rig.view.mission_stage = 1;
-    rig.command("MISSION");
-    rig.term.screen().flush_pending();
-    CHECK(rig.said("REACH THE MARKED SITE"));
 }
 
 TEST(terminal, off_asks_the_host_to_cut_power)

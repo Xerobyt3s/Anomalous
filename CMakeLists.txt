@@ -129,6 +129,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/render/shader.cpp
     src/render/sky.cpp
     src/render/terrain_render.cpp
+    src/render/tree.cpp
     src/ui/ui.cpp
     src/vehicle/drivetrain.cpp
     src/vehicle/tire.cpp
@@ -216,6 +217,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/render/shader.h
     src/render/sky.h
     src/render/terrain_render.h
+    src/render/tree.h
     src/ui/ui.h
     src/vehicle/tire.h
     src/vehicle/vehicle.h

@@ -23,6 +23,7 @@ set(ANOMALOUS_TEST_SOURCES
     test_screen.cpp
     test_shell.cpp
     test_terminal.cpp
+    test_scenes.cpp
 )
 
 add_executable(anomalous_tests ${ANOMALOUS_TEST_SOURCES})
