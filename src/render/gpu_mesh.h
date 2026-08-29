@@ -1,0 +1,25 @@
+#pragma once
+
+#include "assets/amsh.h"
+#include "core/types.h"
+#include "math/vmath.h"
+
+namespace anom {
+
+struct GpuSubmesh {
+    u32 first_index = 0;
+    u32 index_count = 0;
+    u32 texture_slot = 0;
+};
+
+struct GpuMesh {
+    u32 vao = 0;
+    u32 vbo = 0;
+    u32 ebo = 0;
+    GpuSubmesh submeshes[kAmshMaxSubmeshes];
+    u32 submesh_count = 0;
+    Aabb bounds = aabb_empty();
+    bool loaded = false;
+};
+
+} // namespace anom

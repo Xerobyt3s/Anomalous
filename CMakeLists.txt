@@ -70,11 +70,26 @@ target_compile_definitions(anomalous_options INTERFACE
 add_subdirectory(external)
 
 set(ANOMALOUS_CORE_SOURCES
+    src/assets/image.cpp
+    src/assets/mesh_data.cpp
+    src/assets/watcher.cpp
     src/core/arena.cpp
     src/core/config.cpp
     src/core/log.cpp
     src/core/version.cpp
     src/math/vmath.cpp
+    src/physics/heightfield.cpp
+    src/render/camera.cpp
+    src/render/debug_draw.cpp
+    src/render/fontchain.cpp
+    src/render/text.cpp
+    src/render/asset_cache.cpp
+    src/render/device.cpp
+    src/render/screenshot.cpp
+    src/render/shader.cpp
+    src/render/sky.cpp
+    src/render/terrain_render.cpp
+    src/world/terrain.cpp
     src/platform/clock.cpp
     src/platform/filesystem.cpp
     src/platform/gl_loader.cpp
@@ -84,6 +99,10 @@ set(ANOMALOUS_CORE_SOURCES
 )
 
 set(ANOMALOUS_CORE_HEADERS
+    src/assets/amsh.h
+    src/assets/image.h
+    src/assets/mesh_data.h
+    src/assets/watcher.h
     src/core/arena.h
     src/core/config.h
     src/core/fixed_string.h
@@ -92,8 +111,22 @@ set(ANOMALOUS_CORE_HEADERS
     src/core/pool.h
     src/core/rng.h
     src/core/types.h
+    src/core/utf8.h
     src/core/version.h
     src/math/vmath.h
+    src/physics/heightfield.h
+    src/render/camera.h
+    src/render/debug_draw.h
+    src/render/fontchain.h
+    src/render/text.h
+    src/render/asset_cache.h
+    src/render/device.h
+    src/render/gpu_mesh.h
+    src/render/screenshot.h
+    src/render/shader.h
+    src/render/sky.h
+    src/render/terrain_render.h
+    src/world/terrain.h
     src/platform/clock.h
     src/platform/filesystem.h
     src/platform/gl_loader.h
@@ -112,7 +145,7 @@ target_include_directories(anomalous_core PUBLIC
 )
 
 target_link_libraries(anomalous_core
-    PUBLIC anomalous_options
+    PUBLIC anomalous_options anomalous_headers
     PRIVATE anomalous_external
 )
 

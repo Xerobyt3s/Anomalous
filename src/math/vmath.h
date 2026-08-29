@@ -177,6 +177,11 @@ inline Vec3 normalize(Vec3 v)
     return v * (1.0f / len);
 }
 
+constexpr f32 luminance(Vec3 c)
+{
+    return c.x * 0.2126f + c.y * 0.7152f + c.z * 0.0722f;
+}
+
 constexpr Vec3 reflect(Vec3 v, Vec3 normal)
 {
     return v - normal * (2.0f * dot(v, normal));

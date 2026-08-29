@@ -4,6 +4,9 @@ out/
 .vscode/
 CMakeUserPresets.json
 
+docs/
+README.md
+
 *.obj
 *.pdb
 *.ilk

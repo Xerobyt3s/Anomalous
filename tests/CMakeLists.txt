@@ -6,6 +6,8 @@ set(ANOMALOUS_TEST_SOURCES
     test_math.cpp
     test_core.cpp
     test_platform.cpp
+    test_assets.cpp
+    test_camera.cpp
 )
 
 add_executable(anomalous_tests ${ANOMALOUS_TEST_SOURCES})
