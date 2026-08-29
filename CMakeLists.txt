@@ -73,12 +73,24 @@ set(ANOMALOUS_CORE_SOURCES
     src/assets/image.cpp
     src/assets/mesh_data.cpp
     src/assets/watcher.cpp
+    src/carsys/cables.cpp
+    src/carsys/carsys.cpp
+    src/carsys/electrics.cpp
+    src/carsys/fluids.cpp
+    src/carsys/items.cpp
+    src/carsys/parts.cpp
     src/core/arena.cpp
     src/core/config.cpp
     src/core/log.cpp
     src/core/version.cpp
     src/math/vmath.cpp
     src/physics/body.cpp
+    src/audio/audio.cpp
+    src/audio/miniaudio_impl.cpp
+    src/audio/tapes.cpp
+    src/player/interact.cpp
+    src/player/player.cpp
+    src/terminal/disks.cpp
     src/physics/collide.cpp
     src/physics/heightfield.cpp
     src/physics/static_grid.cpp
@@ -97,7 +109,10 @@ set(ANOMALOUS_CORE_SOURCES
     src/vehicle/tire.cpp
     src/vehicle/vehicle.cpp
     src/vehicle/vehicle_config.cpp
+    src/world/entity.cpp
     src/world/terrain.cpp
+    src/world/weather.cpp
+    src/world/zone.cpp
     src/platform/clock.cpp
     src/platform/filesystem.cpp
     src/platform/gl_loader.cpp
@@ -111,6 +126,12 @@ set(ANOMALOUS_CORE_HEADERS
     src/assets/image.h
     src/assets/mesh_data.h
     src/assets/watcher.h
+    src/carsys/cables.h
+    src/carsys/carsys.h
+    src/carsys/electrics.h
+    src/carsys/fluids.h
+    src/carsys/items.h
+    src/carsys/parts.h
     src/core/arena.h
     src/core/config.h
     src/core/fixed_string.h
@@ -123,6 +144,12 @@ set(ANOMALOUS_CORE_HEADERS
     src/core/version.h
     src/math/vmath.h
     src/physics/body.h
+    src/audio/audio.h
+    src/audio/ma.h
+    src/audio/tapes.h
+    src/player/interact.h
+    src/player/player.h
+    src/terminal/disks.h
     src/physics/collide.h
     src/physics/heightfield.h
     src/physics/static_grid.h
@@ -141,7 +168,10 @@ set(ANOMALOUS_CORE_HEADERS
     src/vehicle/tire.h
     src/vehicle/vehicle.h
     src/vehicle/vehicle_config.h
+    src/world/entity.h
     src/world/terrain.h
+    src/world/weather.h
+    src/world/zone.h
     src/platform/clock.h
     src/platform/filesystem.h
     src/platform/gl_loader.h

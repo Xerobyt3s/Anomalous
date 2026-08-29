@@ -1,0 +1,100 @@
+#pragma once
+
+#include "carsys/cables.h"
+#include "carsys/electrics.h"
+#include "carsys/fluids.h"
+#include "carsys/items.h"
+#include "carsys/parts.h"
+#include "core/types.h"
+#include "math/vmath.h"
+
+namespace anom {
+
+class PhysWorld;
+class Vehicle;
+
+inline constexpr f32 kCrankTime = 0.7f;
+inline constexpr u32 kCargoMax = 8;
+inline constexpr i32 kCoaxTargetAntenna = 0;
+inline constexpr i32 kCoaxTargetCamera = 1;
+inline constexpr i32 kBusTargetCar = 0;
+inline constexpr i32 kBusTargetTower = 1;
+
+inline constexpr f32 kTrunkMinX = -0.50f;
+inline constexpr f32 kTrunkMaxX = 0.50f;
+inline constexpr f32 kTrunkFloorY = -0.20f;
+inline constexpr f32 kTrunkTopY = 0.16f;
+inline constexpr f32 kTrunkMinZ = 1.45f;
+inline constexpr f32 kTrunkMaxZ = 2.03f;
+
+struct CargoItem {
+    Item item;
+    Vec3 pos;
+    Vec3 vel;
+    bool used = false;
+    bool supported = false;
+};
+
+class CarSys {
+public:
+    void init();
+    void tick(Vehicle& veh, PhysWorld& world, f32 dt);
+
+    bool try_start(Vehicle& veh);
+    void stop_engine();
+
+    bool cargo_add(Item item, Vec3 pos);
+    bool cargo_take(u32 index, Item& out_item);
+    u32 cargo_count() const;
+    f32 cargo_place_y(ItemKind kind, f32 x, f32 z, bool* out_ok) const;
+
+    PartSlot parts[PART_COUNT];
+    Electrics elec;
+    Fluids fluids;
+    Cable cables[CABLE_KIND_COUNT];
+    CargoItem cargo[kCargoMax];
+
+    bool engine_on = false;
+    f32 crank_timer = 0.0f;
+    bool headlight_switch = false;
+    f32 hood_open = 0.0f;
+    bool hood_target = false;
+    f32 door_open[2] = {};
+    bool door_target[2] = {};
+    f32 trunk_open = 0.0f;
+    bool trunk_target = false;
+    bool handbrake_latched = true;
+    f32 lever_anim = 1.0f;
+    bool key_inserted = false;
+    bool crank_request = false;
+    bool crank_active = false;
+    f32 crank_hold = 0.0f;
+    bool fuel_cap_open = false;
+    f32 cap_anim = 0.0f;
+    f32 popup_anim = 0.0f;
+    bool computer_on = false;
+    i32 floppy_disk = -1;
+    f32 floppy_cond = 1.0f;
+    i32 tape_inserted = -1;
+    f32 tape_cond = 1.0f;
+    bool deck_play = false;
+    i32 wiper_mode = 0;
+    f32 wiper_phase = 0.0f;
+    f32 wiper_sweep = 0.0f;
+    f32 windshield_wet = 0.0f;
+    f32 glass_wet = 0.0f;
+    f32 rain_level = 0.0f;
+    i32 coax_target = kCoaxTargetAntenna;
+    i32 bus_target = kBusTargetCar;
+    Vec3 prev_vel;
+    f32 impact_cooldown = 1.0f;
+    f32 last_impact_severity = 0.0f;
+
+private:
+    bool can_run() const;
+    f32 crank_time() const;
+    void detect_impacts(Vehicle& veh, const struct RigidBody& body, Vec3 dv, f32 dt);
+    void cargo_tick(Vec3 apparent, f32 dt);
+};
+
+} // namespace anom

@@ -14,6 +14,10 @@ constexpr f32 kSlipAngleDenomMin = 0.8f;
 constexpr f32 kTireLoadClampFrac = 0.75f;
 constexpr f32 kStickStiffness = 200000.0f;
 constexpr f32 kStickMinMass = 40.0f;
+constexpr u32 kMaxSuspProbes = 7;
+constexpr f32 kProbeSpread = 0.85f;
+constexpr f32 kProbeNormalBand = 0.02f;
+constexpr f32 kChassisClearance = 0.02f;
 
 } // namespace
 
@@ -41,9 +45,21 @@ void Vehicle::apply_config(PhysWorld& world)
     const f32 ox = f_max(hx - r, 0.0f);
     const f32 oy = f_max(hy - r, 0.0f);
     const f32 oz = f_max(hz - r, 0.0f);
+
+    f32 lowest_tread = 0.0f;
+    for (u32 i = 0; i < kWheelCount; i++) {
+        const f32 tread = cfg_.wheels[i].pos.y - cfg_.com_offset.y - cfg_.wheels[i].radius;
+        lowest_tread = i == 0 ? tread : f_min(lowest_tread, tread);
+    }
+    const f32 floor_center = f_max(-oy - cfg_.com_offset.y, lowest_tread + kChassisClearance + r);
+
     for (u32 i = 0; i < 8; i++) {
         const Vec3 corner{(i & 1) ? ox : -ox, (i & 2) ? oy : -oy, (i & 4) ? oz : -oz};
-        body->sphere_offsets[i] = corner - cfg_.com_offset;
+        Vec3 offset = corner - cfg_.com_offset;
+        if ((i & 2) == 0) {
+            offset.y = floor_center;
+        }
+        body->sphere_offsets[i] = offset;
     }
     body->restitution = 0.1f;
     body->friction = 0.5f;
@@ -225,27 +241,63 @@ void Vehicle::tick(PhysWorld& world, f32 dt)
     f32 compression_vel[kWheelCount] = {};
     Vec3 attach_ws[kWheelCount];
 
+    const u32 probe_count = cfg_.susp_probes < 1u ? 1u
+                          : (cfg_.susp_probes > kMaxSuspProbes ? kMaxSuspProbes : cfg_.susp_probes);
+
     for (u32 i = 0; i < kWheelCount; i++) {
         Wheel& w = wheels_[i];
         const WheelConfig& wc = cfg_.wheels[i];
-        const f32 prev_compression = w.compression;
+        const f32 prev_raw = w.compression_raw;
         w.force_susp = Vec3{0.0f, 0.0f, 0.0f};
         w.force_long = Vec3{0.0f, 0.0f, 0.0f};
         w.force_lat = Vec3{0.0f, 0.0f, 0.0f};
+        w.bump_force = 0.0f;
+        w.align_torque = 0.0f;
 
         const Vec3 attach_w = body->pos + rot * w.attach_local;
         attach_ws[i] = attach_w;
         const f32 r_eff = w.radius * effects_.tire_radius_mul[i];
         const f32 ray_len = wc.travel + r_eff;
+        const Vec3 roll_dir = rot * Vec3{std::sin(w.steer_rad), 0.0f, -std::cos(w.steer_rad)};
 
-        Ray ray;
-        ray.origin = attach_w;
-        ray.dir = -up;
+        f32 best = -1.0f;
+        Vec3 normal_sum{0.0f, 0.0f, 0.0f};
+        f32 best_normal_weight = 0.0f;
+        Vec3 best_normal = up;
 
-        PhysRayHit hit{};
-        if (!world.raycast(ray, ray_len, &hit)) {
+        for (u32 p = 0; p < probe_count; p++) {
+            const f32 u = probe_count == 1
+                            ? 0.0f
+                            : (2.0f * static_cast<f32>(p) / static_cast<f32>(probe_count - 1)
+                               - 1.0f);
+            const f32 offset = u * r_eff * kProbeSpread;
+            const f32 r_probe = std::sqrt(f_max(r_eff * r_eff - offset * offset, 0.0f));
+
+            Ray ray;
+            ray.origin = attach_w + roll_dir * offset;
+            ray.dir = -up;
+
+            PhysRayHit hit{};
+            if (!world.raycast(ray, ray_len, &hit)) {
+                continue;
+            }
+            const f32 reach = wc.travel + r_probe - hit.t;
+            if (reach > best) {
+                best = reach;
+                best_normal = hit.normal;
+                best_normal_weight = 0.0f;
+                normal_sum = Vec3{0.0f, 0.0f, 0.0f};
+            }
+            if (reach > best - kProbeNormalBand) {
+                normal_sum += hit.normal;
+                best_normal_weight += 1.0f;
+            }
+        }
+
+        if (best < 0.0f) {
             w.grounded = false;
             w.compression = 0.0f;
+            w.compression_raw = 0.0f;
             w.load = 0.0f;
             w.slip_ratio *= 0.9f;
             w.slip_angle *= 0.9f;
@@ -256,13 +308,15 @@ void Vehicle::tick(PhysWorld& world, f32 dt)
             continue;
         }
 
+        const f32 bump_span = f_max(wc.travel * cfg_.bump_stop_zone, 0.005f);
+        const f32 raw = f_clamp(best, 0.0f, wc.travel + bump_span);
+
         w.grounded = true;
-        w.contact_point = hit.point;
-        w.contact_normal = hit.normal;
-        const f32 compression = f_clamp(ray_len - hit.t, 0.0f, wc.travel);
-        compression_vel[i] = f_clamp((compression - prev_compression) / dt, -kDamperVelClamp,
-                                     kDamperVelClamp);
-        w.compression = compression;
+        w.contact_normal = best_normal_weight > 0.0f ? normalize(normal_sum) : best_normal;
+        w.contact_point = attach_w - up * (ray_len - raw);
+        compression_vel[i] = f_clamp((raw - prev_raw) / dt, -kDamperVelClamp, kDamperVelClamp);
+        w.compression_raw = raw;
+        w.compression = f_min(raw, wc.travel);
     }
 
     f32 arb_force[kWheelCount] = {};
@@ -290,8 +344,11 @@ void Vehicle::tick(PhysWorld& world, f32 dt)
         const f32 r_eff = w.radius * effects_.tire_radius_mul[i];
 
         const f32 damper_c = wc.damper_c * (compression_vel[i] < 0.0f ? rebound_mul : 1.0f);
+        const f32 bump_span = f_max(wc.travel * cfg_.bump_stop_zone, 0.005f);
+        const f32 bump_travel = f_max(w.compression_raw - (wc.travel - bump_span), 0.0f);
+        w.bump_force = wc.spring_k * cfg_.bump_stop_mul * bump_travel * (bump_travel / bump_span);
         const f32 susp_force = f_max(wc.spring_k * w.compression + damper_c * compression_vel[i]
-                                         + arb_force[i],
+                                         + arb_force[i] + w.bump_force,
                                      0.0f);
         w.load = susp_force;
         total_load += susp_force;
@@ -387,9 +444,16 @@ void Vehicle::tick(PhysWorld& world, f32 dt)
         body_apply_force_at_point(*body, force_tire, w.contact_point);
 
         const f32 fx_applied = dot(force_tire, long_dir);
+        const f32 fy_applied = dot(force_tire, lat_dir);
         w.force_long = long_dir * fx_applied;
-        w.force_lat = lat_dir * dot(force_tire, lat_dir);
+        w.force_lat = lat_dir * fy_applied;
         w.reaction_torque = -fx_applied * r_eff;
+
+        const f32 peak_angle = f_max(cfg_.tire_peak_angle_deg * kDegToRad, 0.01f);
+        const f32 trail_fade = f_clamp01(1.0f - f_abs(w.slip_angle) / (peak_angle * 2.0f));
+        const f32 trail = cfg_.tire_mech_trail + cfg_.tire_pneumatic_trail * trail_fade;
+        w.align_torque = -fy_applied * trail;
+        body_apply_torque(*body, n * w.align_torque);
     }
 
     drivetrain_tick(train_, cfg_, wheels_, input_.throttle, effects_.engine_power_mul,

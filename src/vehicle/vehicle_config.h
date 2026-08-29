@@ -48,10 +48,15 @@ struct VehicleConfig {
     f32 tire_load_sens = 0.0f;
     f32 tire_relax_long = 0.0f;
     f32 tire_relax_lat = 0.0f;
+    f32 tire_pneumatic_trail = 0.030f;
+    f32 tire_mech_trail = 0.018f;
 
     f32 arb_front = 0.0f;
     f32 arb_rear = 0.0f;
     f32 damper_rebound_mul = 1.0f;
+    u32 susp_probes = 5;
+    f32 bump_stop_zone = 0.14f;
+    f32 bump_stop_mul = 10.0f;
 
     f32 torque_rpm[kMaxTorquePoints]{};
     f32 torque_nm[kMaxTorquePoints]{};
@@ -72,6 +77,9 @@ struct VehicleConfig {
     f32 shift_down_rpm = 2200.0f;
     f32 shift_time = 0.35f;
     f32 diff_lock = 0.2f;
+    f32 diff_preload = 55.0f;
+    f32 diff_power_ramp = 0.40f;
+    f32 diff_coast_ramp = 0.18f;
 
     f32 brake_torque = 1700.0f;
     f32 handbrake_torque = 2500.0f;

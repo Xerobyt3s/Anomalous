@@ -10,6 +10,10 @@ set(ANOMALOUS_TEST_SOURCES
     test_camera.cpp
     test_physics.cpp
     test_vehicle.cpp
+    test_carsys.cpp
+    test_player.cpp
+    test_interact.cpp
+    test_audio.cpp
 )
 
 add_executable(anomalous_tests ${ANOMALOUS_TEST_SOURCES})

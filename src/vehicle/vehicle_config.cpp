@@ -60,10 +60,15 @@ bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view pa
     out.tire_load_sens = cfg.get_f32("tire.load_sensitivity", 0.0f);
     out.tire_relax_long = cfg.get_f32("tire.relax_long", 0.0f);
     out.tire_relax_lat = cfg.get_f32("tire.relax_lat", 0.0f);
+    out.tire_pneumatic_trail = cfg.get_f32("tire.pneumatic_trail", 0.030f);
+    out.tire_mech_trail = cfg.get_f32("tire.mech_trail", 0.018f);
 
     out.arb_front = cfg.get_f32("suspension.arb_front", 0.0f);
     out.arb_rear = cfg.get_f32("suspension.arb_rear", 0.0f);
     out.damper_rebound_mul = cfg.get_f32("suspension.rebound_mul", 1.0f);
+    out.susp_probes = static_cast<u32>(f_clamp(cfg.get_f32("suspension.probes", 5.0f), 1.0f, 7.0f));
+    out.bump_stop_zone = f_clamp(cfg.get_f32("suspension.bump_stop_zone", 0.14f), 0.02f, 0.5f);
+    out.bump_stop_mul = f_max(cfg.get_f32("suspension.bump_stop_mul", 10.0f), 0.0f);
 
     f32 curve[kMaxTorquePoints * 2];
     const u32 pair_values = cfg.get_f32_list("engine.torque_curve", curve);
@@ -101,7 +106,10 @@ bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view pa
     out.shift_up_rpm = cfg.get_f32("gearbox.shift_up_rpm", 5800.0f);
     out.shift_down_rpm = cfg.get_f32("gearbox.shift_down_rpm", 2200.0f);
     out.shift_time = cfg.get_f32("gearbox.shift_time", 0.35f);
-    out.diff_lock = cfg.get_f32("gearbox.diff_lock", 0.2f);
+    out.diff_lock = f_clamp01(cfg.get_f32("gearbox.diff_lock", 0.2f));
+    out.diff_preload = f_max(cfg.get_f32("gearbox.diff_preload", 55.0f), 0.0f);
+    out.diff_power_ramp = f_max(cfg.get_f32("gearbox.diff_power_ramp", 0.40f), 0.0f);
+    out.diff_coast_ramp = f_max(cfg.get_f32("gearbox.diff_coast_ramp", 0.18f), 0.0f);
 
     out.brake_torque = cfg.get_f32("brakes.torque", 1700.0f);
     out.handbrake_torque = cfg.get_f32("brakes.handbrake_torque", 2500.0f);

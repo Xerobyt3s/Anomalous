@@ -96,7 +96,7 @@ void main()
     }
 
     float retro = u_pixel_scale > 1.0 || u_quantise_bits > 0.0
-                      ? smoothstep(u_retro_near, u_retro_far, view_distance(v_uv))
+                      ? 1.0 - smoothstep(u_retro_near, u_retro_far, view_distance(v_uv))
                       : 0.0;
 
     float scale = floor(mix(1.0, max(u_pixel_scale, 1.0), retro) + 0.5);

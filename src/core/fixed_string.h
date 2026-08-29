@@ -17,6 +17,7 @@ public:
     FixedString() { buf_[0] = '\0'; }
 
     FixedString(std::string_view text) { assign(text); }
+    FixedString(const char* text) { assign(text ? std::string_view(text) : std::string_view()); }
 
     void clear() { buf_[0] = '\0'; }
 
@@ -56,6 +57,10 @@ public:
     static constexpr std::size_t capacity() { return N - 1; }
 
     friend bool operator==(const FixedString& a, std::string_view b) { return a.view() == b; }
+    friend bool operator==(const FixedString& a, const char* b)
+    {
+        return a.view() == std::string_view(b ? b : "");
+    }
     friend bool operator==(const FixedString& a, const FixedString& b)
     {
         return a.view() == b.view();

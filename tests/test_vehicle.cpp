@@ -321,3 +321,228 @@ TEST(tire, zero_slip_produces_no_force)
     CHECK_NEAR(tf.fx, 0.0f, 1e-4);
     CHECK_NEAR(tf.fy, 0.0f, 1e-4);
 }
+
+namespace {
+
+f32 kerb_probe_compression(u32 probes)
+{
+    Rig rig;
+    if (!rig.setup()) {
+        return 0.0f;
+    }
+    rig.car.config().susp_probes = probes;
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+
+    const RigidBody& body = rig.body();
+    const Vec3 attach = body.pos + quat_to_mat3(body.rot) * rig.car.wheel(WHEEL_FL).attach_local;
+    const f32 radius = rig.car.wheel(WHEEL_FL).radius;
+    const f32 edge = attach.z - radius * 0.5f;
+    const f32 top = 0.20f;
+
+    rig.world.statics_reserve(rig.arena, 4);
+    rig.world.add_static_tri(Vec3{attach.x - 2.0f, top, edge - 4.0f},
+                             Vec3{attach.x + 2.0f, top, edge - 4.0f},
+                             Vec3{attach.x + 2.0f, top, edge});
+    rig.world.add_static_tri(Vec3{attach.x - 2.0f, top, edge - 4.0f},
+                             Vec3{attach.x + 2.0f, top, edge},
+                             Vec3{attach.x - 2.0f, top, edge});
+    rig.world.statics_build(rig.arena);
+
+    rig.step(0.0f, 0.0f, 0.0f, false, 1);
+    return rig.car.wheel(WHEEL_FL).compression_raw;
+}
+
+f32 drop_deepest_travel(f32 bump_mul, f32 height)
+{
+    Rig rig;
+    if (!rig.setup()) {
+        return 0.0f;
+    }
+    rig.car.config().bump_stop_mul = bump_mul;
+    rig.car.teleport(rig.world, Vec3{0.0f, height, 0.0f}, 0.0f);
+
+    f32 deepest = 0.0f;
+    for (i32 i = 0; i < 300; i++) {
+        rig.step(0.0f, 0.0f, 0.0f, false, 1);
+        for (u32 w = 0; w < kWheelCount; w++) {
+            deepest = f_max(deepest, rig.car.wheel(w).compression_raw);
+        }
+    }
+    return deepest;
+}
+
+f32 split_mu_launch(f32 diff_lock, f32& out_spin_delta)
+{
+    Rig rig;
+    if (!rig.setup()) {
+        out_spin_delta = 0.0f;
+        return 0.0f;
+    }
+    rig.car.config().diff_lock = diff_lock;
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    rig.car.effects().tire_grip_mul[WHEEL_RL] = 0.03f;
+    rig.step(1.0f, 0.0f, 0.0f, false, 360);
+
+    out_spin_delta = f_abs(rig.car.wheel(WHEEL_RL).omega - rig.car.wheel(WHEEL_RR).omega);
+    return rig.car.forward_speed(rig.world);
+}
+
+} // namespace
+
+TEST(suspension, probes_envelope_a_kerb_the_centre_ray_misses)
+{
+    const f32 single = kerb_probe_compression(1);
+    const f32 spread = kerb_probe_compression(5);
+    CHECK(spread > single + 0.02f);
+}
+
+TEST(suspension, a_single_probe_matches_the_old_centre_ray_on_flat_ground)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.car.config().susp_probes = 1;
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    const f32 single = rig.car.wheel(WHEEL_FL).compression;
+
+    Rig spread;
+    CHECK(spread.setup());
+    spread.step(0.0f, 0.0f, 0.0f, false, 240);
+    CHECK_NEAR(spread.car.wheel(WHEEL_FL).compression, single, 1e-5);
+}
+
+TEST(suspension, bump_stops_only_engage_near_full_travel)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    for (u32 i = 0; i < kWheelCount; i++) {
+        CHECK(rig.car.wheel(i).compression < rig.car.config().wheels[i].travel);
+        CHECK(rig.car.wheel(i).bump_force == 0.0f);
+    }
+}
+
+TEST(suspension, bump_stops_limit_travel_on_a_hard_landing)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.car.teleport(rig.world, Vec3{0.0f, 2.6f, 0.0f}, 0.0f);
+
+    f32 peak_bump = 0.0f;
+    f32 deepest = 0.0f;
+    for (i32 i = 0; i < 300; i++) {
+        rig.step(0.0f, 0.0f, 0.0f, false, 1);
+        for (u32 w = 0; w < kWheelCount; w++) {
+            peak_bump = f_max(peak_bump, rig.car.wheel(w).bump_force);
+            deepest = f_max(deepest, rig.car.wheel(w).compression_raw);
+        }
+    }
+
+    const f32 travel = rig.car.config().wheels[0].travel;
+    CHECK(peak_bump > 0.0f);
+    CHECK(deepest <= travel * (1.0f + rig.car.config().bump_stop_zone) + 1e-4f);
+}
+
+TEST(suspension, bump_stops_arrest_travel_before_the_hard_limit)
+{
+    const f32 with_stops = drop_deepest_travel(10.0f, 1.6f);
+    const f32 without = drop_deepest_travel(0.0f, 1.6f);
+    CHECK(with_stops < without);
+}
+
+TEST(tire, aligning_torque_opposes_the_yaw_of_a_steady_turn)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    rig.step(1.0f, 0.0f, 0.6f, false, 480);
+
+    f32 yaw_moment = 0.0f;
+    for (u32 i = 0; i < kWheelCount; i++) {
+        const Wheel& w = rig.car.wheel(i);
+        yaw_moment += w.contact_normal.y * w.align_torque;
+    }
+    const f32 yaw_rate = rig.body().angular_vel.y;
+
+    CHECK(f_abs(yaw_rate) > 0.1f);
+    CHECK(f_abs(yaw_moment) > 1.0f);
+    CHECK(yaw_moment * yaw_rate < 0.0f);
+}
+
+TEST(tire, the_trail_settles_the_car_into_a_tighter_yaw_rate)
+{
+    const auto yaw_rate = [](bool trail) {
+        Rig rig;
+        rig.setup();
+        if (!trail) {
+            rig.car.config().tire_pneumatic_trail = 0.0f;
+            rig.car.config().tire_mech_trail = 0.0f;
+        }
+        rig.step(0.0f, 0.0f, 0.0f, false, 240);
+        rig.step(1.0f, 0.0f, 0.6f, false, 600);
+        return f_abs(rig.body().angular_vel.y);
+    };
+
+    CHECK(yaw_rate(true) < yaw_rate(false));
+}
+
+TEST(differential, an_open_diff_spins_the_unloaded_wheel)
+{
+    f32 spin_delta = 0.0f;
+    split_mu_launch(0.0f, spin_delta);
+    CHECK(spin_delta > 5.0f);
+}
+
+TEST(differential, a_locking_diff_drives_through_the_gripping_wheel)
+{
+    f32 open_delta = 0.0f;
+    f32 locked_delta = 0.0f;
+    const f32 open_speed = split_mu_launch(0.0f, open_delta);
+    const f32 locked_speed = split_mu_launch(1.0f, locked_delta);
+
+    CHECK(locked_delta < open_delta);
+    CHECK(locked_speed > open_speed);
+}
+
+TEST(differential, a_partial_lock_lands_between_open_and_locked)
+{
+    f32 open_delta = 0.0f;
+    f32 partial_delta = 0.0f;
+    f32 locked_delta = 0.0f;
+    split_mu_launch(0.0f, open_delta);
+    split_mu_launch(0.25f, partial_delta);
+    split_mu_launch(1.0f, locked_delta);
+
+    CHECK(partial_delta < open_delta);
+    CHECK(partial_delta >= locked_delta);
+}
+
+
+TEST(differential, locking_only_redistributes_axle_torque)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    rig.car.effects().tire_grip_mul[WHEEL_RL] = 0.05f;
+    rig.step(1.0f, 0.0f, 0.0f, false, 180);
+
+    const auto axle = [&rig](f32 diff_lock, f32& out_split) {
+        Wheel wheels[kWheelCount];
+        for (u32 i = 0; i < kWheelCount; i++) {
+            wheels[i] = rig.car.wheel(i);
+        }
+        Drivetrain train = rig.car.train();
+        VehicleConfig cfg = rig.car.config();
+        cfg.diff_lock = diff_lock;
+        drivetrain_tick(train, cfg, wheels, 1.0f, 1.0f, true, kDt);
+        out_split = wheels[WHEEL_RR].drive_torque - wheels[WHEEL_RL].drive_torque;
+        return wheels[WHEEL_RL].drive_torque + wheels[WHEEL_RR].drive_torque;
+    };
+
+    f32 open_split = 0.0f;
+    f32 locked_split = 0.0f;
+    const f32 open_total = axle(0.0f, open_split);
+    const f32 locked_total = axle(1.0f, locked_split);
+
+    CHECK_NEAR(locked_total, open_total, 1e-3);
+    CHECK(f_abs(locked_split) > f_abs(open_split));
+}

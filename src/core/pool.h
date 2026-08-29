@@ -14,7 +14,7 @@ namespace anom {
 template<typename T>
 class Pool {
 public:
-    static_assert(std::is_trivially_default_constructible_v<T>);
+    static_assert(std::is_trivially_copyable_v<T>);
     static_assert(std::is_trivially_destructible_v<T>);
 
     using HandleType = Handle<T>;

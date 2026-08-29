@@ -25,7 +25,7 @@ public:
     template<typename T>
     T* push()
     {
-        static_assert(std::is_trivially_default_constructible_v<T>);
+        static_assert(std::is_trivially_copyable_v<T>);
         static_assert(std::is_trivially_destructible_v<T>);
         return static_cast<T*>(push_bytes(sizeof(T), alignof(T)));
     }
@@ -33,7 +33,7 @@ public:
     template<typename T>
     T* push_array(u64 count)
     {
-        static_assert(std::is_trivially_default_constructible_v<T>);
+        static_assert(std::is_trivially_copyable_v<T>);
         static_assert(std::is_trivially_destructible_v<T>);
         return static_cast<T*>(push_bytes(sizeof(T) * count, alignof(T)));
     }

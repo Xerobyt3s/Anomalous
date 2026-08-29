@@ -5,12 +5,32 @@ namespace {
 
 constexpr f32 kRpmToRad = kTau / 60.0f;
 constexpr f32 kRadToRpm = 60.0f / kTau;
-constexpr f32 kDiffCoupleNms = 60.0f;
 constexpr f32 kIdleGovernorGain = 1.5f;
 constexpr f32 kIdleGovernorMax = 80.0f;
 constexpr f32 kShiftLockoutTime = 0.8f;
 constexpr f32 kShiftSlipGate = 0.4f;
 constexpr f32 kClutchLockRads = 40.0f;
+
+void axle_lsd(const VehicleConfig& cfg, Wheel* wheels, u32 left, u32 right, f32 wheel_inertia,
+              f32 dt)
+{
+    if (!cfg.wheels[left].driven || !cfg.wheels[right].driven || cfg.diff_lock <= 0.0f) {
+        return;
+    }
+    const Wheel& l = wheels[left];
+    const Wheel& r = wheels[right];
+    const f32 axle_torque = l.drive_torque + r.drive_torque;
+    const f32 ramp = axle_torque >= 0.0f ? cfg.diff_power_ramp : cfg.diff_coast_ramp;
+    const f32 capacity = cfg.diff_lock * (cfg.diff_preload + ramp * f_abs(axle_torque));
+
+    const f32 spin_delta = (l.omega - r.omega) * wheel_inertia / f_max(dt, 1e-5f);
+    const f32 torque_delta = (l.drive_torque - r.drive_torque)
+                           + (l.reaction_torque - r.reaction_torque);
+    const f32 transfer = f_clamp(0.5f * (spin_delta + torque_delta), -capacity, capacity);
+
+    wheels[left].drive_torque -= transfer;
+    wheels[right].drive_torque += transfer;
+}
 
 } // namespace
 
@@ -170,15 +190,17 @@ void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels,
                                       * cfg.driveline_eff;
         const f32 wheel_accel = (engine_torque * ratio * cfg.driveline_eff + reaction_sum)
                               / inertia_total;
+        const f32 carrier_torque = static_cast<f32>(driven_count) * wheel_inertia * wheel_accel
+                                 - reaction_sum;
+        const f32 share = carrier_torque / static_cast<f32>(driven_count);
         for (u32 i = 0; i < kWheelCount; i++) {
             if (!cfg.wheels[i].driven) {
                 continue;
             }
-            const f32 couple = cfg.diff_lock * kDiffCoupleNms
-                             * (avg_driven_omega - wheels[i].omega);
-            wheels[i].drive_torque = wheel_inertia * wheel_accel - wheels[i].reaction_torque
-                                   + couple;
+            wheels[i].drive_torque = share;
         }
+        axle_lsd(cfg, wheels, WHEEL_FL, WHEEL_FR, wheel_inertia, dt);
+        axle_lsd(cfg, wheels, WHEEL_RL, WHEEL_RR, wheel_inertia, dt);
         train.engine_omega = (avg_driven_omega + wheel_accel * dt) * ratio;
         train.engine_omega = f_clamp(train.engine_omega, min_omega, max_omega * 1.05f);
         return;
@@ -202,8 +224,7 @@ void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels,
             if (!cfg.wheels[i].driven) {
                 continue;
             }
-            f32 torque = per_wheel
-                       + cfg.diff_lock * kDiffCoupleNms * (avg_driven_omega - wheels[i].omega);
+            f32 torque = per_wheel;
             const f32 sync_step = (sync_omega - wheels[i].omega) * wheel_inertia / dt;
             if (torque > 0.0f) {
                 torque = f_min(torque, f_max(sync_step, 0.0f));
@@ -212,6 +233,8 @@ void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels,
             }
             wheels[i].drive_torque = torque;
         }
+        axle_lsd(cfg, wheels, WHEEL_FL, WHEEL_FR, wheel_inertia, dt);
+        axle_lsd(cfg, wheels, WHEEL_RL, WHEEL_RR, wheel_inertia, dt);
     }
 }
 

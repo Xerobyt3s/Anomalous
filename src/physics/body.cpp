@@ -28,6 +28,12 @@ void body_apply_force_at_point(RigidBody& body, Vec3 force, Vec3 point)
     body.torque_accum += cross(point - body.pos, force);
 }
 
+void body_apply_torque(RigidBody& body, Vec3 torque)
+{
+    body_wake(body);
+    body.torque_accum += torque;
+}
+
 void body_apply_impulse_at_point(RigidBody& body, Vec3 impulse, Vec3 point)
 {
     body.vel += impulse * body.inv_mass;

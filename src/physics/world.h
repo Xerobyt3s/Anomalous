@@ -65,6 +65,7 @@ public:
     void add_static_tri(Vec3 a, Vec3 b, Vec3 c) { statics_.add(a, b, c); }
     void statics_build(Arena& arena) { statics_.build(arena); }
     const StaticGrid& statics() const { return statics_; }
+    const Heightfield* heightfield() const { return hf_; }
 
     BodyHandle body_create_box(Vec3 pos, Quat rot, Vec3 half_extents, f32 mass);
     void body_destroy(BodyHandle handle);

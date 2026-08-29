@@ -29,6 +29,9 @@ struct Wheel {
     f32 omega = 0.0f;
     f32 spin_angle = 0.0f;
     f32 compression = 0.0f;
+    f32 compression_raw = 0.0f;
+    f32 bump_force = 0.0f;
+    f32 align_torque = 0.0f;
     f32 load = 0.0f;
     f32 slip_ratio = 0.0f;
     f32 slip_angle = 0.0f;

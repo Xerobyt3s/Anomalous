@@ -35,6 +35,7 @@ using BodyHandle = Handle<RigidBody>;
 Mat3 body_inv_inertia_world(const RigidBody& body);
 Vec3 body_velocity_at_point(const RigidBody& body, Vec3 point);
 void body_apply_force_at_point(RigidBody& body, Vec3 force, Vec3 point);
+void body_apply_torque(RigidBody& body, Vec3 torque);
 void body_apply_impulse_at_point(RigidBody& body, Vec3 impulse, Vec3 point);
 void body_wake(RigidBody& body);
 bool body_state_valid(const RigidBody& body);
