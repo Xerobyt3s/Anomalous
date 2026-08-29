@@ -13,7 +13,6 @@ GlfwVersion glfw_version()
 
 std::string_view glfw_version_string()
 {
-    // Points into GLFW's own static storage, which outlives everything.
     return glfwGetVersionString();
 }
 

@@ -1,6 +1,3 @@
-// P0 sanity: proves the harness runs, the macros behave, and anomalous_core links into
-// the test binary. Replaced by real coverage in P1 (math, arena, pool, config).
-
 #include "test.h"
 
 #include "core/types.h"
@@ -18,8 +15,6 @@ TEST(sanity, check_near_absolute)
 
 TEST(sanity, check_near_relative_at_scale)
 {
-    // Absolute epsilon would fail here; the relative fallback is what makes the
-    // tolerance meaningful for world-space physics baselines.
     CHECK_NEAR(1.0e6, 1.0e6 + 0.5, 1e-6);
 }
 
@@ -39,8 +34,13 @@ TEST(core, byte_size_helpers)
     CHECK(kilobytes(1) == 1024ull);
     CHECK(megabytes(1) == 1048576ull);
     CHECK(gigabytes(1) == 1073741824ull);
-    // The original's arena reserve, which overflows a u32 and is why these return u64.
     CHECK(gigabytes(4) == 4294967296ull);
+}
+
+TEST(core, array_count_reports_extent)
+{
+    const int values[7] = {};
+    CHECK(array_count(values) == 7);
 }
 
 TEST(core, version_links_from_core_library)

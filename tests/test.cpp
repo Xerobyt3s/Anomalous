@@ -14,8 +14,6 @@ struct Registry {
     int overflow = 0;
 };
 
-// Function-local static: guarantees the registry is constructed before the first
-// Registrar touches it, whatever order the translation units initialise in.
 Registry& registry()
 {
     static Registry r;

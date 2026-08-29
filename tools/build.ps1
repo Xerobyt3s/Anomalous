@@ -1,28 +1,6 @@
 <#
 .SYNOPSIS
-    Configure, build and test Anomalous with Ninja + MSVC from an ordinary shell.
-
-.DESCRIPTION
-    The Ninja presets need cl.exe on PATH, which normally means opening a "x64 Native
-    Tools Command Prompt" first. This script locates Visual Studio with vswhere, imports
-    the vcvars64 environment into the current session, then runs CMake.
-
-    Without it, CMake's compiler search can silently pick up an unrelated toolchain that
-    happens to be on PATH (there is a MinGW GCC 6.3.0 on this machine that it will
-    otherwise choose, and which cannot compile C++20).
-
-.PARAMETER Config
-    Debug (default), Release, or RelWithDebInfo.
-
-.PARAMETER Target
-    Build a single target instead of all of them.
-
-.PARAMETER Test
-    Run the test suite after building.
-
-.PARAMETER Clean
-    Delete the build directory before configuring.
-
+    Configure, build and test Anomalous with Ninja and MSVC.
 .EXAMPLE
     .\tools\build.ps1 -Test
     .\tools\build.ps1 -Config Release
@@ -51,8 +29,6 @@ $presetMap = @{
 }
 $preset = $presetMap[$Config]
 
-# --- Import the MSVC environment, once per session ---------------------------
-
 if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (-not (Test-Path $vswhere)) {
@@ -73,7 +49,6 @@ if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
 
     Write-Host "Importing MSVC environment from $vsPath" -ForegroundColor DarkGray
 
-    # Run vcvars in a child cmd, dump the resulting environment, and copy it back.
     & cmd.exe /c "`"$vcvars`" >nul 2>&1 && set" | ForEach-Object {
         if ($_ -match '^([^=]+)=(.*)$') {
             Set-Item -Path "env:$($matches[1])" -Value $matches[2]
@@ -84,8 +59,6 @@ if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
         throw 'vcvars64 ran but cl.exe is still not on PATH.'
     }
 }
-
-# --- Configure, build, test --------------------------------------------------
 
 $buildDir = Join-Path $repoRoot "build\$preset"
 

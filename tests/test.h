@@ -1,13 +1,5 @@
 #pragma once
 
-// Minimal test harness.
-//
-// Deliberately dependency-free: the tests link anomalous_core and nothing else, so the
-// suite stays runnable headless (no window, no GL context) and in CI. There are no
-// exceptions, so a failed CHECK records the failure and returns from the test body --
-// which is why every CHECK must sit directly in the test function, not in a helper that
-// returns void and swallows the early exit.
-
 #include <cmath>
 
 namespace test {
@@ -26,15 +18,11 @@ void register_case(const Case& c);
 void report_failure(const char* file, int line, const char* expr, const char* detail);
 int run_all(int argc, char** argv);
 
+bool as_bool(bool value);
+
 struct Registrar {
     explicit Registrar(const Case& c) { register_case(c); }
 };
-
-// Deliberately not constexpr, and deliberately not inline-folded away at the source
-// level: routing every CHECK condition through a call keeps the `if` from being a
-// constant expression, which is what /W4 flags as C4127. The alternative is disabling
-// C4127 for the whole project, and it is worth more than that in real code.
-bool as_bool(bool value);
 
 inline bool nearly_equal(double a, double b, double eps)
 {
@@ -42,8 +30,6 @@ inline bool nearly_equal(double a, double b, double eps)
     if (diff <= eps) {
         return true;
     }
-    // Relative comparison for large magnitudes, so tolerances stay meaningful when the
-    // physics baselines start producing world-space coordinates in the hundreds.
     const double scale = std::fmax(std::fabs(a), std::fabs(b));
     return diff <= eps * scale;
 }
@@ -78,7 +64,7 @@ inline bool nearly_equal(double a, double b, double eps)
 
 #define CHECK_NEAR(a, b, eps)                                                   \
     do {                                                                        \
-        if (!::test::nearly_equal((a), (b), (eps))) {                           \
+        if (!::test::as_bool(::test::nearly_equal((a), (b), (eps)))) {          \
             ::test::report_failure(__FILE__, __LINE__, #a " ~= " #b, nullptr);    \
             return;                                                             \
         }                                                                       \
