@@ -7,6 +7,7 @@
 namespace anom {
 
 class PhysWorld;
+class RenderDevice;
 class Terrain;
 
 inline constexpr u32 kCablePoints = 64;
@@ -65,6 +66,7 @@ struct Cable {
     f32 current_length() const;
     f32 span(Vec3 root, Vec3 end, const Vec3* anchor) const;
     void sim(const CableSimInput& in, f32 dt);
+    void render(RenderDevice& device) const;
 };
 
 } // namespace anom

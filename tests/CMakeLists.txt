@@ -19,6 +19,10 @@ set(ANOMALOUS_TEST_SOURCES
     test_ui.cpp
     test_brush.cpp
     test_input_context.cpp
+    test_fs.cpp
+    test_screen.cpp
+    test_shell.cpp
+    test_terminal.cpp
 )
 
 add_executable(anomalous_tests ${ANOMALOUS_TEST_SOURCES})

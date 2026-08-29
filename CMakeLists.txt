@@ -50,6 +50,7 @@ if(MSVC)
         $<$<CONFIG:Release>:/O2;/GL>
     )
     target_link_options(anomalous_options INTERFACE
+        /STACK:8388608
         $<$<CONFIG:Debug>:/DEBUG>
         $<$<CONFIG:RelWithDebInfo>:/DEBUG>
         $<$<CONFIG:Release>:/LTCG>
@@ -96,7 +97,24 @@ set(ANOMALOUS_CORE_SOURCES
     src/audio/tapes.cpp
     src/player/interact.cpp
     src/player/player.cpp
+    src/terminal/disk_image.cpp
+    src/terminal/comms.cpp
     src/terminal/disks.cpp
+    src/terminal/fs.cpp
+    src/terminal/mapdata.cpp
+    src/terminal/screen.cpp
+    src/terminal/shell.cpp
+    src/terminal/terminal.cpp
+    src/terminal/programs/boot.cpp
+    src/terminal/programs/breach.cpp
+    src/terminal/programs/comms.cpp
+    src/terminal/programs/link.cpp
+    src/terminal/programs/map.cpp
+    src/terminal/programs/status.cpp
+    src/terminal/programs/tapes.cpp
+    src/terminal/term_font.cpp
+    src/terminal/term_render.cpp
+    src/terminal/virus.cpp
     src/physics/collide.cpp
     src/physics/heightfield.cpp
     src/physics/static_grid.cpp
@@ -163,7 +181,26 @@ set(ANOMALOUS_CORE_HEADERS
     src/audio/tapes.h
     src/player/interact.h
     src/player/player.h
+    src/terminal/disk_image.h
+    src/terminal/comms.h
     src/terminal/disks.h
+    src/terminal/fs.h
+    src/terminal/mapdata.h
+    src/terminal/screen.h
+    src/terminal/shell.h
+    src/terminal/terminal.h
+    src/terminal/program.h
+    src/terminal/term_view.h
+    src/terminal/programs/boot.h
+    src/terminal/programs/breach.h
+    src/terminal/programs/comms.h
+    src/terminal/programs/link.h
+    src/terminal/programs/map.h
+    src/terminal/programs/status.h
+    src/terminal/programs/tapes.h
+    src/terminal/term_font.h
+    src/terminal/term_render.h
+    src/terminal/virus.h
     src/physics/collide.h
     src/physics/heightfield.h
     src/physics/static_grid.h

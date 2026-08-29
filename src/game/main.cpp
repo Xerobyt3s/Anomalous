@@ -32,6 +32,13 @@ struct Options {
     f32 time_of_day = 0.32f;
     bool retro = true;
     bool free_cam = false;
+    bool terminal = false;
+    const char* term_cmd = nullptr;
+    i64 term_cmd_frame = 300;
+    bool photo = false;
+    bool place = false;
+    bool term_loose = false;
+    i64 photo_frame = 150;
     bool panels = false;
     bool brush = false;
     f32 rain = 0.0f;
@@ -66,6 +73,18 @@ Options parse_options(int argc, char** argv)
             options.brush = true;
         } else if (std::strcmp(argv[i], "--panels") == 0) {
             options.panels = true;
+        } else if (std::strcmp(argv[i], "--photo") == 0) {
+            options.photo = true;
+        } else if (std::strcmp(argv[i], "--place") == 0) {
+            options.place = true;
+        } else if (std::strcmp(argv[i], "--termloose") == 0) {
+            options.term_loose = true;
+            options.terminal = true;
+        } else if (std::strcmp(argv[i], "--term") == 0) {
+            options.terminal = true;
+        } else if (std::strncmp(argv[i], "--termcmd=", 10) == 0) {
+            options.term_cmd = argv[i] + 10;
+            options.terminal = true;
         } else if (std::strcmp(argv[i], "--freecam") == 0) {
             options.free_cam = true;
         } else if (std::strcmp(argv[i], "--campos") == 0 && i + 3 < argc) {
@@ -123,7 +142,7 @@ int main(int argc, char** argv)
     }
 
     Game game;
-    if (!game.init(device, perm, scratch, kZoneDir)) {
+    if (!game.init(device, fonts, perm, scratch, kZoneDir)) {
         return 1;
     }
 
@@ -137,7 +156,7 @@ int main(int argc, char** argv)
     env.time_of_day = options.time_of_day;
     env.exposure = options.exposure;
     env.sun_dir = -sun_direction_for_time(env.time_of_day);
-    device.set_environment(env);
+    game.set_environment(env);
 
     RetroFx retro;
     retro.enabled = options.retro;
@@ -147,7 +166,27 @@ int main(int argc, char** argv)
         device.shaders().program(name);
     }
 
+    if (options.photo || options.place) {
+        game.interact().hands().kind = anom::ITEM_CAMERA;
+    }
+    if (options.place) {
+        game.player().look(900.0f, 260.0f);
+    }
+    if (options.photo) {
+        game.carsys().coax_target = anom::kCoaxTargetCamera;
+    }
     game.toggles().free_cam = options.free_cam;
+    if (options.terminal) {
+        anom::CarSys& sys = game.carsys();
+        sys.parts[PART_COMPUTER].installed = !options.term_loose;
+        sys.parts[PART_ANTENNA].installed = true;
+        sys.parts[PART_ANTENNA].variant = 1;
+        sys.computer_on = true;
+        for (anom::Cable& cable : sys.cables) {
+            cable.state = anom::CableState::Plugged;
+            cable.linked = true;
+        }
+    }
     if (options.brush) {
         game.editor().toggle(game.world(), game.phys());
         game.editor().set_brush_mode(true);
@@ -183,10 +222,26 @@ int main(int argc, char** argv)
         }
 
         window.poll();
+        if (options.place) {
+            window.input().set_key(static_cast<int>(anom::Key::F), true);
+        }
+        if (options.photo) {
+            window.input().set_mouse_button(1, true);
+            if (frame_index == options.photo_frame) {
+                window.input().set_mouse_button(0, true);
+            }
+        }
         const Input& input = window.input();
 
         watcher.poll(now);
         game.poll_hot_reload(scratch, now);
+        if (options.term_cmd && frame_index == options.term_cmd_frame) {
+            game.focus_terminal(true);
+            for (const char* p = options.term_cmd; *p; p++) {
+                game.terminal().key_char(*p);
+            }
+            game.terminal().key(anom::TermKey::Enter);
+        }
         game.handle_input(window, input, static_cast<f32>(frame_dt));
         game.advance(static_cast<f32>(frame_dt));
 

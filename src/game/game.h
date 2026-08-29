@@ -3,6 +3,7 @@
 #include "audio/audio.h"
 #include "audio/tapes.h"
 #include "carsys/carsys.h"
+#include "carsys/items.h"
 #include "carsys/carsys_render.h"
 #include "core/types.h"
 #include "editor/editor.h"
@@ -12,6 +13,10 @@
 #include "platform/input_context.h"
 #include "player/player.h"
 #include "render/camera.h"
+#include "render/device.h"
+#include "terminal/disks.h"
+#include "terminal/term_render.h"
+#include "terminal/terminal.h"
 #include "ui/ui.h"
 #include "vehicle/vehicle.h"
 #include "world/entity.h"
@@ -25,6 +30,7 @@ namespace anom {
 
 class Arena;
 class DebugDraw;
+class FontChain;
 class Input;
 class RenderDevice;
 class TerrainRenderer;
@@ -59,7 +65,8 @@ struct GameToggles {
 
 class Game {
 public:
-    bool init(RenderDevice& device, Arena& perm, Arena& scratch, std::string_view zone_dir);
+    bool init(RenderDevice& device, FontChain& fonts, Arena& perm, Arena& scratch,
+              std::string_view zone_dir);
 
     void handle_input(Window& window, const Input& input, f32 frame_dt);
     void advance(f32 frame_dt);
@@ -84,6 +91,10 @@ public:
     Editor& editor() { return editor_; }
     Audio& audio() { return audio_; }
     Ui& ui() { return ui_; }
+    Terminal& terminal() { return terminal_; }
+    void set_environment(const Environment& env);
+    bool terminal_focused() const { return term_focus_; }
+    void focus_terminal(bool on) { term_focus_ = on; }
     GameToggles& toggles() { return toggles_; }
     const ZoneSpawn& spawn() const { return spawn_; }
     u64 tick_count() const { return tick_count_; }
@@ -96,12 +107,32 @@ private:
     void sync_pickup_transforms();
     void apply_weather_grip();
     void update_camera(f32 frame_dt);
+    void track_camera_velocity(f32 frame_dt);
     void guard_against_falling();
     void update_audio(f32 frame_dt);
+    void update_cables(f32 frame_dt);
+    void update_terminal(const Input& input, f32 frame_dt);
+    void update_camera_item(const Input& input, f32 frame_dt);
+    void capture_exposure(RenderDevice& device);
+    bool build_video_camera(Camera& out) const;
+    void render_video_feed(RenderDevice& device, TerrainRenderer& terrain_renderer,
+                           f32 frame_dt, f32 time);
+    void draw_viewfinder(DebugDraw& debug, TextRenderer& text, Vec2 viewport);
+    void draw_place_preview(RenderDevice& device, DebugDraw& debug);
+    void draw_loose_terminal(RenderDevice& device, u32 screen_texture);
+    u32 terminal_screen_texture() const;
+    void terminal_keys(const Input& input);
+    void build_term_view(const Input& input, TermView& out) const;
+    void drop_cable(u32 kind);
+    bool terminal_transform(Vec3& out_pos, Quat& out_rot) const;
+    Vec3 hands_item_pos() const;
+    Vec3 tower_port_pos() const;
+    const Entity* find_pickup(ItemKind kind) const;
     void draw_hud(DebugDraw& debug, TextRenderer& text, Vec2 viewport, f32 frame_dt);
     void draw_debug_overlays(DebugDraw& debug);
     void bind_entity_meshes(RenderDevice& device);
     void draw_vehicle(RenderDevice& device);
+    void draw_viewmodel(RenderDevice& device);
 
     Terrain terrain_;
     World world_;
@@ -115,6 +146,9 @@ private:
     TapeLibrary tapes_;
     Audio audio_;
     CarSysRenderer car_render_;
+    DiskStore disks_;
+    Terminal terminal_{tapes_};
+    TermRenderer term_render_;
     Editor editor_;
     Ui ui_;
     InputContext context_;
@@ -130,10 +164,27 @@ private:
     Telemetry telem_speed_;
     Telemetry telem_load_;
 
+    Vec3 cam_vel_;
+    Vec3 prev_cam_pos_;
+    bool prev_cam_valid_ = false;
     Vec3 tower_pos_;
+    Environment env_;
+    f32 time_of_day_ = 0.32f;
+    bool tower_breached_ = false;
+    ScreenFx screen_fx_;
+    f32 term_anim_ = 0.0f;
+    f32 term_power_elapsed_ = 0.0f;
+    bool term_focus_ = false;
+    bool term_prev_power_ = false;
     Quat tower_rot_ = quat_identity();
 
     f32 throw_charge_ = 0.0f;
+    bool viewfinder_ = false;
+    bool capture_pending_ = false;
+    f32 capture_flash_ = 0.0f;
+    f32 capture_msg_until_ = 0.0f;
+    FixedString<48> capture_msg_;
+    f32 video_timer_ = 0.0f;
     bool place_active_ = false;
     bool place_valid_ = false;
     Vec3 place_pos_;

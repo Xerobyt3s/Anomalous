@@ -49,6 +49,8 @@ public:
     static constexpr i32 kShadowSize = 2048;
     static constexpr i32 kBloomMips = 6;
     static constexpr u32 kPointLights = 4;
+    static constexpr i32 kVideoWidth = 320;
+    static constexpr i32 kVideoHeight = 200;
 
     bool init(FileWatcher& watcher, Arena& scratch);
     void shutdown();
@@ -73,6 +75,10 @@ public:
     bool shadow_begin(Vec3 focus);
     void shadow_end();
     bool shadow_pass_active() const { return shadow_pass_; }
+
+    bool video_begin(const Camera& cam);
+    u32 video_end();
+    bool read_backbuffer_rgb(Arena& scratch, u8* out, i32 out_w, i32 out_h);
     Mat4 shadow_matrix() const { return shadow_mat_; }
 
     void draw_sky(f32 time);
@@ -124,6 +130,11 @@ private:
     f32 time_seconds_ = 0.0f;
     DrawStats stats_;
     StateCache state_;
+
+    u32 video_fbo_ = 0;
+    u32 video_tex_ = 0;
+    u32 video_depth_ = 0;
+    bool video_broken_ = false;
 
     u32 camera_ubo_ = 0;
     u32 quad_vao_ = 0;

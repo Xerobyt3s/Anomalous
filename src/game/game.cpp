@@ -13,6 +13,7 @@
 #include "render/gpu_mesh.h"
 #include "render/terrain_render.h"
 #include "render/text.h"
+#include "render/sky.h"
 
 namespace anom {
 namespace {
@@ -23,6 +24,9 @@ constexpr f32 kPlaceRange = 3.5f;
 constexpr f32 kPlaceNormalY = 0.55f;
 constexpr f32 kEngineAudioLocal[3] = {0.0f, 0.10f, -1.55f};
 constexpr f32 kDashAudioLocal[3] = {0.0f, 0.35f, -0.35f};
+constexpr Vec3 kTowerPortLocal{0.0f, 1.35f, 0.62f};
+constexpr Vec3 kTerminalScreenOffset{0.0f, 0.047f, 0.170f};
+constexpr Vec3 kTerminalScreenScale{0.304f, 0.19f, 1.0f};
 
 Vec3 body_point(const RigidBody& body, Vec3 local)
 {
@@ -31,7 +35,14 @@ Vec3 body_point(const RigidBody& body, Vec3 local)
 
 } // namespace
 
-bool Game::init(RenderDevice& device, Arena& perm, Arena& scratch, std::string_view zone_dir)
+void Game::set_environment(const Environment& env)
+{
+    env_ = env;
+    time_of_day_ = env.time_of_day;
+}
+
+bool Game::init(RenderDevice& device, FontChain& fonts, Arena& perm, Arena& scratch,
+                std::string_view zone_dir)
 {
     perm_ = &perm;
     scratch_ = &scratch;
@@ -64,6 +75,14 @@ bool Game::init(RenderDevice& device, Arena& perm, Arena& scratch, std::string_v
     interact_spawn_zone_pickups(world_, phys_, terrain_, pickups_);
     audio_.init(perm);
 
+    disks_.init(perm);
+    terminal_.init(perm, disks_);
+    terminal_.mapdata().init(terrain_.heightfield());
+    if (!term_render_.init(fonts, scratch)) {
+        log_error("game: terminal renderer init failed");
+        return false;
+    }
+
     editor_.init(perm);
     editor_.snapshot_world(world_, phys_);
 
@@ -80,7 +99,9 @@ bool Game::init(RenderDevice& device, Arena& perm, Arena& scratch, std::string_v
     }
 
     (void)device;
-    log_info("game: ready | %u entities | %u pickups", world_.count(), pickups_.count);
+    log_info("game: ready | %u entities | %u pickups | car at %.1f %.1f %.1f",
+             world_.count(), pickups_.count, static_cast<f64>(spawn_.car_pos.x),
+             static_cast<f64>(spawn_.car_pos.y), static_cast<f64>(spawn_.car_pos.z));
     return true;
 }
 
@@ -252,6 +273,7 @@ void Game::build_input_context(const Input& input)
 
     context_.begin_frame();
     context_.activate(InputLayer::TextField, ui_.text_active());
+    context_.activate(InputLayer::Terminal, term_focus_);
     context_.activate(InputLayer::Editor, editor_.active());
     context_.activate(InputLayer::Panels,
                       cursor_visible && ui_.mouse_over_panel(input.mouse_pos()));
@@ -261,7 +283,19 @@ void Game::build_input_context(const Input& input)
 void Game::handle_input(Window& window, const Input& input, f32 frame_dt)
 {
     build_input_context(input);
+    update_camera_item(input, frame_dt);
     const bool global = context_.keyboard(InputLayer::Global);
+
+    if (term_focus_) {
+        window.set_cursor_captured(false);
+        vehicle_.set_input(VehicleInput{});
+        terminal_keys(input);
+        if (input.pressed(Key::Escape)) {
+            term_focus_ = false;
+        }
+        pending_cmd_ = PlayerCommand{};
+        return;
+    }
 
     if (global) {
         if (input.pressed(Key::Escape) && !editor_.active()) {
@@ -350,7 +384,7 @@ void Game::handle_input(Window& window, const Input& input, f32 frame_dt)
     view_ray.origin = camera_.pos;
     view_ray.dir = camera_.forward();
 
-    interact_.set_tower(true, tower_pos_ + rotate(tower_rot_, Vec3{0.0f, 1.35f, 0.62f}));
+    interact_.set_tower(true, tower_port_pos());
 
     InteractContext ctx;
     ctx.player = &player_;
@@ -363,6 +397,9 @@ void Game::handle_input(Window& window, const Input& input, f32 frame_dt)
     ctx.e_down = input.down(Key::E);
     ctx.e_pressed = input.pressed(Key::E);
     interact_.update(boxes_, ctx, frame_dt);
+    if (interact_.take_terminal_request() && carsys_.computer_on) {
+        term_focus_ = true;
+    }
 
     player_.set_speed_mul(f_max(1.0f - item_mass(interact_.hands().kind) * 0.012f, 0.6f));
 
@@ -398,6 +435,19 @@ void Game::update_camera(f32 frame_dt)
     player_.camera(phys_, &vehicle_, alpha_, frame_dt, camera_);
 }
 
+void Game::track_camera_velocity(f32 frame_dt)
+{
+    cam_vel_ = Vec3{};
+    if (prev_cam_valid_ && frame_dt > 1e-4f) {
+        cam_vel_ = (camera_.pos - prev_cam_pos_) * (1.0f / frame_dt);
+        if (length(cam_vel_) > 60.0f) {
+            cam_vel_ = Vec3{};
+        }
+    }
+    prev_cam_pos_ = camera_.pos;
+    prev_cam_valid_ = true;
+}
+
 void Game::advance(f32 frame_dt)
 {
     if (editor_.active()) {
@@ -421,6 +471,8 @@ void Game::advance(f32 frame_dt)
     guard_against_falling();
     alpha_ = static_cast<f32>(accumulator_ / kFixedDt);
     update_camera(frame_dt);
+    track_camera_velocity(frame_dt);
+    update_cables(frame_dt);
 }
 
 void Game::poll_hot_reload(Arena& scratch, f64 now)
@@ -511,7 +563,7 @@ void Game::draw_hud(DebugDraw& debug, TextRenderer& text, Vec2 viewport, f32 fra
     const f32 cx = viewport.x * 0.5f;
     const f32 cy = viewport.y * 0.5f;
 
-    if (!editor_.active() && !toggles_.free_cam) {
+    if (!editor_.active() && !toggles_.free_cam && !viewfinder_) {
         debug.line_2d(cx - 6.0f, cy, cx + 6.0f, cy, kDdWhite);
         debug.line_2d(cx, cy - 6.0f, cx, cy + 6.0f, kDdWhite);
     }
@@ -551,8 +603,14 @@ void Game::draw_hud(DebugDraw& debug, TextRenderer& text, Vec2 viewport, f32 fra
         }
     }
 
-    if (place_active_ && place_valid_) {
-        debug.circle(place_pos_, Vec3{0.0f, 1.0f, 0.0f}, 0.25f, kDdGreen);
+    if (place_active_ && interact_.hands().kind != ITEM_NONE) {
+        if (place_valid_) {
+            debug.text_2d(text, cx - 130.0f, viewport.y * 0.66f, 17.0f, kDdWhite,
+                          "release [F] to place | scroll to rotate");
+        } else {
+            debug.text_2d(text, cx - 90.0f, viewport.y * 0.66f, 17.0f, kDdGray,
+                          "no surface to place on");
+        }
     }
 
     if (toggles_.telemetry) {
@@ -639,6 +697,248 @@ void Game::draw_vehicle(RenderDevice& device)
     }
 }
 
+u32 Game::terminal_screen_texture() const
+{
+    return terminal_.powered() ? term_render_.texture() : 0;
+}
+
+void Game::draw_loose_terminal(RenderDevice& device, u32 screen_texture)
+{
+    if (carsys_.parts[PART_COMPUTER].installed) {
+        return;
+    }
+    const Entity* loose = find_pickup(ITEM_COMPUTER);
+    if (!loose) {
+        return;
+    }
+
+    const Mat4 base = mat4_trs(loose->pos, loose->rot,
+                               Vec3{loose->scale, loose->scale, loose->scale});
+    if (screen_texture) {
+        device.draw_lit_quad(base * mat4_trs(kTerminalScreenOffset, quat_identity(),
+                                             kTerminalScreenScale),
+                             screen_texture, 0.0f);
+    }
+    if (carsys_.floppy_disk >= 0) {
+        device.draw_mesh(device.assets().mesh("part_floppy"),
+                         base * mat4_trs(Vec3{0.0f, -0.119f, 0.223f}, quat_identity(),
+                                         Vec3{1.0f, 1.0f, 1.0f}));
+    }
+}
+
+void Game::draw_place_preview(RenderDevice& device, DebugDraw& debug)
+{
+    if (!place_active_ || !place_valid_ || interact_.hands().kind == ITEM_NONE) {
+        return;
+    }
+    const ItemKind kind = interact_.hands().kind;
+    const Quat yaw_rot = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, place_yaw_);
+    const Quat rot = yaw_rot * item_cargo_rot(kind);
+    const Vec3 pos = place_pos_ - rotate(rot, item_mesh_center(kind));
+
+    device.draw_mesh(device.assets().mesh(item_mesh(kind)),
+                     mat4_trs(pos, rot, Vec3{1.0f, 1.0f, 1.0f}));
+    debug.obb(place_pos_, yaw_rot, item_cargo_half(kind), dd_rgba(120, 220, 140, 255));
+}
+
+void Game::draw_viewmodel(RenderDevice& device)
+{
+    const Item& held = interact_.hands();
+    if (held.kind == ITEM_NONE || editor_.active() || toggles_.free_cam || place_active_
+        || viewfinder_) {
+        return;
+    }
+    if (player_.state() != PlayerState::OnFoot && !player_.driving()) {
+        return;
+    }
+    if (interact_.action() == InteractAction::PlaceCargo) {
+        return;
+    }
+
+    AssetCache& assets = device.assets();
+
+    if (interact_.action() == InteractAction::Refuel && held.kind == ITEM_JERRYCAN) {
+        if (const RigidBody* body = phys_.body(vehicle_.body())) {
+            const f32 pour = interact_.hold_progress();
+            const Vec3 local = Vec3{f_lerp(1.06f, 0.96f, pour), f_lerp(0.38f, 0.30f, pour),
+                                    1.30f}
+                             - vehicle_.config().com_offset;
+            const Quat tilt = quat_from_axis_angle(Vec3{0.0f, 0.0f, 1.0f},
+                                                   f_lerp(0.45f, 1.95f, pour));
+            const Mat4 base = mat4_trs(lerp(body->prev_pos, body->pos, alpha_),
+                                       slerp(body->prev_rot, body->rot, alpha_),
+                                       Vec3{1.0f, 1.0f, 1.0f});
+            device.draw_mesh(assets.mesh(item_mesh(ITEM_JERRYCAN)),
+                             base * mat4_trs(local, tilt, Vec3{1.0f, 1.0f, 1.0f}));
+            return;
+        }
+    }
+
+    f32 scale = held.kind == ITEM_TIRE ? 0.45f : 0.85f;
+    if (antenna_variant_for_item(held.kind) >= 0) {
+        scale = 0.5f;
+    }
+    if (player_.driving()) {
+        scale *= 0.75f;
+    }
+
+    const Quat rot = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, -camera_.yaw);
+    const Vec3 pos = hands_item_pos() - rotate(rot, item_mesh_center(held.kind)) * scale;
+    const Mat4 base = mat4_trs(pos, rot, Vec3{scale, scale, scale});
+    device.draw_mesh(assets.mesh(item_mesh(held.kind)), base);
+
+    const u32 screen_texture = terminal_screen_texture();
+    if (held.kind == ITEM_COMPUTER && screen_texture) {
+        device.draw_lit_quad(base * mat4_trs(kTerminalScreenOffset, quat_identity(),
+                                             kTerminalScreenScale),
+                             screen_texture, 0.0f);
+    }
+}
+
+void Game::update_camera_item(const Input& input, f32 frame_dt)
+{
+    viewfinder_ = player_.state() == PlayerState::OnFoot && !term_focus_ && !toggles_.free_cam
+               && !editor_.active() && interact_.hands().kind == ITEM_CAMERA
+               && input.down(MouseButton::Right);
+    if (viewfinder_ && input.pressed(MouseButton::Left)) {
+        capture_pending_ = true;
+    }
+    capture_flash_ = f_max(capture_flash_ - frame_dt * 3.0f, 0.0f);
+    if (capture_msg_until_ > 0.0f) {
+        capture_msg_until_ -= frame_dt;
+    }
+}
+
+void Game::capture_exposure(RenderDevice& device)
+{
+    if (!capture_pending_) {
+        return;
+    }
+    capture_pending_ = false;
+
+    ArenaScope temp(*scratch_);
+    u8* shot = scratch_->push_array<u8>(kPhotoBytes);
+    if (!shot || !device.read_backbuffer_rgb(*scratch_, shot, kPhotoWidth, kPhotoHeight)) {
+        return;
+    }
+
+    if (disks_.camera_capture(&terminal_.fs(), shot)) {
+        capture_flash_ = 1.0f;
+        audio_.play(SFX_RATCHET, 0.55f, 1.9f);
+        capture_msg_.format("exposure saved - %u left",
+                            disks_.camera_exposures_left(&terminal_.fs()));
+    } else {
+        audio_.play(SFX_THUMP, 0.30f, 0.7f);
+        capture_msg_.assign("film spent");
+    }
+    capture_msg_until_ = 2.5f;
+}
+
+void Game::draw_viewfinder(DebugDraw& debug, TextRenderer& text, Vec2 viewport)
+{
+    if (capture_flash_ > 0.0f) {
+        const u8 a = static_cast<u8>(capture_flash_ * 210.0f);
+        debug.rect_2d_filled(0.0f, 0.0f, viewport.x, viewport.y, dd_rgba(235, 245, 235, a));
+    }
+
+    if (viewfinder_) {
+        const f32 frame_h = viewport.y * 0.80f;
+        const f32 frame_w = frame_h * 1.6f;
+        const f32 x0 = (viewport.x - frame_w) * 0.5f;
+        const f32 y0 = (viewport.y - frame_h) * 0.5f;
+        const f32 x1 = x0 + frame_w;
+        const f32 y1 = y0 + frame_h;
+
+        const u32 shade = dd_rgba(8, 10, 8, 215);
+        debug.rect_2d_filled(0.0f, 0.0f, viewport.x, y0, shade);
+        debug.rect_2d_filled(0.0f, y1, viewport.x, viewport.y, shade);
+        debug.rect_2d_filled(0.0f, y0, x0, y1, shade);
+        debug.rect_2d_filled(x1, y0, viewport.x, y1, shade);
+
+        const u32 line = dd_rgba(220, 230, 220, 200);
+        const f32 b = 26.0f;
+        debug.rect_2d(x0, y0, x1, y1, dd_rgba(160, 170, 160, 90));
+        debug.rect_2d_filled(x0, y0, x0 + b, y0 + 3.0f, line);
+        debug.rect_2d_filled(x0, y0, x0 + 3.0f, y0 + b, line);
+        debug.rect_2d_filled(x1 - b, y0, x1, y0 + 3.0f, line);
+        debug.rect_2d_filled(x1 - 3.0f, y0, x1, y0 + b, line);
+        debug.rect_2d_filled(x0, y1 - 3.0f, x0 + b, y1, line);
+        debug.rect_2d_filled(x0, y1 - b, x0 + 3.0f, y1, line);
+        debug.rect_2d_filled(x1 - b, y1 - 3.0f, x1, y1, line);
+        debug.rect_2d_filled(x1 - 3.0f, y1 - b, x1, y1, line);
+
+        const f32 cx = viewport.x * 0.5f;
+        const f32 cy = viewport.y * 0.5f;
+        debug.rect_2d_filled(cx - 14.0f, cy - 1.0f, cx + 14.0f, cy + 1.0f, line);
+        debug.rect_2d_filled(cx - 1.0f, cy - 14.0f, cx + 1.0f, cy + 14.0f, line);
+
+        debug.text_2d(text, x0 + 8.0f, y1 - 26.0f, 17.0f, kDdWhite, "EXP %02u",
+                      disks_.camera_exposures_left(&terminal_.fs()));
+        debug.text_2d(text, x1 - 170.0f, y1 - 26.0f, 17.0f, kDdGray, "LMB SHUTTER");
+    }
+
+    if (capture_msg_until_ > 0.0f && player_.state() == PlayerState::OnFoot) {
+        debug.text_2d(text, viewport.x * 0.5f - 80.0f, viewport.y * 0.80f, 18.0f, kDdCyan,
+                      "%s", capture_msg_.c_str());
+    }
+}
+
+bool Game::build_video_camera(Camera& out) const
+{
+    if (interact_.hands().kind == ITEM_CAMERA) {
+        out = camera_;
+        return true;
+    }
+    const Entity* cam = find_pickup(ITEM_CAMERA);
+    if (!cam) {
+        return false;
+    }
+    const Vec3 eye = cam->pos + rotate(cam->rot, Vec3{0.0f, 0.06f, -0.10f});
+    const Vec3 fwd = rotate(cam->rot, Vec3{0.0f, 0.0f, -1.0f});
+    out = Camera{};
+    out.pos = eye;
+    out.look_at(eye + fwd);
+    return true;
+}
+
+void Game::render_video_feed(RenderDevice& device, TerrainRenderer& terrain_renderer,
+                             f32 frame_dt, f32 time)
+{
+    if (!terminal_.video_active()) {
+        video_timer_ = 0.0f;
+        terminal_.set_video_texture(0);
+        return;
+    }
+    video_timer_ -= frame_dt;
+    if (video_timer_ > 0.0f) {
+        return;
+    }
+    video_timer_ = 0.1f;
+
+    Camera feed;
+    if (!build_video_camera(feed) || !device.video_begin(feed)) {
+        return;
+    }
+
+    terrain_renderer.draw(device);
+    const Pool<Entity>& pool = world_.entities();
+    for (u32 idx : pool.live_indices()) {
+        const Entity* e = pool.at(idx);
+        if (e && e->mesh) {
+            device.draw_mesh(e->mesh, mat4_trs(e->pos, e->rot, Vec3{e->scale, e->scale, e->scale}));
+        }
+    }
+    carsys_.cables[CABLE_COAX].render(device);
+    carsys_.cables[CABLE_BUS].render(device);
+    draw_vehicle(device);
+    car_render_.draw(device, carsys_, vehicle_, phys_, alpha_, 0.0f, 0);
+    device.draw_sky(time);
+    car_render_.draw_glass(device, carsys_, vehicle_, phys_, alpha_, time);
+    device.draw_rain(weather_.rain(), weather_.wind(), Vec3{}, time);
+
+    terminal_.set_video_texture(device.video_end());
+}
+
 void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, DebugDraw& debug,
                   TextRenderer& text, const Input& input, Vec2 viewport, f32 time, f32 frame_dt)
 {
@@ -647,6 +947,32 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
     ui_.begin_frame(input, &debug, &text);
     bind_entity_meshes(device);
     update_audio(frame_dt);
+
+    env_.time_of_day = time_of_day_;
+    env_.sun_dir = -sun_direction_for_time(time_of_day_);
+    device.set_environment(env_);
+
+    render_video_feed(device, terrain_renderer, frame_dt, time);
+    update_terminal(input, frame_dt);
+
+    device.set_screen_fx(screen_fx_);
+    if (terminal_.powered()) {
+        term_render_.render(device, disks_, terminal_.screen(), terminal_.scene(), time);
+    }
+    const u32 screen_texture = terminal_screen_texture();
+
+    if (term_anim_ >= 0.995f && terminal_.powered()) {
+        device.set_time(time);
+        device.begin_frame(camera_, static_cast<i32>(viewport.x), static_cast<i32>(viewport.y));
+        device.end_frame();
+        device.post_process(time);
+        device.blit_texture(0.0f, 0.0f, viewport.x, viewport.y, screen_texture, 1.0f, time);
+        debug.text_2d(text, viewport.x * 0.5f - 80.0f, viewport.y - 10.0f, 14.0f, kDdGray,
+                      "ESC to look away");
+        debug.flush_overlay(device, text);
+        text.flush(device);
+        return;
+    }
 
     device.set_weather(weather_.wetness(), weather_.overcast());
     device.set_windshield(carsys_.windshield_wet, carsys_.wiper_sweep, carsys_.glass_wet);
@@ -672,8 +998,13 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
     }
 
     draw_vehicle(device);
-    car_render_.draw(device, carsys_, vehicle_, phys_, alpha_, frame_dt, 0);
-    device.draw_rain(weather_.rain(), weather_.wind(), camera_.pos, time);
+    draw_viewmodel(device);
+    draw_loose_terminal(device, screen_texture);
+    draw_place_preview(device, debug);
+    car_render_.draw(device, carsys_, vehicle_, phys_, alpha_, frame_dt, screen_texture);
+    device.draw_rain(weather_.rain(), weather_.wind(), cam_vel_, time);
+    carsys_.cables[CABLE_COAX].render(device);
+    carsys_.cables[CABLE_BUS].render(device);
     car_render_.draw_glass(device, carsys_, vehicle_, phys_, alpha_, time);
 
     draw_debug_overlays(debug);
@@ -684,9 +1015,335 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
     device.end_frame();
     device.post_process(time);
 
+    if (term_anim_ > 0.80f && terminal_.powered()) {
+        const f32 fade = f_clamp01((term_anim_ - 0.80f) / 0.18f);
+        device.blit_texture(0.0f, 0.0f, viewport.x, viewport.y, term_render_.texture(),
+                            fade * fade, time);
+    }
+
+    capture_exposure(device);
+
     draw_hud(debug, text, viewport, frame_dt);
+    draw_viewfinder(debug, text, viewport);
+    if (term_focus_) {
+        debug.text_2d(text, viewport.x * 0.5f - 80.0f, viewport.y - 10.0f, 14.0f, kDdGray,
+                      "ESC to look away");
+    }
     debug.flush_overlay(device, text);
     text.flush(device);
+}
+
+
+const Entity* Game::find_pickup(ItemKind kind) const
+{
+    const Pool<Entity>& pool = world_.entities();
+    for (u32 idx : pool.live_indices()) {
+        const Entity* e = pool.at(idx);
+        if (e && e->kind == EntityKind::PartPickup
+            && static_cast<ItemKind>(e->aux_kind) == kind) {
+            return e;
+        }
+    }
+    return nullptr;
+}
+
+Vec3 Game::hands_item_pos() const
+{
+    const bool driving = player_.driving();
+    const f32 reach = driving ? 0.40f : 0.62f;
+    const f32 drop = driving ? 0.22f : 0.34f;
+
+    Vec3 pos = camera_.pos + camera_.forward() * reach
+             + camera_.right() * (driving ? 0.20f : 0.30f);
+    pos.y -= drop;
+    return pos;
+}
+
+Vec3 Game::tower_port_pos() const
+{
+    return tower_pos_ + rotate(tower_rot_, kTowerPortLocal);
+}
+
+bool Game::terminal_transform(Vec3& out_pos, Quat& out_rot) const
+{
+    if (carsys_.parts[PART_COMPUTER].installed) {
+        const RigidBody* body = phys_.body(vehicle_.body());
+        if (!body) {
+            return false;
+        }
+        const Vec3 socket = part_def(PART_COMPUTER).socket_pos - vehicle_.config().com_offset;
+        out_pos = body->pos + rotate(body->rot, socket);
+        out_rot = body->rot * part_computer_rest_rot();
+        return true;
+    }
+    if (interact_.hands().kind == ITEM_COMPUTER) {
+        out_pos = hands_item_pos();
+        out_rot = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, -camera_.yaw);
+        return true;
+    }
+    if (const Entity* loose = find_pickup(ITEM_COMPUTER)) {
+        out_pos = loose->pos;
+        out_rot = loose->rot;
+        return true;
+    }
+    return false;
+}
+
+void Game::update_cables(f32 frame_dt)
+{
+    const RigidBody* body = phys_.body(vehicle_.body());
+    Vec3 term_pos;
+    Quat term_rot = quat_identity();
+
+    if (!body || !terminal_transform(term_pos, term_rot)) {
+        for (u32 k = 0; k < CABLE_KIND_COUNT; k++) {
+            if (carsys_.cables[k].state != CableState::Stowed) {
+                carsys_.cables[k].reset();
+            }
+        }
+        carsys_.coax_target = kCoaxTargetAntenna;
+        carsys_.bus_target = kBusTargetCar;
+        interact_.set_cable_drag(-1);
+        return;
+    }
+
+    const Vec3 car_origin = body->pos + rotate(body->rot, -vehicle_.config().com_offset);
+    const Vec3 roots[2] = {kConnectorCoaxLocal, kConnectorBusLocal};
+    const Vec3 jacks[2] = {kAntennaJackLocal, kBayJackLocal};
+
+    CableObstacle term_obstacle;
+    term_obstacle.pos = term_pos;
+    term_obstacle.rot = term_rot;
+    term_obstacle.center = Vec3{0.0f, 0.0f, 0.03f};
+    term_obstacle.half = Vec3{0.23f, 0.20f, 0.24f};
+
+    Vec3 reel_anchor;
+    bool have_reel = false;
+    if (interact_.hands().kind == ITEM_REEL) {
+        reel_anchor = hands_item_pos();
+        have_reel = true;
+    } else if (const Entity* reel = find_pickup(ITEM_REEL)) {
+        reel_anchor = reel->pos + Vec3{0.0f, 0.10f, 0.0f};
+        have_reel = true;
+    }
+
+    for (u32 k = 0; k < CABLE_KIND_COUNT; k++) {
+        Cable& cable = carsys_.cables[k];
+        if (cable.state == CableState::Stowed) {
+            cable.sim_init = false;
+            continue;
+        }
+        if (cable.via_reel && !have_reel) {
+            drop_cable(k);
+            continue;
+        }
+
+        const Vec3* anchor = cable.via_reel ? &reel_anchor : nullptr;
+        const Vec3 root = term_pos + rotate(term_rot, roots[k]);
+
+        Vec3 end;
+        if (cable.state == CableState::Plugged) {
+            if (k == CABLE_COAX && carsys_.coax_target == kCoaxTargetCamera) {
+                if (interact_.hands().kind == ITEM_CAMERA) {
+                    end = hands_item_pos();
+                } else if (const Entity* cam = find_pickup(ITEM_CAMERA)) {
+                    end = cam->pos + rotate(cam->rot, Vec3{-0.13f, 0.0f, 0.0f});
+                } else {
+                    cable.reset();
+                    carsys_.coax_target = kCoaxTargetAntenna;
+                    continue;
+                }
+            } else if (k == CABLE_BUS && carsys_.bus_target == kBusTargetTower) {
+                end = tower_port_pos();
+            } else {
+                end = car_origin + rotate(body->rot, jacks[k]);
+            }
+        } else {
+            end = camera_.pos + camera_.forward() * 0.50f + Vec3{0.0f, -0.18f, 0.0f};
+        }
+
+        const f32 span = cable.span(root, end, anchor);
+        const bool over_span = span > cable.max_len() * 1.06f;
+        const bool over_arc = cable.sim_init
+                           && cable.current_length() > cable.max_len() * 1.18f;
+        if (over_span || over_arc) {
+            drop_cable(k);
+            continue;
+        }
+
+        CableSimInput in;
+        in.root = root;
+        in.end = &end;
+        in.anchor = anchor;
+        in.terrain = &terrain_;
+        in.phys = &phys_;
+        in.exclude_body = vehicle_.body();
+        in.car_pos = car_origin;
+        in.car_rot = body->rot;
+        in.obstacles = &term_obstacle;
+        in.obstacle_count = 1;
+        cable.sim(in, frame_dt);
+    }
+}
+
+void Game::drop_cable(u32 kind)
+{
+    carsys_.cables[kind].reset();
+    if (kind == CABLE_COAX) {
+        carsys_.coax_target = kCoaxTargetAntenna;
+    }
+    if (kind == CABLE_BUS) {
+        carsys_.bus_target = kBusTargetCar;
+    }
+    if (interact_.cable_drag() == static_cast<i32>(kind)) {
+        interact_.set_cable_drag(-1);
+    }
+    if (const RigidBody* body = phys_.body(vehicle_.body())) {
+        audio_.play_at(SFX_THUMP, 0.45f, 1.15f,
+                       body_point(*body, Vec3{0.3f, 0.3f, 0.0f}));
+    }
+}
+
+
+void Game::build_term_view(const Input& input, TermView& out) const
+{
+    const RigidBody* body = phys_.body(vehicle_.body());
+
+    out.sys = &carsys_;
+    out.veh = &vehicle_;
+    out.phys = const_cast<PhysWorld*>(&phys_);
+    out.terrain = &terrain_;
+    out.time_of_day = time_of_day_;
+    out.weather_rain = weather_.rain();
+    out.weather_wetness = weather_.wetness();
+    out.weather_mode = static_cast<i32>(weather_.mode());
+    out.car_pos = body ? body->pos : Vec3{};
+    out.garage_pos = spawn_.car_pos;
+    out.mission_pos = tower_pos_;
+    out.mission_stage = 0;
+    out.speed_kmh = f_abs(vehicle_.forward_speed(phys_)) * 3.6f;
+    out.rpm = drivetrain_rpm(vehicle_.train());
+    out.orbit = term_focus_ ? (input.down(Key::Right) ? 1.0f : 0.0f)
+                                - (input.down(Key::Left) ? 1.0f : 0.0f)
+                            : 0.0f;
+    out.zoom = term_focus_ ? (input.down(Key::Up) ? 1.0f : 0.0f)
+                               - (input.down(Key::Down) ? 1.0f : 0.0f)
+                           : 0.0f;
+
+    const Cable& coax = carsys_.cables[CABLE_COAX];
+    const Cable& bus = carsys_.cables[CABLE_BUS];
+    out.coax_state = coax.state == CableState::Plugged
+                       ? (coax.linked ? PORT_LINKED : PORT_PLUGGED)
+                       : PORT_UNPLUGGED;
+    out.bus_state = bus.state == CableState::Plugged
+                      ? (bus.linked ? PORT_LINKED : PORT_PLUGGED)
+                      : PORT_UNPLUGGED;
+    out.coax_camera = carsys_.coax_target == kCoaxTargetCamera;
+    out.antenna_tier = !out.coax_camera && carsys_.parts[PART_ANTENNA].installed
+                         ? carsys_.parts[PART_ANTENNA].variant
+                         : -1;
+    out.bus_tower = carsys_.bus_target == kBusTargetTower;
+    out.tower_breached = tower_breached_;
+    out.tower_pos = tower_pos_;
+}
+
+void Game::terminal_keys(const Input& input)
+{
+    for (const u32 codepoint : input.chars()) {
+        if (codepoint < 128) {
+            terminal_.key_char(static_cast<char>(codepoint));
+        }
+    }
+
+    static const struct { Key key; TermKey term; } kMap[10] = {
+        {Key::Enter, TermKey::Enter},   {Key::Backspace, TermKey::Backspace},
+        {Key::Delete, TermKey::Delete}, {Key::Up, TermKey::Up},
+        {Key::Down, TermKey::Down},     {Key::Q, TermKey::Quit},
+        {Key::Left, TermKey::Left},     {Key::Right, TermKey::Right},
+        {Key::Home, TermKey::Home},     {Key::End, TermKey::End},
+    };
+    for (const auto& entry : kMap) {
+        if (input.pressed(entry.key)) {
+            terminal_.key(entry.term);
+        }
+    }
+}
+
+void Game::update_terminal(const Input& input, f32 frame_dt)
+{
+    if (carsys_.computer_on != term_prev_power_) {
+        if (carsys_.computer_on) {
+            terminal_.power(true);
+            term_render_.clear_persistence();
+            term_power_elapsed_ = 0.0f;
+        } else {
+            term_power_elapsed_ = f_min(term_power_elapsed_, 0.45f);
+        }
+        term_prev_power_ = carsys_.computer_on;
+    }
+    if (carsys_.computer_on) {
+        term_power_elapsed_ += frame_dt;
+    } else {
+        term_power_elapsed_ = f_max(term_power_elapsed_ - frame_dt * 1.6f, 0.0f);
+        if (term_power_elapsed_ <= 0.0f && terminal_.powered()) {
+            terminal_.power(false);
+        }
+    }
+
+    const f32 vfx = terminal_.virus_fx();
+    ScreenFx fx;
+    fx.power_seconds = term_power_elapsed_;
+    fx.burn = f_max(0.6f - carsys_.parts[PART_COMPUTER].condition, 0.0f) * 0.5f + 0.35f * vfx;
+    fx.shake = f_min(carsys_.impact_cooldown * 2.0f, 0.5f) + 0.25f * vfx;
+    fx.pixelate = terminal_.pixelate();
+    screen_fx_ = fx;
+
+    if (term_focus_ && !carsys_.computer_on) {
+        term_focus_ = false;
+    }
+    term_anim_ = f_approach_exp(term_anim_, term_focus_ ? 1.0f : 0.0f, 7.0f, frame_dt);
+
+    if (const RigidBody* body = phys_.body(vehicle_.body())) {
+        terminal_.mapdata().visit(body->pos);
+    }
+    if (!carsys_.computer_on) {
+        return;
+    }
+
+    TermView view;
+    build_term_view(input, view);
+    terminal_.set_disk(carsys_.floppy_disk);
+    terminal_.update(view, frame_dt);
+
+    const TermRequest req = terminal_.take_request();
+    if (req.breach_open) {
+        tower_breached_ = true;
+        audio_.play(SFX_RATCHET, 0.4f, 1.4f);
+    }
+    if (req.tape_write && carsys_.tape_inserted >= 0) {
+        carsys_.tape_inserted = 1 + req.tape_write_value;
+        carsys_.deck_play = false;
+        audio_.play(SFX_RATCHET, 0.5f, 1.6f);
+    }
+    if (req.time_set) {
+        time_of_day_ = req.time_value - std::floor(req.time_value);
+    }
+    if (req.weather_mode >= 0) {
+        weather_.set_mode(static_cast<WeatherMode>(req.weather_mode));
+    }
+    for (u32 k = 0; k < 2; k++) {
+        if (req.link_port[k] && carsys_.cables[k].state == CableState::Plugged) {
+            carsys_.cables[k].linked = true;
+            audio_.play(SFX_THUMP, 0.14f, 3.2f);
+        }
+    }
+    if (req.power_off) {
+        carsys_.computer_on = false;
+        term_focus_ = false;
+    }
+    if (terminal_.screen().take_click()) {
+        audio_.play(SFX_THUMP, 0.10f, 2.6f);
+    }
 }
 
 } // namespace anom

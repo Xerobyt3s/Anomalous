@@ -64,6 +64,11 @@ void RenderDevice::shutdown()
     if (bloom_fbo_) { glDeleteFramebuffers(1, &bloom_fbo_); }
     if (shadow_tex_) { glDeleteTextures(1, &shadow_tex_); }
     if (shadow_fbo_) { glDeleteFramebuffers(1, &shadow_fbo_); }
+    if (video_fbo_) {
+        glDeleteTextures(1, &video_tex_);
+        glDeleteTextures(1, &video_depth_);
+        glDeleteFramebuffers(1, &video_fbo_);
+    }
     if (scene_fbo_) {
         glDeleteTextures(1, &scene_color_);
         glDeleteTextures(1, &scene_depth_);
@@ -364,6 +369,86 @@ void RenderDevice::end_frame()
 {
     use_program(0);
     bind_vao(0);
+}
+
+bool RenderDevice::video_begin(const Camera& cam)
+{
+    if (video_broken_) {
+        return false;
+    }
+    if (!video_fbo_) {
+        glCreateTextures(GL_TEXTURE_2D, 1, &video_tex_);
+        glTextureStorage2D(video_tex_, 1, GL_RGBA8, kVideoWidth, kVideoHeight);
+        glTextureParameteri(video_tex_, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTextureParameteri(video_tex_, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTextureParameteri(video_tex_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(video_tex_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glCreateTextures(GL_TEXTURE_2D, 1, &video_depth_);
+        glTextureStorage2D(video_depth_, 1, GL_DEPTH_COMPONENT24, kVideoWidth, kVideoHeight);
+        glCreateFramebuffers(1, &video_fbo_);
+        glNamedFramebufferTexture(video_fbo_, GL_COLOR_ATTACHMENT0, video_tex_, 0);
+        glNamedFramebufferTexture(video_fbo_, GL_DEPTH_ATTACHMENT, video_depth_, 0);
+        if (glCheckNamedFramebufferStatus(video_fbo_, GL_FRAMEBUFFER)
+            != GL_FRAMEBUFFER_COMPLETE) {
+            log_error("render: video framebuffer incomplete");
+            video_broken_ = true;
+            return false;
+        }
+    }
+    reset_state_cache();
+    glBindFramebuffer(GL_FRAMEBUFFER, video_fbo_);
+    view_setup(cam, static_cast<f32>(kVideoWidth), static_cast<f32>(kVideoHeight));
+    return true;
+}
+
+u32 RenderDevice::video_end()
+{
+    use_program(0);
+    bind_vao(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return video_tex_;
+}
+
+bool RenderDevice::read_backbuffer_rgb(Arena& scratch, u8* out, i32 out_w, i32 out_h)
+{
+    const i32 w = static_cast<i32>(viewport_.x);
+    const i32 h = static_cast<i32>(viewport_.y);
+    if (w <= 0 || h <= 0 || out_w <= 0 || out_h <= 0) {
+        return false;
+    }
+
+    ArenaScope temp(scratch);
+    u8* rgba = scratch.push_array<u8>(static_cast<u64>(w) * static_cast<u64>(h) * 4);
+    if (!rgba) {
+        return false;
+    }
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+
+    for (i32 oy = 0; oy < out_h; oy++) {
+        const i32 sy0 = oy * h / out_h;
+        const i32 sy1 = (oy + 1) * h / out_h > sy0 ? (oy + 1) * h / out_h : sy0 + 1;
+        for (i32 ox = 0; ox < out_w; ox++) {
+            const i32 sx0 = ox * w / out_w;
+            const i32 sx1 = (ox + 1) * w / out_w > sx0 ? (ox + 1) * w / out_w : sx0 + 1;
+            u32 sum[3] = {0, 0, 0};
+            for (i32 sy = sy0; sy < sy1; sy++) {
+                const u8* row = &rgba[static_cast<u64>(h - 1 - sy) * static_cast<u64>(w) * 4];
+                for (i32 sx = sx0; sx < sx1; sx++) {
+                    const u8* p = &row[static_cast<u64>(sx) * 4];
+                    sum[0] += p[0];
+                    sum[1] += p[1];
+                    sum[2] += p[2];
+                }
+            }
+            const u32 n = static_cast<u32>((sx1 - sx0) * (sy1 - sy0));
+            u8* dst = &out[(static_cast<u64>(oy) * static_cast<u64>(out_w)
+                            + static_cast<u64>(ox)) * 3];
+            dst[0] = static_cast<u8>(sum[0] / n);
+            dst[1] = static_cast<u8>(sum[1] / n);
+            dst[2] = static_cast<u8>(sum[2] / n);
+        }
+    }
+    return true;
 }
 
 bool RenderDevice::shadow_begin(Vec3 focus)
