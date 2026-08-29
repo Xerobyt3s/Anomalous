@@ -2,6 +2,7 @@
 #include "physics/collide.h"
 #include "physics/heightfield.h"
 #include "physics/world.h"
+#include "render/camera.h"
 #include "vehicle/vehicle.h"
 
 namespace anom {
@@ -22,6 +23,8 @@ constexpr f32 kLookYawLimit = 2.4f;
 constexpr f32 kLookPitchLimit = 1.0f;
 constexpr f32 kPitchLimit = 89.0f * kDegToRad;
 constexpr f32 kExitClearance = 0.03f;
+constexpr f32 kCockpitLagRate = 18.0f;
+constexpr f32 kCockpitLagMax = 0.15f;
 
 f32 smooth01(f32 t)
 {
@@ -411,6 +414,63 @@ void Player::look(f32 dx, f32 dy)
         look_pitch_ = f_clamp(look_pitch_ - dy * kLookSensitivity, -kLookPitchLimit,
                               kLookPitchLimit);
     }
+}
+
+void Player::camera(PhysWorld& phys, const Vehicle* veh, f32 alpha, f32 dt, Camera& out)
+{
+    const RigidBody* body = veh ? phys.body(veh->body()) : nullptr;
+
+    if (state_ == PlayerState::OnFoot || !body) {
+        out.pos = lerp(prev_pos_, pos_, alpha) + Vec3{0.0f, kPlayerEyeHeight, 0.0f};
+        out.yaw = yaw_;
+        out.pitch = pitch_;
+        cockpit_eye_valid_ = false;
+        return;
+    }
+
+    const Vec3 body_pos = lerp(body->prev_pos, body->pos, alpha);
+    const Quat body_rot = slerp(body->prev_rot, body->rot, alpha);
+    const Vec3 seat_eye = body_pos + rotate(body_rot, veh->config().seat_eye);
+    const Vec3 fwd = rotate(body_rot, Vec3{0.0f, 0.0f, -1.0f});
+    const f32 car_yaw = std::atan2(fwd.x, -fwd.z);
+    const f32 car_pitch = std::asin(f_clamp(fwd.y, -1.0f, 1.0f));
+
+    if (state_ == PlayerState::Entering) {
+        const f32 s = smooth01(transition_t_);
+        out.pos = lerp(transition_eye_, seat_eye, s);
+        out.yaw = transition_yaw_ + f_wrap_angle(car_yaw - transition_yaw_) * s;
+        out.pitch = transition_pitch_ + (car_pitch - transition_pitch_) * s;
+        cockpit_eye_valid_ = false;
+        return;
+    }
+    if (state_ == PlayerState::Exiting) {
+        const f32 s = smooth01(transition_t_);
+        const Vec3 exit_eye = exit_pos_ + Vec3{0.0f, kPlayerEyeHeight, 0.0f};
+        out.pos = lerp(transition_eye_, exit_eye, s);
+        out.yaw = yaw_;
+        out.pitch = pitch_;
+        cockpit_eye_valid_ = false;
+        return;
+    }
+
+    if (!cockpit_eye_valid_) {
+        cockpit_eye_ = seat_eye;
+        cockpit_eye_valid_ = true;
+    }
+    cockpit_eye_ = Vec3{f_approach_exp(cockpit_eye_.x, seat_eye.x, kCockpitLagRate, dt),
+                        f_approach_exp(cockpit_eye_.y, seat_eye.y, kCockpitLagRate, dt),
+                        f_approach_exp(cockpit_eye_.z, seat_eye.z, kCockpitLagRate, dt)};
+
+    Vec3 offset = cockpit_eye_ - seat_eye;
+    const f32 offset_len = length(offset);
+    if (offset_len > kCockpitLagMax) {
+        offset *= kCockpitLagMax / offset_len;
+        cockpit_eye_ = seat_eye + offset;
+    }
+
+    out.pos = cockpit_eye_;
+    out.yaw = f_wrap_angle(car_yaw + look_yaw_);
+    out.pitch = f_clamp(car_pitch + look_pitch_, -kPitchLimit, kPitchLimit);
 }
 
 } // namespace anom

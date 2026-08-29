@@ -14,6 +14,11 @@ set(ANOMALOUS_TEST_SOURCES
     test_player.cpp
     test_interact.cpp
     test_audio.cpp
+    test_zone.cpp
+    test_editor.cpp
+    test_ui.cpp
+    test_brush.cpp
+    test_input_context.cpp
 )
 
 add_executable(anomalous_tests ${ANOMALOUS_TEST_SOURCES})

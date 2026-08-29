@@ -26,6 +26,7 @@ struct Camera {
     Mat4 proj(f32 aspect) const;
 
     Ray mouse_ray(Vec2 mouse, Vec2 viewport) const;
+    bool project_to_screen(Vec3 world, Vec2 viewport, Vec2& out_screen) const;
 
     bool fly_update(const Input& input, f32 dt);
 };

@@ -45,4 +45,10 @@ bool zone_load(std::string_view zone_dir, Arena& arena, Arena& scratch, World& w
                PhysWorld& phys, Terrain& terrain, ZoneSpawn& out_spawn,
                ZonePickups* out_pickups);
 
+bool zone_reload(std::string_view zone_dir, Arena& arena, Arena& scratch, World& world,
+                 PhysWorld& phys, const Terrain& terrain, ZonePickups* out_pickups);
+
+bool zone_save(std::string_view zone_dir, Arena& scratch, const World& world,
+               const PhysWorld& phys, const Terrain& terrain);
+
 } // namespace anom

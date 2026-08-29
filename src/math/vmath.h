@@ -267,6 +267,8 @@ inline f32 quat_yaw(Quat q)
     return std::atan2(2.0f * (q.w * q.y + q.x * q.z), 1.0f - 2.0f * (q.y * q.y + q.x * q.x));
 }
 
+void quat_to_euler(Quat q, f32& out_yaw_rad, f32& out_pitch_rad, f32& out_roll_rad);
+
 inline Quat quat_integrate(Quat q, Vec3 angular_vel, f32 dt)
 {
     const Quat omega{angular_vel.x, angular_vel.y, angular_vel.z, 0.0f};

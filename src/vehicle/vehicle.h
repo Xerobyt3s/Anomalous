@@ -78,6 +78,7 @@ public:
     bool init(PhysWorld& world, Arena& scratch, std::string_view cfg_path, Vec3 pos, f32 yaw);
     void apply_config(PhysWorld& world);
     bool reload_config(PhysWorld& world, Arena& scratch);
+    bool poll_config_reload(PhysWorld& world, Arena& scratch);
 
     void set_input(const VehicleInput& input) { input_ = input; }
     void driver_input(PhysWorld& world, f32 forward_intent, f32 reverse_intent, f32 steer,
@@ -109,6 +110,7 @@ private:
     VehicleEffects effects_;
     VehicleInput input_;
     f32 steer_deg_ = 0.0f;
+    i64 cfg_mtime_ = 0;
     FixedString<128> cfg_path_;
 };
 

@@ -4,6 +4,7 @@
 #include "physics/heightfield.h"
 #include "physics/world.h"
 #include "player/player.h"
+#include "render/camera.h"
 #include "vehicle/vehicle.h"
 
 using namespace anom;
@@ -275,4 +276,41 @@ TEST(player, walking_is_deterministic)
     CHECK(a.x == b.x);
     CHECK(a.y == b.y);
     CHECK(a.z == b.z);
+}
+
+TEST(player, the_camera_sits_at_eye_height_on_foot)
+{
+    WalkRig rig;
+    rig.setup();
+    rig.player.init(Vec3{3.0f, 0.0f, 4.0f}, 0.6f);
+
+    Camera cam;
+    rig.player.camera(rig.world, nullptr, 1.0f, kDt, cam);
+
+    CHECK_NEAR(cam.pos.x, 3.0f, 1e-4);
+    CHECK_NEAR(cam.pos.y, kPlayerEyeHeight, 1e-4);
+    CHECK_NEAR(cam.pos.z, 4.0f, 1e-4);
+    CHECK_NEAR(cam.yaw, 0.6f, 1e-5);
+}
+
+TEST(player, the_camera_interpolates_between_ticks)
+{
+    WalkRig rig;
+    rig.setup();
+    rig.player.init(Vec3{0.0f, 0.0f, 0.0f}, 0.0f);
+
+    PlayerCommand cmd;
+    cmd.move_z = 1.0f;
+    for (i32 i = 0; i < 30; i++) {
+        rig.player.tick(rig.world, nullptr, cmd, kDt);
+    }
+
+    Camera at_prev;
+    Camera at_now;
+    rig.player.camera(rig.world, nullptr, 0.0f, kDt, at_prev);
+    rig.player.camera(rig.world, nullptr, 1.0f, kDt, at_now);
+
+    CHECK(distance(at_prev.pos, at_now.pos) > 0.0f);
+    CHECK_NEAR(at_prev.pos.z, rig.player.prev_pos().z + 0.0f, 1e-4);
+    CHECK_NEAR(at_now.pos.z, rig.player.pos().z, 1e-4);
 }

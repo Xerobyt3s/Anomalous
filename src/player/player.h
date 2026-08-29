@@ -7,6 +7,7 @@ namespace anom {
 
 class PhysWorld;
 class Vehicle;
+struct Camera;
 struct RigidBody;
 
 inline constexpr f32 kPlayerRadius = 0.32f;
@@ -37,6 +38,7 @@ public:
     void init(Vec3 pos, f32 yaw);
     void tick(PhysWorld& phys, Vehicle* veh, const PlayerCommand& cmd, f32 dt);
     void look(f32 dx, f32 dy);
+    void camera(PhysWorld& phys, const Vehicle* veh, f32 alpha, f32 dt, Camera& out);
 
     bool driving() const { return state_ == PlayerState::Driving; }
     bool can_enter(PhysWorld& phys, const Vehicle* veh) const;

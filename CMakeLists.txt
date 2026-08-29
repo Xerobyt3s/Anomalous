@@ -75,11 +75,17 @@ set(ANOMALOUS_CORE_SOURCES
     src/assets/watcher.cpp
     src/carsys/cables.cpp
     src/carsys/carsys.cpp
+    src/carsys/carsys_render.cpp
     src/carsys/electrics.cpp
     src/carsys/fluids.cpp
     src/carsys/items.cpp
     src/carsys/parts.cpp
     src/core/arena.cpp
+    src/editor/brush.cpp
+    src/editor/editor.cpp
+    src/editor/editor_brush.cpp
+    src/editor/editor_scene.cpp
+    src/editor/gizmo.cpp
     src/core/config.cpp
     src/core/log.cpp
     src/core/version.cpp
@@ -105,6 +111,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/render/shader.cpp
     src/render/sky.cpp
     src/render/terrain_render.cpp
+    src/ui/ui.cpp
     src/vehicle/drivetrain.cpp
     src/vehicle/tire.cpp
     src/vehicle/vehicle.cpp
@@ -117,6 +124,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/platform/filesystem.cpp
     src/platform/gl_loader.cpp
     src/platform/input.cpp
+    src/platform/input_context.cpp
     src/platform/platform_info.cpp
     src/platform/window.cpp
 )
@@ -128,11 +136,17 @@ set(ANOMALOUS_CORE_HEADERS
     src/assets/watcher.h
     src/carsys/cables.h
     src/carsys/carsys.h
+    src/carsys/carsys_render.h
     src/carsys/electrics.h
     src/carsys/fluids.h
     src/carsys/items.h
     src/carsys/parts.h
     src/core/arena.h
+    src/editor/brush.h
+    src/editor/editor.h
+    src/editor/editor_brush.h
+    src/editor/editor_scene.h
+    src/editor/gizmo.h
     src/core/config.h
     src/core/fixed_string.h
     src/core/handle.h
@@ -165,6 +179,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/render/shader.h
     src/render/sky.h
     src/render/terrain_render.h
+    src/ui/ui.h
     src/vehicle/tire.h
     src/vehicle/vehicle.h
     src/vehicle/vehicle_config.h
@@ -176,6 +191,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/platform/filesystem.h
     src/platform/gl_loader.h
     src/platform/input.h
+    src/platform/input_context.h
     src/platform/platform_info.h
     src/platform/window.h
 )
@@ -199,6 +215,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES
     ${ANOMALOUS_CORE_HEADERS})
 
 add_executable(anomalous
+    src/game/game.cpp
     src/game/main.cpp
 )
 

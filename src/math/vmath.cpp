@@ -494,4 +494,19 @@ Vec3 closest_point_on_triangle(Vec3 p, Vec3 a, Vec3 b, Vec3 c)
     return a + ab * (vb * denom) + ac * (vc * denom);
 }
 
+void quat_to_euler(Quat q, f32& out_yaw_rad, f32& out_pitch_rad, f32& out_roll_rad)
+{
+    const Mat3 r = quat_to_mat3(q);
+    const f32 sin_pitch = f_clamp(-r.m[7], -1.0f, 1.0f);
+    out_pitch_rad = std::asin(sin_pitch);
+
+    if (f_abs(sin_pitch) > 0.99995f) {
+        out_yaw_rad = std::atan2(-r.m[2], r.m[0]);
+        out_roll_rad = 0.0f;
+        return;
+    }
+    out_yaw_rad = std::atan2(r.m[6], r.m[8]);
+    out_roll_rad = std::atan2(r.m[1], r.m[4]);
+}
+
 } // namespace anom

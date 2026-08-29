@@ -546,3 +546,16 @@ TEST(differential, locking_only_redistributes_axle_torque)
     CHECK_NEAR(locked_total, open_total, 1e-3);
     CHECK(f_abs(locked_split) > f_abs(open_split));
 }
+
+TEST(vehicle, polling_an_unchanged_config_does_not_reload)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.car.config().tire_peak_mu = 9.0f;
+
+    CHECK(!rig.car.poll_config_reload(rig.world, rig.arena));
+    CHECK_NEAR(rig.car.config().tire_peak_mu, 9.0f, 1e-5);
+
+    CHECK(rig.car.reload_config(rig.world, rig.arena));
+    CHECK(rig.car.config().tire_peak_mu < 9.0f);
+}

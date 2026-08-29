@@ -2,6 +2,7 @@
 #include "core/arena.h"
 #include "core/log.h"
 #include "physics/world.h"
+#include "platform/filesystem.h"
 #include "vehicle/tire.h"
 
 namespace anom {
@@ -74,6 +75,7 @@ void Vehicle::apply_config(PhysWorld& world)
 bool Vehicle::init(PhysWorld& world, Arena& scratch, std::string_view cfg_path, Vec3 pos, f32 yaw)
 {
     cfg_path_.assign(cfg_path);
+    cfg_mtime_ = fs::file_mtime(cfg_path);
     if (!vehicle_config_load(cfg_, scratch, cfg_path)) {
         log_error("vehicle: failed to load config %.*s", static_cast<int>(cfg_path.size()),
                   cfg_path.data());
@@ -90,6 +92,16 @@ bool Vehicle::init(PhysWorld& world, Arena& scratch, std::string_view cfg_path, 
     log_info("vehicle: loaded %s (mass %.0f kg)", cfg_path_.c_str(),
              static_cast<f64>(cfg_.mass));
     return true;
+}
+
+bool Vehicle::poll_config_reload(PhysWorld& world, Arena& scratch)
+{
+    const i64 mtime = fs::file_mtime(cfg_path_.view());
+    if (mtime == cfg_mtime_) {
+        return false;
+    }
+    cfg_mtime_ = mtime;
+    return reload_config(world, scratch);
 }
 
 bool Vehicle::reload_config(PhysWorld& world, Arena& scratch)

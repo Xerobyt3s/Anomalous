@@ -330,6 +330,7 @@ void DebugDraw::flush_overlay(RenderDevice& device, TextRenderer& text)
         const u32 program = device.shaders().program("debug2d");
         if (program) {
             device.use_program(program);
+            device.set_cull(false);
             glDisable(GL_DEPTH_TEST);
             glDepthMask(GL_FALSE);
             glEnable(GL_BLEND);

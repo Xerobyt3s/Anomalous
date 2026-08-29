@@ -62,6 +62,28 @@ Ray Camera::mouse_ray(Vec2 mouse, Vec2 viewport) const
     return ray;
 }
 
+bool Camera::project_to_screen(Vec3 world, Vec2 viewport, Vec2& out_screen) const
+{
+    const Vec3 to_point = world - pos;
+    const Vec3 f = forward();
+    const f32 depth = dot(to_point, f);
+    if (depth <= znear) {
+        return false;
+    }
+
+    const Vec3 r = right();
+    const Vec3 u = cross(r, f);
+    const f32 tan_half = std::tan(fov_y * 0.5f);
+    const f32 aspect = viewport.x / viewport.y;
+
+    const f32 ndc_x = dot(to_point, r) / (depth * tan_half * aspect);
+    const f32 ndc_y = dot(to_point, u) / (depth * tan_half);
+
+    out_screen.x = (ndc_x * 0.5f + 0.5f) * viewport.x;
+    out_screen.y = (0.5f - ndc_y * 0.5f) * viewport.y;
+    return true;
+}
+
 bool Camera::fly_update(const Input& input, f32 dt)
 {
     const bool capture = input.down(MouseButton::Right);

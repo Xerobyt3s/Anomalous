@@ -2,7 +2,9 @@
 #include "core/arena.h"
 #include "core/log.h"
 
+#include <cerrno>
 #include <cstring>
+#include <direct.h>
 #include <io.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -164,6 +166,15 @@ FileData read_entire_file(Arena& arena, std::string_view path)
     result.data = data;
     result.size = static_cast<u64>(size);
     return result;
+}
+
+bool make_dir(std::string_view path)
+{
+    const WidePath wpath = to_wide(path);
+    if (!wpath.get()) {
+        return false;
+    }
+    return _wmkdir(wpath.get()) == 0 || errno == EEXIST;
 }
 
 bool exists(std::string_view path)

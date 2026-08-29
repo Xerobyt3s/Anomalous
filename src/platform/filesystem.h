@@ -31,6 +31,7 @@ struct DirEntry {
 
 FileData read_entire_file(Arena& arena, std::string_view path);
 bool exists(std::string_view path);
+bool make_dir(std::string_view path);
 i64 file_mtime(std::string_view path);
 u32 list_dir(std::string_view path, std::span<DirEntry> out);
 std::FILE* open(std::string_view path, const char* mode);

@@ -253,6 +253,7 @@ void TextRenderer::flush(RenderDevice& device)
     device.use_program(program);
     device.bind_vao(vao_);
     device.bind_texture0(atlas_texture_);
+    device.set_cull(false);
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);

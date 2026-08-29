@@ -1,5 +1,6 @@
 #include "world/zone.h"
 #include "assets/mesh_data.h"
+#include "carsys/items.h"
 #include "core/arena.h"
 #include "core/config.h"
 #include "core/log.h"
@@ -10,6 +11,7 @@
 #include "world/terrain.h"
 
 #include <charconv>
+#include <cstdio>
 
 namespace anom {
 namespace {
@@ -175,7 +177,7 @@ void spawn_trigger(World& world, const Terrain& terrain, std::string_view line)
 }
 
 void spawn_tower(World& world, PhysWorld& phys, Arena& scratch, const Terrain& terrain,
-                 std::string_view line, ZoneSpawn& out_spawn)
+                 std::string_view line, ZoneSpawn* out_spawn)
 {
     Tokens t(line);
     const f32 x = t.next_f32();
@@ -192,11 +194,14 @@ void spawn_tower(World& world, PhysWorld& phys, Arena& scratch, const Terrain& t
                 kEntityFlagCollides | kEntityFlagTower);
     add_mesh_collision(phys, scratch, "relay_tower", EntityKind::Building, pos, rot, 1.0f);
 
-    out_spawn.tower_present = true;
-    out_spawn.tower_x = x;
-    out_spawn.tower_z = z;
-    out_spawn.tower_yaw_deg = yaw_deg;
+    if (out_spawn) {
+        out_spawn->tower_present = true;
+        out_spawn->tower_x = x;
+        out_spawn->tower_z = z;
+        out_spawn->tower_yaw_deg = yaw_deg;
+    }
 }
+
 
 void collect_pickup(std::string_view line, ZonePickups* out_pickups)
 {
@@ -217,6 +222,154 @@ void collect_pickup(std::string_view line, ZonePickups* out_pickups)
     p.condition = t.next_f32(1.0f);
     p.aux = t.next_i32(0);
     out_pickups->items[out_pickups->count++] = p;
+}
+
+u32 spawn_from_config(World& world, PhysWorld& phys, Arena& scratch, const Terrain& terrain,
+                      const Config& cfg, ZoneSpawn* out_spawn, ZonePickups* out_pickups)
+{
+    if (out_spawn) {
+        out_spawn->tower_present = false;
+    }
+    if (out_pickups) {
+        out_pickups->count = 0;
+    }
+
+    u32 count = 0;
+    for (const Config::Entry& entry : cfg.entries()) {
+        if (entry.key == "entities.spawn") {
+            spawn_entity(world, phys, scratch, terrain, entry.value);
+            count++;
+        } else if (entry.key == "entities.trigger") {
+            spawn_trigger(world, terrain, entry.value);
+            count++;
+        } else if (entry.key == "entities.tower") {
+            spawn_tower(world, phys, scratch, terrain, entry.value, out_spawn);
+            count++;
+        } else if (entry.key == "entities.pickup") {
+            collect_pickup(entry.value, out_pickups);
+        }
+    }
+    return count;
+}
+
+std::string_view kind_to_str(EntityKind kind)
+{
+    switch (kind) {
+    case EntityKind::Tree:
+        return "tree";
+    case EntityKind::Building:
+        return "building";
+    default:
+        return "static";
+    }
+}
+
+std::string_view line_key(std::string_view line)
+{
+    const std::size_t begin = line.find_first_not_of(" \t");
+    if (begin == std::string_view::npos) {
+        return {};
+    }
+    const std::size_t eq = line.find('=', begin);
+    if (eq == std::string_view::npos) {
+        return {};
+    }
+    const std::size_t end = line.find_last_not_of(" \t", eq - 1);
+    if (end == std::string_view::npos || end < begin) {
+        return {};
+    }
+    return line.substr(begin, end - begin + 1);
+}
+
+bool is_entity_key(std::string_view key)
+{
+    return key == "spawn" || key == "pickup" || key == "trigger" || key == "tower";
+}
+
+std::string_view trim_left(std::string_view line)
+{
+    const std::size_t begin = line.find_first_not_of(" \t");
+    return begin == std::string_view::npos ? std::string_view{} : line.substr(begin);
+}
+
+void write_entities(std::FILE* out, const World& world, const PhysWorld& phys,
+                    const Terrain& terrain, u32& out_written)
+{
+    const Heightfield& hf = terrain.heightfield();
+    const Pool<Entity>& pool = world.entities();
+
+    for (u32 idx = 0; idx < pool.capacity(); idx++) {
+        const Entity* e = pool.at(idx);
+        if (!e) {
+            continue;
+        }
+
+        if (e->flags & kEntityFlagTower) {
+            std::fprintf(out, "tower = %.3f %.3f %.2f\n", static_cast<f64>(e->pos.x),
+                         static_cast<f64>(e->pos.z),
+                         static_cast<f64>(quat_yaw(e->rot) * kRadToDeg));
+            out_written++;
+            continue;
+        }
+
+        if (e->kind == EntityKind::Trigger) {
+            const f32 ground = hf.sample(e->pos.x, e->pos.z);
+            std::fprintf(out, "trigger = %s %.3f %.3f %.3f %.3f %.3f %.3f %.2f %d %.3f\n",
+                         e->mesh_name.empty() ? "unnamed" : e->mesh_name.c_str(),
+                         static_cast<f64>(e->pos.x), static_cast<f64>(e->pos.y - ground),
+                         static_cast<f64>(e->pos.z), static_cast<f64>(e->half.x),
+                         static_cast<f64>(e->half.y), static_cast<f64>(e->half.z),
+                         static_cast<f64>(quat_yaw(e->rot) * kRadToDeg),
+                         static_cast<int>(e->aux_kind), static_cast<f64>(e->aux_value));
+            out_written++;
+            continue;
+        }
+
+        if (e->kind == EntityKind::PartPickup) {
+            const ItemKind item = static_cast<ItemKind>(e->aux_kind);
+            Vec3 pos = e->pos + rotate(e->rot, item_mesh_center(item));
+            Quat rot = e->rot * conjugate(item_cargo_rot(item));
+            if (const RigidBody* body = phys.body(e->body)) {
+                pos = body->pos;
+                rot = body->rot;
+            }
+            const std::string_view id = item_id(item);
+            std::fprintf(out, "pickup = %.*s %.3f %.3f %.2f %.3f %d\n",
+                         static_cast<int>(id.size()), id.data(), static_cast<f64>(pos.x),
+                         static_cast<f64>(pos.z),
+                         static_cast<f64>(quat_yaw(rot) * kRadToDeg),
+                         static_cast<f64>(e->aux_value), static_cast<int>(e->aux_data));
+            out_written++;
+            continue;
+        }
+
+        if (e->kind == EntityKind::Vehicle || e->mesh_name.empty()) {
+            continue;
+        }
+
+        f32 yaw = 0.0f;
+        f32 pitch = 0.0f;
+        f32 roll = 0.0f;
+        quat_to_euler(e->rot, yaw, pitch, roll);
+        yaw *= kRadToDeg;
+        pitch *= kRadToDeg;
+        roll *= kRadToDeg;
+
+        const f32 yoff = e->pos.y - hf.sample(e->pos.x, e->pos.z);
+        std::fprintf(out, "spawn = %.*s %s %.3f %.3f %.2f %.3f",
+                     static_cast<int>(kind_to_str(e->kind).size()), kind_to_str(e->kind).data(),
+                     e->mesh_name.c_str(), static_cast<f64>(e->pos.x),
+                     static_cast<f64>(e->pos.z), static_cast<f64>(yaw),
+                     static_cast<f64>(e->scale));
+        if (f_abs(yoff) > 0.01f || f_abs(pitch) > 0.01f || f_abs(roll) > 0.01f) {
+            std::fprintf(out, " %.3f", static_cast<f64>(yoff));
+        }
+        if (f_abs(pitch) > 0.01f || f_abs(roll) > 0.01f) {
+            std::fprintf(out, " %.2f %.2f", static_cast<f64>(pitch), static_cast<f64>(roll));
+        }
+        std::fputc('\n', out);
+        out_written++;
+    }
 }
 
 } // namespace
@@ -244,26 +397,8 @@ bool zone_load(std::string_view zone_dir, Arena& arena, Arena& scratch, World& w
 
     phys.statics_reserve(arena, kZoneMaxStaticTris);
 
-    out_spawn.tower_present = false;
-    if (out_pickups) {
-        out_pickups->count = 0;
-    }
-
-    u32 entity_count = 0;
-    for (const Config::Entry& entry : cfg.entries()) {
-        if (entry.key == "entities.spawn") {
-            spawn_entity(world, phys, scratch, terrain, entry.value);
-            entity_count++;
-        } else if (entry.key == "entities.trigger") {
-            spawn_trigger(world, terrain, entry.value);
-            entity_count++;
-        } else if (entry.key == "entities.tower") {
-            spawn_tower(world, phys, scratch, terrain, entry.value, out_spawn);
-            entity_count++;
-        } else if (entry.key == "entities.pickup") {
-            collect_pickup(entry.value, out_pickups);
-        }
-    }
+    const u32 entity_count = spawn_from_config(world, phys, scratch, terrain, cfg, &out_spawn,
+                                               out_pickups);
     phys.statics_build(arena);
 
     const Vec3 car_xz = cfg.get_vec3("spawn.car_pos", Vec3{0.0f, 0.0f, 0.0f});
@@ -287,6 +422,97 @@ bool zone_load(std::string_view zone_dir, Arena& arena, Arena& scratch, World& w
     log_info("zone: loaded %s | %u entities | %u static tris | %u pickups", path.c_str(),
              entity_count, phys.statics().tri_count(),
              out_pickups ? out_pickups->count : 0);
+    return true;
+}
+
+bool zone_reload(std::string_view zone_dir, Arena& arena, Arena& scratch, World& world,
+                 PhysWorld& phys, const Terrain& terrain, ZonePickups* out_pickups)
+{
+    ArenaScope scope(scratch);
+
+    FixedString<256> path;
+    path.format("%.*s/zone.cfg", static_cast<int>(zone_dir.size()), zone_dir.data());
+    const fs::FileData file = fs::read_entire_file(scratch, path.view());
+    if (!file.valid()) {
+        return false;
+    }
+
+    Config cfg;
+    if (!cfg.parse(scratch, file.text())) {
+        return false;
+    }
+
+    Pool<Entity>& pool = world.entities();
+    for (u32 idx = 0; idx < pool.capacity(); idx++) {
+        const Entity* e = pool.at(idx);
+        if (e && e->body.valid()) {
+            phys.body_destroy(e->body);
+        }
+    }
+    world.clear();
+    phys.statics_reserve(arena, kZoneMaxStaticTris);
+
+    const u32 count = spawn_from_config(world, phys, scratch, terrain, cfg, nullptr,
+                                        out_pickups);
+    phys.statics_build(arena);
+
+    log_info("zone: reloaded %s | %u entities", path.c_str(), count);
+    return true;
+}
+
+bool zone_save(std::string_view zone_dir, Arena& scratch, const World& world,
+               const PhysWorld& phys, const Terrain& terrain)
+{
+    ArenaScope scope(scratch);
+
+    FixedString<256> path;
+    path.format("%.*s/zone.cfg", static_cast<int>(zone_dir.size()), zone_dir.data());
+    const fs::FileData existing = fs::read_entire_file(scratch, path.view());
+
+    std::FILE* out = fs::open(path.view(), "wb");
+    if (!out) {
+        log_warn("zone: could not open %s for writing", path.c_str());
+        return false;
+    }
+
+    u32 written = 0;
+    bool emitted = false;
+    bool in_entities = false;
+
+    std::string_view text = existing.valid() ? existing.text() : std::string_view{};
+    while (!text.empty()) {
+        const std::size_t newline = text.find('\n');
+        std::string_view line = newline == std::string_view::npos ? text
+                                                                  : text.substr(0, newline);
+        text = newline == std::string_view::npos ? std::string_view{}
+                                                 : text.substr(newline + 1);
+        if (!line.empty() && line.back() == '\r') {
+            line.remove_suffix(1);
+        }
+
+        const std::string_view trimmed = trim_left(line);
+        if (!trimmed.empty() && trimmed.front() == '[') {
+            in_entities = trimmed.substr(0, 10) == "[entities]";
+            std::fprintf(out, "%.*s\n", static_cast<int>(line.size()), line.data());
+            if (in_entities) {
+                write_entities(out, world, phys, terrain, written);
+                emitted = true;
+            }
+            continue;
+        }
+        if (in_entities && is_entity_key(line_key(line))) {
+            continue;
+        }
+        std::fprintf(out, "%.*s\n", static_cast<int>(line.size()), line.data());
+    }
+
+    if (!emitted) {
+        std::fprintf(out, "\n[entities]\n");
+        write_entities(out, world, phys, terrain, written);
+    }
+
+    std::fclose(out);
+    log_info("zone: saved %s | %u entities", path.c_str(), written);
     return true;
 }
 
