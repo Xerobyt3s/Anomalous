@@ -78,7 +78,11 @@ set(ANOMALOUS_CORE_SOURCES
     src/core/log.cpp
     src/core/version.cpp
     src/math/vmath.cpp
+    src/physics/body.cpp
+    src/physics/collide.cpp
     src/physics/heightfield.cpp
+    src/physics/static_grid.cpp
+    src/physics/world.cpp
     src/render/camera.cpp
     src/render/debug_draw.cpp
     src/render/fontchain.cpp
@@ -89,6 +93,10 @@ set(ANOMALOUS_CORE_SOURCES
     src/render/shader.cpp
     src/render/sky.cpp
     src/render/terrain_render.cpp
+    src/vehicle/drivetrain.cpp
+    src/vehicle/tire.cpp
+    src/vehicle/vehicle.cpp
+    src/vehicle/vehicle_config.cpp
     src/world/terrain.cpp
     src/platform/clock.cpp
     src/platform/filesystem.cpp
@@ -114,7 +122,11 @@ set(ANOMALOUS_CORE_HEADERS
     src/core/utf8.h
     src/core/version.h
     src/math/vmath.h
+    src/physics/body.h
+    src/physics/collide.h
     src/physics/heightfield.h
+    src/physics/static_grid.h
+    src/physics/world.h
     src/render/camera.h
     src/render/debug_draw.h
     src/render/fontchain.h
@@ -126,6 +138,9 @@ set(ANOMALOUS_CORE_HEADERS
     src/render/shader.h
     src/render/sky.h
     src/render/terrain_render.h
+    src/vehicle/tire.h
+    src/vehicle/vehicle.h
+    src/vehicle/vehicle_config.h
     src/world/terrain.h
     src/platform/clock.h
     src/platform/filesystem.h
