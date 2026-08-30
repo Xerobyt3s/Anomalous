@@ -36,9 +36,10 @@ struct PlayerCommand {
 class Player {
 public:
     void init(Vec3 pos, f32 yaw);
+    void teleport(Vec3 pos, f32 yaw);
     void tick(PhysWorld& phys, Vehicle* veh, const PlayerCommand& cmd, f32 dt);
     void look(f32 dx, f32 dy);
-    void camera(PhysWorld& phys, const Vehicle* veh, f32 alpha, f32 dt, Camera& out);
+    void camera(PhysWorld& phys, const Vehicle* veh, f32 alpha, f32 dt, bool chase, Camera& out);
 
     bool driving() const { return state_ == PlayerState::Driving; }
     bool can_enter(PhysWorld& phys, const Vehicle* veh) const;
@@ -63,6 +64,8 @@ private:
     void resolve_collisions(PhysWorld& phys, const RigidBody* car);
     void ground_snap(PhysWorld& phys, bool was_grounded);
     bool probe_exit(PhysWorld& phys, const Vehicle& veh, Vec3* out_foot) const;
+    void chase_camera(PhysWorld& phys, const RigidBody& body, Vec3 body_pos, Quat body_rot,
+                      f32 car_yaw, f32 dt, Camera& out);
 
     PlayerState state_ = PlayerState::OnFoot;
     Vec3 pos_;
@@ -80,6 +83,12 @@ private:
     bool cockpit_eye_valid_ = false;
     f32 look_yaw_ = 0.0f;
     f32 look_pitch_ = 0.0f;
+    f32 chase_yaw_ = 0.0f;
+    f32 chase_prev_yaw_ = 0.0f;
+    f32 look_idle_ = 0.0f;
+    bool chase_active_ = false;
+    f32 chase_dist_ = 0.0f;
+    bool chase_valid_ = false;
     f32 speed_mul_ = 1.0f;
     i32 exit_pref_ = 0;
 };

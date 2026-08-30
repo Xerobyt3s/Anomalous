@@ -10,6 +10,8 @@
 #include "render/debug_draw.h"
 #include "render/device.h"
 #include "render/fontchain.h"
+#include "physics/body.h"
+#include "world/destination.h"
 #include "render/screenshot.h"
 #include "render/sky.h"
 #include "render/terrain_render.h"
@@ -17,11 +19,11 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 
 namespace {
 
-constexpr const char* kZoneDir = "assets/zones/testzone";
 
 struct Options {
     i32 width = 1600;
@@ -34,9 +36,17 @@ struct Options {
     bool free_cam = false;
     bool terminal = false;
     const char* term_cmd = nullptr;
+    const char* term_keys = nullptr;
     i64 term_cmd_frame = 300;
+    i64 term_key_stride = 30;
     bool photo = false;
     bool place = false;
+    bool coil = false;
+    bool drive = false;
+    const char* zone = "assets/zones/testzone";
+    i64 jump_frame = -1;
+    i64 steer_frame = 0;
+    f32 charge = 0.0f;
     bool term_loose = false;
     i64 photo_frame = 150;
     bool panels = false;
@@ -75,6 +85,20 @@ Options parse_options(int argc, char** argv)
             options.panels = true;
         } else if (std::strcmp(argv[i], "--photo") == 0) {
             options.photo = true;
+        } else if (std::strncmp(argv[i], "--charge=", 9) == 0) {
+            options.charge = static_cast<f32>(std::atof(argv[i] + 9));
+            options.coil = true;
+        } else if (std::strncmp(argv[i], "--drive=", 8) == 0) {
+            options.drive = true;
+            options.steer_frame = std::atoll(argv[i] + 8);
+        } else if (std::strcmp(argv[i], "--drive") == 0) {
+            options.drive = true;
+        } else if (std::strncmp(argv[i], "--jump=", 7) == 0) {
+            options.jump_frame = std::atoll(argv[i] + 7);
+        } else if (std::strncmp(argv[i], "--zone=", 7) == 0) {
+            options.zone = argv[i] + 7;
+        } else if (std::strcmp(argv[i], "--coil") == 0) {
+            options.coil = true;
         } else if (std::strcmp(argv[i], "--place") == 0) {
             options.place = true;
         } else if (std::strcmp(argv[i], "--termloose") == 0) {
@@ -82,6 +106,8 @@ Options parse_options(int argc, char** argv)
             options.terminal = true;
         } else if (std::strcmp(argv[i], "--term") == 0) {
             options.terminal = true;
+        } else if (std::strncmp(argv[i], "--termkeys=", 11) == 0) {
+            options.term_keys = argv[i] + 11;
         } else if (std::strncmp(argv[i], "--termcmd=", 10) == 0) {
             options.term_cmd = argv[i] + 10;
             options.terminal = true;
@@ -142,7 +168,7 @@ int main(int argc, char** argv)
     }
 
     Game game;
-    if (!game.init(device, fonts, perm, scratch, kZoneDir)) {
+    if (!game.init(device, fonts, perm, scratch, options.zone)) {
         return 1;
     }
 
@@ -166,6 +192,10 @@ int main(int argc, char** argv)
         device.shaders().program(name);
     }
 
+    if (options.coil) {
+        game.carsys().parts[PART_COIL].installed = true;
+        game.set_travel_charge(options.charge);
+    }
     if (options.photo || options.place) {
         game.interact().hands().kind = anom::ITEM_CAMERA;
     }
@@ -176,6 +206,18 @@ int main(int argc, char** argv)
         game.carsys().coax_target = anom::kCoaxTargetCamera;
     }
     game.toggles().free_cam = options.free_cam;
+    game.toggles().chase_cam = options.drive;
+    if (options.drive) {
+        const anom::RigidBody* car = game.phys().body(game.vehicle().body());
+        if (car) {
+            const anom::Vec3 out = rotate(car->rot,
+                                          anom::Vec3{-(car->half_extents.x + 0.8f), 0.0f, 0.0f});
+            const anom::Vec3 door = car->pos + out;
+            game.player().init(anom::Vec3{door.x, car->pos.y - car->half_extents.y, door.z},
+                               std::atan2(-out.x, out.z));
+            game.player().look(0.0f, 265.0f);
+        }
+    }
     if (options.terminal) {
         anom::CarSys& sys = game.carsys();
         sys.parts[PART_COMPUTER].installed = !options.term_loose;
@@ -225,6 +267,29 @@ int main(int argc, char** argv)
         if (options.place) {
             window.input().set_key(static_cast<int>(anom::Key::F), true);
         }
+        if (options.drive) {
+            if (!game.player().driving()) {
+                game.player().look(11.0f, 0.0f);
+                if (frame_index % 3 == 0) {
+                    window.input().set_key(static_cast<int>(anom::Key::E), true);
+                }
+            } else if (!game.carsys().engine_on) {
+                game.carsys().key_inserted = true;
+            } else {
+                game.carsys().handbrake_latched = false;
+                window.input().set_key(static_cast<int>(anom::Key::W), true);
+            }
+            if (options.steer_frame && frame_index >= options.steer_frame
+                && game.player().driving()) {
+                window.input().set_key(static_cast<int>(anom::Key::D), true);
+            }
+        }
+        if (options.photo) {
+            window.input().set_mouse_button(1, true);
+            if (frame_index == options.photo_frame) {
+                window.input().set_mouse_button(0, true);
+            }
+        }
         if (options.photo) {
             window.input().set_mouse_button(1, true);
             if (frame_index == options.photo_frame) {
@@ -242,7 +307,28 @@ int main(int argc, char** argv)
             }
             game.terminal().key(anom::TermKey::Enter);
         }
+        if (options.term_keys) {
+            const i64 step = frame_index - options.term_cmd_frame - options.term_key_stride;
+            if (step >= 0 && step % options.term_key_stride == 0) {
+                const i64 index = step / options.term_key_stride;
+                if (index < static_cast<i64>(std::strlen(options.term_keys))) {
+                    switch (options.term_keys[index]) {
+                    case 'U': game.terminal().key(anom::TermKey::Up); break;
+                    case 'D': game.terminal().key(anom::TermKey::Down); break;
+                    case 'E': game.terminal().key(anom::TermKey::Enter); break;
+                    case 'Q': game.terminal().key(anom::TermKey::Quit); break;
+                    default: break;
+                    }
+                }
+            }
+        }
         game.handle_input(window, input, static_cast<f32>(frame_dt));
+        if (options.drive && game.player().driving() && !game.carsys().engine_on) {
+            game.carsys().crank_request = true;
+        }
+        if (options.jump_frame >= 0 && frame_index == options.jump_frame) {
+            game.request_travel(anom::destination_index("touge"));
+        }
         game.advance(static_cast<f32>(frame_dt));
 
         const FramebufferSize size = window.framebuffer_size();

@@ -780,6 +780,7 @@ void RenderDevice::post_process(f32 time)
     glProgramUniform1f(program, 1, time);
     glProgramUniform4f(program, 2, shield_wet_, shield_wiper_, shield_incar_, shield_rain_);
     glProgramUniform1f(program, 3, bloom_ok ? 1.0f : 0.0f);
+    glProgramUniform2f(program, 4, warp_, warp_flash_);
     use_program(program);
     bind_texture0(scene_color_);
     glBindTextureUnit(1, scene_depth_);

@@ -112,6 +112,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/terminal/programs/map.cpp
     src/terminal/programs/status.cpp
     src/terminal/programs/tapes.cpp
+    src/terminal/programs/travel.cpp
     src/terminal/term_font.cpp
     src/terminal/term_render.cpp
     src/terminal/virus.cpp
@@ -123,6 +124,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/render/debug_draw.cpp
     src/render/fontchain.cpp
     src/render/text.cpp
+    src/render/bolt.cpp
     src/render/asset_cache.cpp
     src/render/device.cpp
     src/render/screenshot.cpp
@@ -135,6 +137,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/vehicle/tire.cpp
     src/vehicle/vehicle.cpp
     src/vehicle/vehicle_config.cpp
+    src/world/destination.cpp
     src/world/entity.cpp
     src/world/terrain.cpp
     src/world/weather.cpp
@@ -199,6 +202,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/terminal/programs/map.h
     src/terminal/programs/status.h
     src/terminal/programs/tapes.h
+    src/terminal/programs/travel.h
     src/terminal/term_font.h
     src/terminal/term_render.h
     src/terminal/virus.h
@@ -210,6 +214,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/render/debug_draw.h
     src/render/fontchain.h
     src/render/text.h
+    src/render/bolt.h
     src/render/asset_cache.h
     src/render/device.h
     src/render/gpu_mesh.h
@@ -222,6 +227,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/vehicle/tire.h
     src/vehicle/vehicle.h
     src/vehicle/vehicle_config.h
+    src/world/destination.h
     src/world/entity.h
     src/world/terrain.h
     src/world/weather.h

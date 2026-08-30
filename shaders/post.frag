@@ -8,6 +8,7 @@ in vec2 v_uv;
 layout(location = 1) uniform float u_time;
 layout(location = 2) uniform vec4 u_shield;
 layout(location = 3) uniform float u_bloom;
+layout(location = 4) uniform vec2 u_warp;
 
 layout(binding = 0) uniform sampler2D u_color;
 layout(binding = 1) uniform sampler2D u_depth;
@@ -62,7 +63,14 @@ vec3 g_fog_inscatter = vec3(0.0);
 
 vec3 fetch(vec2 uv)
 {
-    vec3 c = texture(u_color, uv).rgb;
+    vec3 c;
+    if (u_warp.x > 0.0) {
+        vec2 spread = (uv - 0.5) * (u_warp.x * 0.020);
+        c = vec3(texture(u_color, uv + spread).r, texture(u_color, uv).g,
+                 texture(u_color, uv - spread).b);
+    } else {
+        c = texture(u_color, uv).rgb;
+    }
     c = c * g_fog_transmittance + g_fog_inscatter;
     c = mix(c, texture(u_bloom_tex, uv).rgb, BLOOM_MIX * u_bloom);
     c = tonemapAgx(c * u_exposure);
@@ -101,6 +109,17 @@ void main()
 
     float scale = floor(mix(1.0, max(u_pixel_scale, 1.0), retro) + 0.5);
     vec2 uv = v_uv;
+    if (u_warp.x > 0.0) {
+        // Wring the frame in toward the centre and twist it, hardest at the corners, so
+        // the throat looks like it is taking the whole view with it.
+        vec2 d = uv - 0.5;
+        float r = length(d);
+        float turn = u_warp.x * 1.5 * (1.0 - min(r * 1.4, 1.0));
+        float sn = sin(turn);
+        float cs = cos(turn);
+        d = vec2(d.x * cs - d.y * sn, d.x * sn + d.y * cs);
+        uv = 0.5 + d * (1.0 - u_warp.x * (0.30 + 1.20 * r * r));
+    }
     if (scale > 1.0) {
         vec2 grid = max(u_viewport.xy / scale, vec2(1.0));
         uv = (floor(v_uv * grid) + 0.5) / grid;
@@ -155,6 +174,8 @@ void main()
         c += bayerOffset(ivec2(dither_pixel)) * u_dither_strength / levels;
         c = floor(clamp(c, 0.0, 1.0) * levels + 0.5) / levels;
     }
+
+    c = mix(c, vec3(1.0), clamp(u_warp.y, 0.0, 1.0));
 
     o_color = vec4(c, 1.0);
 }

@@ -33,6 +33,7 @@ private:
 
     u32 build_glyphs(const Screen& screen);
     void draw_points(RenderDevice& device, const TermScene& scene, f32 time);
+    void draw_lines(RenderDevice& device, const TermScene& scene);
     void draw_photo(RenderDevice& device, const DiskStore& disks, const TermScene& scene);
     void draw_video(RenderDevice& device, const TermScene& scene);
     void draw_wires(RenderDevice& device, const TermScene& scene);
@@ -50,6 +51,8 @@ private:
     u32 text_vbo_ = 0;
     u32 point_vao_ = 0;
     u32 point_vbo_ = 0;
+    u32 line_vao_ = 0;
+    u32 line_vbo_ = 0;
     u32 empty_vao_ = 0;
     u32 pic_tex_ = 0;
     i32 pic_uploaded_ = -1;

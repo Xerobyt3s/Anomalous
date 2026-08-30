@@ -30,7 +30,10 @@ constexpr ItemDef kItems[ITEM_KIND_COUNT] = {
     {"camera", "camera", "part_camera", 1.5f, {0.12f, 0.08f, 0.075f}, 0.0f, {0.0f, 0.0f, 0.0f}},
     {"cable reel", "reel", "part_reel", 6.0f, {0.12f, 0.11f, 0.12f}, 0.0f, {0.0f, 0.0f, 0.0f}},
     {"cassette", "cassette", "part_cassette", 0.2f, {0.06f, 0.012f, 0.042f}, 0.0f, {0.0f, 0.0f, 0.0f}},
+    {"zippy go boom", "coil", "part_coil", 27.0f, {0.16f, 0.24f, 0.16f}, 0.0f, {0.0f, 0.23f, 0.0f}},
 };
+
+static_assert(sizeof(kItems) / sizeof(kItems[0]) == ITEM_KIND_COUNT);
 
 } // namespace
 
@@ -70,6 +73,7 @@ ItemKind item_for_part(PartKind part)
     case PART_RADIATOR: return ITEM_RADIATOR;
     case PART_COMPUTER: return ITEM_COMPUTER;
     case PART_ANTENNA: return ITEM_ANTENNA_STD;
+    case PART_COIL: return ITEM_COIL;
     default:
         return part_kind_is_tire(part) ? ITEM_TIRE : ITEM_NONE;
     }

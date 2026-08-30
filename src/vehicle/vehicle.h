@@ -73,6 +73,8 @@ void drivetrain_request_shift(Drivetrain& train, i32 dir);
 void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels, f32 throttle,
                      f32 power_mul, bool ignition, f32 dt);
 
+Quat wheel_visual_rot(Quat body_rot, const Wheel& wheel, bool right_side);
+
 class Vehicle {
 public:
     bool init(PhysWorld& world, Arena& scratch, std::string_view cfg_path, Vec3 pos, f32 yaw);
@@ -84,6 +86,7 @@ public:
     void driver_input(PhysWorld& world, f32 forward_intent, f32 reverse_intent, f32 steer,
                       bool handbrake);
     void tick(PhysWorld& world, f32 dt);
+    void reset_contacts();
     void teleport(PhysWorld& world, Vec3 pos, f32 yaw);
 
     f32 forward_speed(const PhysWorld& world) const;

@@ -12,6 +12,7 @@ constexpr PartDef kPartDefs[PART_COUNT] = {
     {"headlights", false, 3.0f, {0.00f, 0.03f, -1.98f}, {0.56f, 0.06f, 0.10f}, "", false},
     {"terminal", true, 11.0f, {0.37f, -0.05f, 0.20f}, {0.27f, 0.23f, 0.27f}, "part_computer", false},
     {"antenna", true, 4.0f, {0.35f, 0.515f, 0.50f}, {0.15f, 0.28f, 0.15f}, "", false},
+    {"coil", true, 27.0f, {-0.30f, 0.515f, 0.28f}, {0.20f, 0.26f, 0.20f}, "part_coil", false},
     {"tire fl", true, 16.0f, {-0.72f, -0.31f, -1.24f}, {0.14f, 0.31f, 0.31f}, "excel_wheel", false},
     {"tire fr", true, 16.0f, {0.72f, -0.31f, -1.24f}, {0.14f, 0.31f, 0.31f}, "excel_wheel", false},
     {"tire rl", true, 16.0f, {-0.72f, -0.31f, 1.24f}, {0.14f, 0.31f, 0.31f}, "excel_wheel", false},
@@ -41,7 +42,7 @@ bool part_kind_is_tire(PartKind kind)
 void parts_init(PartSlot* parts)
 {
     for (u32 i = 0; i < PART_COUNT; i++) {
-        parts[i].installed = i != PART_COMPUTER && i != PART_ANTENNA;
+        parts[i].installed = i != PART_COMPUTER && i != PART_ANTENNA && i != PART_COIL;
         parts[i].condition = 1.0f;
         parts[i].variant = 0;
     }

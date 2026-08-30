@@ -5,6 +5,7 @@
 #include "carsys/carsys.h"
 #include "carsys/items.h"
 #include "carsys/carsys_render.h"
+#include "core/arena.h"
 #include "core/types.h"
 #include "editor/editor.h"
 #include "math/vmath.h"
@@ -14,6 +15,7 @@
 #include "player/player.h"
 #include "render/camera.h"
 #include "render/device.h"
+#include "render/bolt.h"
 #include "render/tree.h"
 #include "terminal/disks.h"
 #include "terminal/term_render.h"
@@ -96,6 +98,8 @@ public:
     void set_environment(const Environment& env);
     bool terminal_focused() const { return term_focus_; }
     void focus_terminal(bool on) { term_focus_ = on; }
+    void set_travel_charge(f32 charge) { travel_charge_ = charge; travel_charge_hold_ = true; }
+    void request_travel(i32 destination) { arm_travel(destination); }
     GameToggles& toggles() { return toggles_; }
     const ZoneSpawn& spawn() const { return spawn_; }
     u64 tick_count() const { return tick_count_; }
@@ -113,6 +117,13 @@ private:
     void update_audio(f32 frame_dt);
     void update_cables(f32 frame_dt);
     void update_terminal(const Input& input, f32 frame_dt);
+    void update_travel_charge(f32 frame_dt);
+    bool load_zone(std::string_view dir);
+    void arm_travel(i32 destination);
+    void begin_travel(i32 destination);
+    void arrive_at_destination();
+    void update_travel_jump(f32 frame_dt);
+    void travel_warp(f32& warp, f32& flash) const;
     void update_camera_item(const Input& input, f32 frame_dt);
     void capture_exposure(RenderDevice& device);
     bool build_video_camera(Camera& out) const;
@@ -130,6 +141,7 @@ private:
     Vec3 tower_port_pos() const;
     const Entity* find_pickup(ItemKind kind) const;
     void draw_hud(DebugDraw& debug, TextRenderer& text, Vec2 viewport, f32 frame_dt);
+    void draw_coil_arcs(RenderDevice& device, DebugDraw& debug);
     void draw_debug_overlays(DebugDraw& debug);
     void bind_entity_meshes(RenderDevice& device);
     void draw_entities(RenderDevice& device);
@@ -151,6 +163,7 @@ private:
     Audio audio_;
     CarSysRenderer car_render_;
     TreeRenderer tree_render_;
+    BoltRenderer bolt_;
     DiskStore disks_;
     Terminal terminal_{tapes_};
     TermRenderer term_render_;
@@ -169,6 +182,15 @@ private:
     Telemetry telem_speed_;
     Telemetry telem_load_;
 
+    f32 travel_charge_ = 0.0f;
+    u32 arc_rng_ = 0x5EED1234u;
+    bool travel_charge_hold_ = false;
+    i32 travel_target_ = -1;
+    i32 travel_primed_ = -1;
+    f32 travel_jump_ = -1.0f;
+    bool travel_arrived_ = false;
+    bool terrain_dirty_ = false;
+    f32 travel_carry_speed_ = 0.0f;
     Vec3 cam_vel_;
     Vec3 prev_cam_pos_;
     bool prev_cam_valid_ = false;
@@ -203,6 +225,7 @@ private:
     u64 tick_count_ = 0;
     f64 next_cfg_poll_ = 0.0;
     Arena* perm_ = nullptr;
+    Arena zone_arena_;
     Arena* scratch_ = nullptr;
 };
 

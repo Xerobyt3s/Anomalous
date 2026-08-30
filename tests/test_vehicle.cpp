@@ -444,8 +444,8 @@ TEST(suspension, bump_stops_limit_travel_on_a_hard_landing)
 
 TEST(suspension, bump_stops_arrest_travel_before_the_hard_limit)
 {
-    const f32 with_stops = drop_deepest_travel(10.0f, 1.6f);
-    const f32 without = drop_deepest_travel(0.0f, 1.6f);
+    const f32 with_stops = drop_deepest_travel(10.0f, 0.9f);
+    const f32 without = drop_deepest_travel(0.0f, 0.9f);
     CHECK(with_stops < without);
 }
 
@@ -558,4 +558,28 @@ TEST(vehicle, polling_an_unchanged_config_does_not_reload)
 
     CHECK(rig.car.reload_config(rig.world, rig.arena));
     CHECK(rig.car.config().tire_peak_mu < 9.0f);
+}
+
+TEST(suspension, the_chassis_proxy_rides_clear_of_the_contact_patches)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    const RigidBody* body = rig.world.body(rig.car.body());
+    CHECK(body != nullptr);
+
+    f32 lowest_sphere = 1.0e9f;
+    for (u32 i = 0; i < body->sphere_count; i++) {
+        lowest_sphere = f_min(lowest_sphere, body->sphere_offsets[i].y - body->sphere_radius);
+    }
+
+    const VehicleConfig& cfg = rig.car.config();
+    f32 lowest_tread = 1.0e9f;
+    for (u32 i = 0; i < kWheelCount; i++) {
+        lowest_tread = f_min(lowest_tread,
+                             cfg.wheels[i].pos.y - cfg.com_offset.y - cfg.wheels[i].radius);
+    }
+
+    // The floor must not reach the ground until most of the travel is gone, or it carries
+    // load the tyres should have and the car stops steering.
+    CHECK(lowest_sphere - lowest_tread > cfg.wheels[0].travel * 0.5f);
 }

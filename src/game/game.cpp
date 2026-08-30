@@ -14,6 +14,7 @@
 #include "render/terrain_render.h"
 #include "render/text.h"
 #include "render/sky.h"
+#include "world/destination.h"
 
 namespace anom {
 namespace {
@@ -28,6 +29,15 @@ constexpr Vec3 kTowerPortLocal{0.0f, 1.35f, 0.62f};
 constexpr Vec3 kCarPressLocal{0.0f, 0.60f, 0.0f};
 constexpr Vec3 kCarPressHalf{1.02f, 1.00f, 2.20f};
 constexpr f32 kGrassPressRange = 90.0f;
+constexpr f32 kSpoolSpeedKmh = 90.0f;
+constexpr f32 kSpoolSeconds = 12.0f;
+constexpr f32 kSpoolBleedRate = 0.14f;
+constexpr f32 kArcOnsetCharge = 0.30f;
+constexpr u64 kZoneArenaBytes = 64ull * 1024ull * 1024ull;
+constexpr f32 kJumpCollapse = 0.85f;
+constexpr f32 kJumpArrive = 1.10f;
+constexpr f32 kJumpCarrySpeed = 0.75f;
+constexpr u32 kArcSteps = 6;
 constexpr Vec3 kBuildingPressMargin{0.6f, 0.0f, 0.6f};
 constexpr Vec3 kTerminalScreenOffset{0.0f, 0.047f, 0.170f};
 constexpr Vec3 kTerminalScreenScale{0.304f, 0.19f, 1.0f};
@@ -55,7 +65,11 @@ bool Game::init(RenderDevice& device, FontChain& fonts, Arena& perm, Arena& scra
     world_.init(perm);
     phys_.init(perm, &terrain_.heightfield());
 
-    if (!zone_load(zone_dir, perm, scratch, world_, phys_, terrain_, spawn_, &pickups_)) {
+    if (!zone_arena_.reserve(kZoneArenaBytes)) {
+        log_error("game: zone arena reserve failed");
+        return false;
+    }
+    if (!zone_load(zone_dir, zone_arena_, scratch, world_, phys_, terrain_, spawn_, &pickups_)) {
         log_error("game: zone load failed");
         return false;
     }
@@ -87,6 +101,9 @@ bool Game::init(RenderDevice& device, FontChain& fonts, Arena& perm, Arena& scra
         return false;
     }
     if (!tree_render_.init(scratch)) {
+        return false;
+    }
+    if (!bolt_.init(perm)) {
         return false;
     }
 
@@ -439,7 +456,7 @@ void Game::update_camera(f32 frame_dt)
     if (toggles_.free_cam || editor_.active()) {
         return;
     }
-    player_.camera(phys_, &vehicle_, alpha_, frame_dt, camera_);
+    player_.camera(phys_, &vehicle_, alpha_, frame_dt, toggles_.chase_cam, camera_);
 }
 
 void Game::track_camera_velocity(f32 frame_dt)
@@ -529,6 +546,112 @@ void Game::update_audio(f32 frame_dt)
     audio_.set_horn(false, frame_dt);
     audio_.set_rain(weather_.rain() * (player_.driving() ? 0.35f : 1.0f),
                     player_.driving() ? weather_.rain() : 0.0f, frame_dt);
+}
+
+// Walks an arc across the car's surface: each step moves along the body then is snapped
+// back onto the hull, so the discharge crawls over the panels instead of cutting through
+// them. The box is tapered toward the ends first, or arcs over the hood and boot float
+// clear of the bodywork.
+static Vec3 snap_to_hull(Vec3 local, Vec3 half)
+{
+    const f32 nose = f_clamp01(f_abs(local.z) / half.z);
+    half.y *= 1.0f - 0.50f * nose * nose;
+    Vec3 p{f_clamp(local.x, -half.x, half.x), f_clamp(local.y, -half.y, half.y),
+           f_clamp(local.z, -half.z, half.z)};
+    const f32 fx = f_abs(p.x) / half.x;
+    const f32 fy = f_abs(p.y) / half.y;
+    const f32 fz = f_abs(p.z) / half.z;
+    if (fx >= fy && fx >= fz) {
+        p.x = p.x < 0.0f ? -half.x : half.x;
+    } else if (fy >= fz) {
+        p.y = p.y < 0.0f ? -half.y : half.y;
+    } else {
+        p.z = p.z < 0.0f ? -half.z : half.z;
+    }
+    return p;
+}
+
+void Game::draw_coil_arcs(RenderDevice& device, DebugDraw& debug)
+{
+    bolt_.begin_frame();
+    if (!carsys_.parts[PART_COIL].installed || travel_charge_ < kArcOnsetCharge) {
+        return;
+    }
+    const RigidBody* body = phys_.body(vehicle_.body());
+    if (!body) {
+        return;
+    }
+
+    const f32 heat = f_clamp01((travel_charge_ - kArcOnsetCharge) / (1.0f - kArcOnsetCharge));
+    const Vec3 com = vehicle_.config().com_offset;
+    const Vec3 half = vehicle_.config().half_extents;
+    const Mat4 base = mat4_trs(body->pos, body->rot, Vec3{1.0f, 1.0f, 1.0f});
+
+    u32 rng = arc_rng_;
+    auto next = [&rng]() {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        return static_cast<f32>(rng & 0xFFFFFFu) / 16777216.0f;
+    };
+
+    Vec3 path[kBoltMaxPoints];
+
+    const u32 body_arcs = 2 + static_cast<u32>(heat * 9.0f);
+    for (u32 arc = 0; arc < body_arcs; arc++) {
+        Vec3 local = snap_to_hull(Vec3{(next() - 0.5f) * 2.2f * half.x,
+                                       (next() - 0.5f) * 2.2f * half.y,
+                                       (next() - 0.5f) * 2.2f * half.z},
+                                  half);
+        path[0] = local;
+        const f32 step = 0.16f + 0.22f * next();
+        for (u32 i = 0; i < kArcSteps; i++) {
+            local = snap_to_hull(local + Vec3{(next() - 0.5f) * step, (next() - 0.5f) * step,
+                                              (next() - 0.5f) * step * 1.6f},
+                                 half);
+            path[i + 1] = local;
+        }
+        u32 count = BoltRenderer::subdivide(path, kArcSteps + 1, kBoltMaxPoints, 3, 0.16f, rng);
+        for (u32 i = 0; i < count; i++) {
+            path[i] = transform_point(base, snap_to_hull(path[i], half) - com);
+        }
+        bolt_.channel({path, count}, 0.014f, 0.55f + 0.55f * heat);
+    }
+
+    // Discharges off the toroid down onto the roof.
+    const Vec3 crown = transform_point(base, part_def(PART_COIL).socket_pos - com
+                                                 + Vec3{0.0f, 0.43f, 0.0f});
+    const u32 crown_arcs = 1 + static_cast<u32>(heat * 5.0f);
+    for (u32 arc = 0; arc < crown_arcs; arc++) {
+        path[0] = crown;
+        path[1] = transform_point(base, Vec3{(next() - 0.5f) * 1.6f * half.x, half.y * 0.92f,
+                                             (next() - 0.5f) * 1.4f * half.z} - com);
+        const u32 count = BoltRenderer::subdivide(path, 2, kBoltMaxPoints, 6, 0.20f, rng);
+        bolt_.channel({path, count}, 0.026f, 0.9f + 0.7f * heat);
+    }
+
+    // Earthing arcs at the contact patches, and the tyres start to cook.
+    for (u32 w = 0; w < kWheelCount; w++) {
+        const Wheel& wheel = vehicle_.wheel(w);
+        if (!wheel.grounded || heat < 0.25f) {
+            continue;
+        }
+        const Vec3 contact = wheel.contact_point;
+        const u32 sparks = 1 + static_cast<u32>(heat * 3.0f);
+        for (u32 i = 0; i < sparks; i++) {
+            path[0] = contact;
+            path[1] = contact + Vec3{(next() - 0.5f) * 0.30f, 0.10f + next() * 0.22f,
+                                     (next() - 0.5f) * 0.30f};
+            const u32 count = BoltRenderer::subdivide(path, 2, kBoltMaxPoints, 4, 0.22f, rng);
+            bolt_.channel({path, count}, 0.018f, 0.7f + 0.5f * heat);
+        }
+        debug.circle(contact + Vec3{0.0f, 0.02f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f},
+                     0.18f + 0.22f * heat,
+                     dd_rgba(30, 20, 16, static_cast<u8>(90 + 120 * heat)));
+    }
+
+    const Vec3 channel = lerp(Vec3{0.26f, 0.46f, 1.00f}, Vec3{0.44f, 0.62f, 1.00f}, heat);
+    bolt_.draw(device, channel, 5.0f + 7.0f * heat);
 }
 
 void Game::draw_debug_overlays(DebugDraw& debug)
@@ -747,11 +870,7 @@ void Game::draw_vehicle(RenderDevice& device)
         const Vec3 local = w.attach_local - Vec3{0.0f, drop - wobble, 0.0f};
         const Vec3 center = pos + rotate(rot, local);
 
-        Quat q = rot * quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, w.steer_rad);
-        q = q * quat_from_axis_angle(Vec3{1.0f, 0.0f, 0.0f}, w.spin_angle);
-        if (cfg.wheels[i].pos.x > 0.0f) {
-            q = q * quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, kPi);
-        }
+        const Quat q = wheel_visual_rot(rot, w, cfg.wheels[i].pos.x > 0.0f);
         device.draw_mesh(wheel_mesh, mat4_trs(center, q, Vec3{1.0f, radius_mul, radius_mul}));
     }
 }
@@ -1006,9 +1125,23 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
     device.set_environment(env_);
 
     render_video_feed(device, terrain_renderer, frame_dt, time);
+    update_travel_charge(frame_dt);
+    update_travel_jump(frame_dt);
     update_terminal(input, frame_dt);
 
+    if (terrain_dirty_) {
+        terrain_renderer.shutdown();
+        if (!terrain_renderer.init(device, *scratch_, terrain_.heightfield(),
+                                   terrain_.roadmask(), terrain_.mask_size())) {
+            log_error("travel: terrain rebuild failed");
+        }
+        terrain_dirty_ = false;
+    }
+
     device.set_screen_fx(screen_fx_);
+    f32 warp = 0.0f;
+    f32 flash = 0.0f;
+    travel_warp(warp, flash);
     if (terminal_.powered()) {
         term_render_.render(device, disks_, terminal_.screen(), terminal_.scene(), time);
     }
@@ -1018,6 +1151,7 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
         device.set_time(time);
         device.begin_frame(camera_, static_cast<i32>(viewport.x), static_cast<i32>(viewport.y));
         device.end_frame();
+        device.set_travel_warp(warp, flash);
         device.post_process(time);
         device.blit_texture(0.0f, 0.0f, viewport.x, viewport.y, screen_texture, 1.0f, time);
         debug.text_2d(text, viewport.x * 0.5f - 80.0f, viewport.y - 10.0f, 14.0f, kDdGray,
@@ -1062,12 +1196,14 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
     device.draw_rain(weather_.rain(), weather_.wind(), cam_vel_, time);
     car_render_.draw_glass(device, carsys_, vehicle_, phys_, alpha_, time);
 
+    draw_coil_arcs(device, debug);
     draw_debug_overlays(debug);
     editor_.render(ui_, debug, text, input, *scratch_, camera_, world_, phys_, terrain_,
                    &vehicle_, &boxes_, &tapes_, viewport);
     debug.flush_world(device);
 
     device.end_frame();
+    device.set_travel_warp(warp, flash);
     device.post_process(time);
 
     if (term_anim_ > 0.80f && terminal_.powered()) {
@@ -1285,6 +1421,10 @@ void Game::build_term_view(const Input& input, TermView& out) const
 
     const Cable& coax = carsys_.cables[CABLE_COAX];
     const Cable& bus = carsys_.cables[CABLE_BUS];
+    out.travel_charge = travel_charge_;
+    out.travel_primed = travel_primed_ >= 0;
+    out.travel_ready = carsys_.parts[PART_COIL].installed;
+
     out.coax_state = coax.state == CableState::Plugged
                        ? (coax.linked ? PORT_LINKED : PORT_PLUGGED)
                        : PORT_UNPLUGGED;
@@ -1319,6 +1459,186 @@ void Game::terminal_keys(const Input& input)
         if (input.pressed(entry.key)) {
             terminal_.key(entry.term);
         }
+    }
+}
+
+void Game::update_travel_charge(f32 frame_dt)
+{
+    if (!travel_charge_hold_) {
+        const f32 speed_kmh = f_abs(vehicle_.forward_speed(phys_)) * 3.6f;
+        if (carsys_.parts[PART_COIL].installed && speed_kmh >= kSpoolSpeedKmh) {
+            travel_charge_ += frame_dt / kSpoolSeconds;
+        } else {
+            travel_charge_ -= frame_dt * kSpoolBleedRate;
+        }
+        travel_charge_ = f_clamp01(travel_charge_);
+    }
+    arc_rng_ = arc_rng_ * 1664525u + 1013904223u;
+
+    if (travel_primed_ >= 0 && !carsys_.parts[PART_COIL].installed) {
+        travel_primed_ = -1;
+    }
+    if (travel_primed_ >= 0 && travel_charge_ >= 0.999f && travel_jump_ < 0.0f) {
+        begin_travel(travel_primed_);
+    }
+}
+
+// Everything the zone owns comes out of one arena, so a swap is a reset rather than a
+// free list. The entity bodies have to go first: the entity table is about to be cleared
+// and their handles with it, and the body pool outlives the zone.
+bool Game::load_zone(std::string_view dir)
+{
+    for (u32 idx : world_.entities().live_indices()) {
+        Entity* e = world_.entities().at(idx);
+        if (e && phys_.body(e->body)) {
+            phys_.body_destroy(e->body);
+            e->body = BodyHandle{};
+        }
+    }
+    world_.clear();
+    phys_.statics_clear();
+    zone_arena_.reset();
+
+    if (!zone_load(dir, zone_arena_, *scratch_, world_, phys_, terrain_, spawn_, &pickups_)) {
+        log_error("travel: zone load failed for %.*s", static_cast<int>(dir.size()), dir.data());
+        return false;
+    }
+    zone_dir_.assign(dir);
+
+    const f32 tx = spawn_.tower_present ? spawn_.tower_x : 0.0f;
+    const f32 tz = spawn_.tower_present ? spawn_.tower_z : 0.0f;
+    tower_pos_ = Vec3{tx, terrain_.heightfield().sample(tx, tz), tz};
+    tower_rot_ = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f},
+                                      spawn_.tower_yaw_deg * kDegToRad);
+    for (u32 idx : world_.entities().live_indices()) {
+        const Entity* e = world_.entities().at(idx);
+        if (e && (e->flags & kEntityFlagTower)) {
+            tower_pos_ = e->pos;
+            tower_rot_ = e->rot;
+        }
+    }
+
+    interact_spawn_zone_pickups(world_, phys_, terrain_, pickups_);
+    terminal_.mapdata().init(terrain_.heightfield());
+    terrain_dirty_ = true;
+    editor_.snapshot_world(world_, phys_);
+    tower_breached_ = false;
+    log_info("travel: arrived in %.*s (zone arena %.1f MB)",
+             static_cast<int>(dir.size()), dir.data(),
+             static_cast<double>(zone_arena_.used()) / (1024.0 * 1024.0));
+    return true;
+}
+
+// The primer is set from a standstill and the shot goes off by itself once the coil
+// saturates, because the charge only builds above 90 km/h and reaching for the keyboard
+// there is not a thing anyone is going to do.
+void Game::arm_travel(i32 destination)
+{
+    const std::span<const Destination> all = destinations();
+    if (destination < 0 || static_cast<u32>(destination) >= all.size()
+        || !all[static_cast<u32>(destination)].surveyed()
+        || !carsys_.parts[PART_COIL].installed) {
+        return;
+    }
+    travel_primed_ = destination;
+    audio_.play(SFX_RATCHET, 0.5f, 1.8f);
+}
+
+void Game::begin_travel(i32 destination)
+{
+    const std::span<const Destination> all = destinations();
+    if (destination < 0 || static_cast<u32>(destination) >= all.size()
+        || !all[static_cast<u32>(destination)].surveyed()) {
+        return;
+    }
+    travel_primed_ = -1;
+    travel_charge_ = 0.0f;
+    travel_charge_hold_ = false;
+    travel_target_ = destination;
+    travel_jump_ = 0.0f;
+    travel_arrived_ = false;
+    travel_carry_speed_ = 0.0f;
+    if (const RigidBody* body = phys_.body(vehicle_.body())) {
+        travel_carry_speed_ = length(Vec3{body->vel.x, 0.0f, body->vel.z});
+    }
+    audio_.play(SFX_RATCHET, 0.9f, 0.6f);
+}
+
+// The car keeps the speed it arrived with, pointed along whatever the new zone calls its
+// start heading; carrying the old velocity vector straight over would drop you sideways
+// onto a road running the other way.
+void Game::arrive_at_destination()
+{
+    const std::span<const Destination> all = destinations();
+    if (travel_target_ < 0 || static_cast<u32>(travel_target_) >= all.size()) {
+        return;
+    }
+    if (!load_zone(all[static_cast<u32>(travel_target_)].zone_dir)) {
+        travel_target_ = -1;
+        travel_jump_ = -1.0f;
+        return;
+    }
+
+    RigidBody* body = phys_.body(vehicle_.body());
+    if (body) {
+        const f32 ground = terrain_.heightfield().sample(spawn_.car_pos.x, spawn_.car_pos.z);
+        const Quat rot = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, spawn_.car_yaw);
+        const Vec3 pos{spawn_.car_pos.x, ground + vehicle_.config().half_extents.y + 0.35f,
+                       spawn_.car_pos.z};
+        const Vec3 fwd = rotate(rot, Vec3{0.0f, 0.0f, -1.0f});
+
+        body->pos = pos;
+        body->prev_pos = pos;
+        body->rot = rot;
+        body->prev_rot = rot;
+        body->vel = fwd * (travel_carry_speed_ * kJumpCarrySpeed);
+        body->angular_vel = Vec3{};
+        body->force_accum = Vec3{};
+        body->torque_accum = Vec3{};
+        body->asleep = 0;
+        body->sleep_timer = 0.0f;
+        vehicle_.reset_contacts();
+    }
+
+    player_.teleport(spawn_.car_pos, spawn_.car_yaw);
+    prev_cam_valid_ = false;
+    cam_vel_ = Vec3{};
+    travel_arrived_ = true;
+}
+
+// The throat winds the view up tight, whites out at the moment the zone is swapped
+// underneath it, then unwinds on the far side.
+void Game::travel_warp(f32& warp, f32& flash) const
+{
+    warp = 0.0f;
+    flash = 0.0f;
+    if (travel_jump_ < 0.0f) {
+        return;
+    }
+    if (travel_jump_ < kJumpCollapse) {
+        const f32 t = travel_jump_ / kJumpCollapse;
+        warp = t * t;
+        flash = f_clamp01((t - 0.82f) / 0.18f);
+    } else {
+        const f32 t = f_clamp01((travel_jump_ - kJumpCollapse) / kJumpArrive);
+        warp = (1.0f - t) * (1.0f - t);
+        flash = 1.0f - f_clamp01(t / 0.30f);
+    }
+}
+
+void Game::update_travel_jump(f32 frame_dt)
+{
+    if (travel_jump_ < 0.0f) {
+        return;
+    }
+    travel_jump_ += frame_dt;
+
+    if (!travel_arrived_ && travel_jump_ >= kJumpCollapse) {
+        arrive_at_destination();
+    }
+    if (travel_jump_ >= kJumpCollapse + kJumpArrive) {
+        travel_jump_ = -1.0f;
+        travel_target_ = -1;
     }
 }
 
@@ -1369,6 +1689,12 @@ void Game::update_terminal(const Input& input, f32 frame_dt)
     terminal_.update(view, frame_dt);
 
     const TermRequest req = terminal_.take_request();
+    if (req.travel_arm) {
+        arm_travel(req.travel_destination);
+    }
+    if (req.travel_disarm) {
+        travel_primed_ = -1;
+    }
     if (req.breach_open) {
         tower_breached_ = true;
         audio_.play(SFX_RATCHET, 0.4f, 1.4f);

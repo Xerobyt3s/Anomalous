@@ -8,6 +8,7 @@
 #include "terminal/disks.h"
 #include "terminal/terminal.h"
 #include "vehicle/vehicle.h"
+#include "world/destination.h"
 #include "world/terrain.h"
 
 #include <cstring>
@@ -608,4 +609,170 @@ TEST(terminal, the_camera_disk_unmounts_when_the_coax_is_pulled)
     rig.link_coax(true);
     rig.tick();
     CHECK(rig.term.fs().valid(rig.term.fs().resolve(Fs::root(kFsDriveC), "IMG_01.PIC")));
+}
+
+static f32 scene_height(const TermScene& scene)
+{
+    f32 lo = 1e30f;
+    f32 hi = -1e30f;
+    for (u32 i = 0; i < scene.line_vertex_count; i++) {
+        lo = f_min(lo, scene.lines[i].y);
+        hi = f_max(hi, scene.lines[i].y);
+    }
+    return scene.line_vertex_count > 0 ? hi - lo : 0.0f;
+}
+
+TEST(travel, the_plotter_lists_destinations_and_refuses_the_current_position)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.boot();
+
+    rig.command("TRAVEL");
+    CHECK(rig.term.mode() == TermMode::Travel);
+    rig.tick();
+
+    CHECK(rig.on_grid("TRANSIT PLOTTER"));
+    CHECK(rig.on_grid("REDLINE FLATS"));
+    CHECK(rig.on_grid("KAMIYAMA PASS"));
+    CHECK(rig.on_grid("UNSURVEYED"));
+    CHECK(rig.on_grid("COIL NOT INSTALLED"));
+
+    rig.term.key(TermKey::Enter);
+    rig.tick();
+    CHECK(rig.on_grid("TRANSIT PLOTTER"));
+}
+
+TEST(travel, plotting_a_course_folds_a_sheet_then_opens_a_throat)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.boot();
+    rig.command("TRAVEL");
+
+    rig.term.key(TermKey::Down);
+    rig.term.key(TermKey::Enter);
+    rig.tick();
+    CHECK(rig.on_grid("WORMHOLE PLOT"));
+    CHECK(rig.on_grid("KAMIYAMA PASS"));
+    CHECK(rig.term.scene().line_vertex_count > 0);
+    CHECK(rig.term.scene().lines != nullptr);
+
+    // The funnels are a warp of the grid, not extra geometry, so the vertex count holds
+    // steady while the shape changes; the fold is what makes the sheet deep.
+    const u32 flat_lines = rig.term.scene().line_vertex_count;
+    const f32 flat_depth = scene_height(rig.term.scene());
+
+    rig.tick(240);
+    CHECK(rig.on_grid("THROAT"));
+    CHECK(rig.term.scene().line_vertex_count == flat_lines);
+    CHECK(scene_height(rig.term.scene()) > flat_depth * 3.0f);
+}
+
+TEST(travel, the_plot_hands_over_to_the_spool_gauge)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.boot();
+    rig.command("TRAVEL");
+    rig.term.key(TermKey::Down);
+    rig.term.key(TermKey::Enter);
+
+    rig.view.travel_ready = true;
+    rig.view.travel_charge = 0.4f;
+    rig.view.speed_kmh = 104.0f;
+    rig.tick(460);
+
+    CHECK(rig.on_grid("COIL SPOOL"));
+    CHECK(rig.on_grid("CHARGE"));
+    CHECK(rig.on_grid("40%"));
+    CHECK(rig.on_grid("104 KM/H"));
+    CHECK(rig.term.scene().line_vertex_count > 0);
+}
+
+TEST(travel, a_full_coil_will_not_fire_at_an_unsurveyed_destination)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.boot();
+    rig.command("TRAVEL");
+    rig.term.key(TermKey::Down);
+    rig.term.key(TermKey::Down);
+    rig.term.key(TermKey::Enter);
+
+    rig.view.travel_ready = true;
+    rig.view.travel_charge = 1.0f;
+    rig.tick(460);
+    CHECK(rig.on_grid("EXIT POINT UNRESOLVED"));
+
+    rig.term.key(TermKey::Enter);
+    rig.tick();
+    CHECK(!rig.term.take_request().travel_arm);
+}
+
+TEST(travel, the_coil_primes_at_a_surveyed_destination_before_it_is_charged)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.boot();
+    rig.command("TRAVEL");
+    rig.term.key(TermKey::Down);
+    rig.term.key(TermKey::Enter);
+
+    // Flat coil, standing still: priming has to work here, that is the whole point of it.
+    rig.view.travel_ready = true;
+    rig.view.travel_charge = 0.0f;
+    rig.view.speed_kmh = 0.0f;
+    rig.tick(460);
+
+    rig.term.key(TermKey::Enter);
+    rig.tick();
+    const TermRequest req = rig.term.take_request();
+    CHECK(req.travel_arm);
+    CHECK(req.travel_destination == destination_index("touge"));
+    CHECK(destinations()[static_cast<u32>(req.travel_destination)].surveyed());
+}
+
+TEST(travel, priming_shows_on_the_gauge_and_can_be_made_safe_again)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.boot();
+    rig.command("TRAVEL");
+    rig.term.key(TermKey::Down);
+    rig.term.key(TermKey::Enter);
+
+    rig.view.travel_ready = true;
+    rig.tick(460);
+    CHECK(rig.on_grid("PRIME"));
+
+    rig.view.travel_primed = true;
+    rig.tick(30);
+    CHECK(rig.on_grid("FULL CHARGE. DRIVE."));
+
+    rig.term.key(TermKey::Enter);
+    rig.tick();
+    const TermRequest req = rig.term.take_request();
+    CHECK(req.travel_disarm);
+    CHECK(!req.travel_arm);
+}
+
+TEST(travel, standing_down_returns_to_the_destination_list)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.boot();
+    rig.command("TRAVEL");
+    rig.term.key(TermKey::Down);
+    rig.term.key(TermKey::Enter);
+    rig.tick(460);
+    CHECK(rig.on_grid("COIL SPOOL"));
+
+    rig.term.key(TermKey::Quit);
+    rig.tick();
+    CHECK(rig.on_grid("TRANSIT PLOTTER"));
+    CHECK(rig.term.mode() == TermMode::Travel);
+
+    rig.term.key(TermKey::Quit);
+    CHECK(rig.term.mode() == TermMode::Shell);
 }

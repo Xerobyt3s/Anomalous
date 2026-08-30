@@ -16,6 +16,7 @@ enum PartKind : u32 {
     PART_HEADLIGHTS,
     PART_COMPUTER,
     PART_ANTENNA,
+    PART_COIL,
     PART_TIRE_FL,
     PART_TIRE_FR,
     PART_TIRE_RL,

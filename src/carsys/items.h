@@ -8,6 +8,7 @@
 
 namespace anom {
 
+// Order must match kItems in items.cpp; the table is indexed by this enum.
 enum ItemKind : u32 {
     ITEM_NONE = 0,
     ITEM_BATTERY,
@@ -25,6 +26,7 @@ enum ItemKind : u32 {
     ITEM_CAMERA,
     ITEM_REEL,
     ITEM_CASSETTE,
+    ITEM_COIL,
     ITEM_KIND_COUNT,
 };
 

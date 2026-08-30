@@ -10,6 +10,7 @@
 #include "terminal/programs/map.h"
 #include "terminal/programs/status.h"
 #include "terminal/programs/tapes.h"
+#include "terminal/programs/travel.h"
 #include "terminal/shell.h"
 #include "terminal/virus.h"
 
@@ -31,6 +32,7 @@ enum class TermMode : u32 {
     Breach,
     Tapes,
     Dev,
+    Travel,
 };
 
 class Terminal {
@@ -90,6 +92,7 @@ private:
     BreachProgram breach_;
     TapesProgram tapes_;
     DevProgram dev_;
+    TravelProgram travel_;
 
     TermScene scene_;
     TermRequest request_;

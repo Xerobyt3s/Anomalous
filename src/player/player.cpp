@@ -25,6 +25,20 @@ constexpr f32 kPitchLimit = 89.0f * kDegToRad;
 constexpr f32 kExitClearance = 0.03f;
 constexpr f32 kCockpitLagRate = 18.0f;
 constexpr f32 kCockpitLagMax = 0.15f;
+constexpr f32 kChasePivotHeight = 1.30f;
+constexpr f32 kChaseNearDist = 5.0f;
+constexpr f32 kChaseFarDist = 7.2f;
+constexpr f32 kChaseSpeedFull = 38.0f;
+constexpr f32 kChasePitch = 10.0f * kDegToRad;
+constexpr f32 kChaseYawRate = 3.2f;
+constexpr f32 kChaseDistRate = 3.5f;
+constexpr f32 kChaseFacingBlend = 0.28f;
+constexpr f32 kChaseHeadingSpeed = 2.0f;
+constexpr f32 kChaseClearance = 0.34f;
+constexpr f32 kChaseMinDist = 0.9f;
+constexpr f32 kChaseLookHold = 1.4f;
+constexpr f32 kChaseLookReturn = 2.4f;
+constexpr f32 kChaseLookPitchLimit = 1.15f;
 
 f32 smooth01(f32 t)
 {
@@ -163,6 +177,21 @@ void Player::init(Vec3 pos, f32 yaw)
     prev_pos_ = pos;
     yaw_ = yaw;
     speed_mul_ = 1.0f;
+}
+
+// Moves the player without disturbing what they are doing. init() would put a driver back
+// on their feet, which halfway through a jump means being posted out of the car.
+void Player::teleport(Vec3 pos, f32 yaw)
+{
+    pos_ = pos;
+    prev_pos_ = pos;
+    vel_ = Vec3{};
+    grounded_ = false;
+    cockpit_eye_valid_ = false;
+    chase_valid_ = false;
+    if (state_ == PlayerState::OnFoot) {
+        yaw_ = yaw;
+    }
 }
 
 void Player::resolve_collisions(PhysWorld& phys, const RigidBody* car)
@@ -311,15 +340,10 @@ bool Player::can_enter(PhysWorld& phys, const Vehicle* veh) const
     }
     const Vec3 he = body->half_extents;
     const Vec3 waist = pos_ + Vec3{0.0f, 0.9f, 0.0f};
-    for (i32 side = -1; side <= 1; side += 2) {
-        const Vec3 anchor_local{static_cast<f32>(side) * (he.x + 0.4f), 0.0f,
-                                veh->config().seat_eye.z};
-        const Vec3 anchor = body->pos + rotate(body->rot, anchor_local);
-        if (distance(waist, anchor) < kEnterRange) {
-            return true;
-        }
-    }
-    return false;
+    const f32 side = veh->config().seat_eye.x < 0.0f ? -1.0f : 1.0f;
+    const Vec3 anchor_local{side * (he.x + 0.4f), 0.0f, veh->config().seat_eye.z};
+    const Vec3 anchor = body->pos + rotate(body->rot, anchor_local);
+    return distance(waist, anchor) < kEnterRange;
 }
 
 bool Player::can_exit(PhysWorld& phys, const Vehicle* veh) const
@@ -410,13 +434,84 @@ void Player::look(f32 dx, f32 dy)
         yaw_ = f_wrap_angle(yaw_ + dx * kLookSensitivity);
         pitch_ = f_clamp(pitch_ - dy * kLookSensitivity, -kPitchLimit, kPitchLimit);
     } else if (state_ == PlayerState::Driving) {
-        look_yaw_ = f_clamp(look_yaw_ + dx * kLookSensitivity, -kLookYawLimit, kLookYawLimit);
-        look_pitch_ = f_clamp(look_pitch_ - dy * kLookSensitivity, -kLookPitchLimit,
-                              kLookPitchLimit);
+        if (dx != 0.0f || dy != 0.0f) {
+            look_idle_ = 0.0f;
+        }
+        if (chase_active_) {
+            look_yaw_ = f_wrap_angle(look_yaw_ + dx * kLookSensitivity);
+            look_pitch_ = f_clamp(look_pitch_ - dy * kLookSensitivity, -kChaseLookPitchLimit,
+                                  kChaseLookPitchLimit);
+        } else {
+            look_yaw_ = f_clamp(look_yaw_ + dx * kLookSensitivity, -kLookYawLimit, kLookYawLimit);
+            look_pitch_ = f_clamp(look_pitch_ - dy * kLookSensitivity, -kLookPitchLimit,
+                                  kLookPitchLimit);
+        }
     }
 }
 
-void Player::camera(PhysWorld& phys, const Vehicle* veh, f32 alpha, f32 dt, Camera& out)
+void Player::chase_camera(PhysWorld& phys, const RigidBody& body, Vec3 body_pos, Quat body_rot,
+                          f32 car_yaw, f32 dt, Camera& out)
+{
+    const Vec3 fwd = rotate(body_rot, Vec3{0.0f, 0.0f, -1.0f});
+    const Vec3 flat{body.vel.x, 0.0f, body.vel.z};
+    const f32 speed = length(flat);
+
+    // The boom trails where the car is going rather than where it points, so a slide is
+    // seen side-on. A little of the facing is mixed back in or the view hangs square to
+    // the road once the tail steps out.
+    f32 heading = car_yaw;
+    if (speed > kChaseHeadingSpeed && dot(flat, fwd) > 0.0f) {
+        const f32 travel = std::atan2(flat.x, -flat.z);
+        const f32 settled = f_clamp01((speed - kChaseHeadingSpeed) / kChaseHeadingSpeed);
+        const f32 facing = f_lerp(1.0f, kChaseFacingBlend, settled);
+        heading = f_wrap_angle(travel + f_wrap_angle(car_yaw - travel) * facing);
+    }
+
+    if (!chase_valid_) {
+        chase_yaw_ = heading;
+        chase_prev_yaw_ = heading;
+        chase_dist_ = kChaseNearDist;
+        look_idle_ = kChaseLookHold;
+        chase_valid_ = true;
+    }
+    chase_yaw_ = f_wrap_angle(chase_yaw_ + f_wrap_angle(heading - chase_yaw_) *
+                                               (1.0f - std::exp(-kChaseYawRate * dt)));
+
+    // While the mouse is driving the view, the boom swinging under it is cancelled out so
+    // the look holds still in the world; once it has been let go for a moment the offset is
+    // eased away and the follow takes back over.
+    look_idle_ += dt;
+    if (look_idle_ < kChaseLookHold) {
+        look_yaw_ = f_wrap_angle(look_yaw_ - f_wrap_angle(chase_yaw_ - chase_prev_yaw_));
+    } else {
+        look_yaw_ = f_approach_exp(look_yaw_, 0.0f, kChaseLookReturn, dt);
+        look_pitch_ = f_approach_exp(look_pitch_, 0.0f, kChaseLookReturn, dt);
+    }
+    chase_prev_yaw_ = chase_yaw_;
+
+    const f32 yaw = f_wrap_angle(chase_yaw_ + look_yaw_);
+    const f32 pitch = f_clamp(-kChasePitch + look_pitch_, -kPitchLimit, kPitchLimit);
+    const f32 cp = std::cos(pitch);
+    const Vec3 dir{cp * std::sin(yaw), std::sin(pitch), -cp * std::cos(yaw)};
+
+    const Vec3 pivot = body_pos + Vec3{0.0f, kChasePivotHeight, 0.0f};
+    f32 want = f_lerp(kChaseNearDist, kChaseFarDist, f_clamp01(speed / kChaseSpeedFull));
+
+    PhysRayHit hit;
+    if (phys.raycast(Ray{pivot, dir * -1.0f}, want + kChaseClearance, &hit)) {
+        want = f_max(hit.t - kChaseClearance, kChaseMinDist);
+    }
+    chase_dist_ = want < chase_dist_ ? want
+                                     : f_approach_exp(chase_dist_, want, kChaseDistRate, dt);
+
+    out.pos = pivot - dir * chase_dist_;
+    out.yaw = yaw;
+    out.pitch = pitch;
+    cockpit_eye_valid_ = false;
+}
+
+void Player::camera(PhysWorld& phys, const Vehicle* veh, f32 alpha, f32 dt, bool chase,
+                    Camera& out)
 {
     const RigidBody* body = veh ? phys.body(veh->body()) : nullptr;
 
@@ -425,6 +520,7 @@ void Player::camera(PhysWorld& phys, const Vehicle* veh, f32 alpha, f32 dt, Came
         out.yaw = yaw_;
         out.pitch = pitch_;
         cockpit_eye_valid_ = false;
+        chase_valid_ = false;
         return;
     }
 
@@ -452,6 +548,13 @@ void Player::camera(PhysWorld& phys, const Vehicle* veh, f32 alpha, f32 dt, Came
         cockpit_eye_valid_ = false;
         return;
     }
+
+    chase_active_ = chase;
+    if (chase) {
+        chase_camera(phys, *body, body_pos, body_rot, car_yaw, dt, out);
+        return;
+    }
+    chase_valid_ = false;
 
     if (!cockpit_eye_valid_) {
         cockpit_eye_ = seat_eye;

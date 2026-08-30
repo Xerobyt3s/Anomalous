@@ -18,7 +18,10 @@ constexpr f32 kStickMinMass = 40.0f;
 constexpr u32 kMaxSuspProbes = 7;
 constexpr f32 kProbeSpread = 0.85f;
 constexpr f32 kProbeNormalBand = 0.02f;
-constexpr f32 kChassisClearance = 0.02f;
+// Ride height of the underside proxy above the tread. At a couple of centimetres the
+// chassis spheres sat level with the contact patches and dragged the moment the
+// suspension loaded up, carrying weight the tyres should have had.
+constexpr f32 kChassisClearance = 0.13f;
 
 } // namespace
 
@@ -497,6 +500,42 @@ void Vehicle::tick(PhysWorld& world, f32 dt)
         const Vec3 rolling = body->vel * (1.0f / speed) * (-cfg_.rolling_resist * total_load);
         body_apply_force_at_point(*body, rolling, body->pos);
     }
+}
+
+
+// Positive steer_rad is a right-hand turn, so the tyre swings toward the car's +X. A
+// rotation about +Y carries the forward axis the other way, hence the negation.
+// Dropping the car somewhere else leaves the suspension holding last frame's contacts,
+// which reads as a jolt on the first tick in the new zone.
+void Vehicle::reset_contacts()
+{
+    for (Wheel& w : wheels_) {
+        w.compression = 0.0f;
+        w.compression_raw = 0.0f;
+        w.bump_force = 0.0f;
+        w.align_torque = 0.0f;
+        w.load = 0.0f;
+        w.slip_ratio = 0.0f;
+        w.slip_angle = 0.0f;
+        w.slide_long = 0.0f;
+        w.slide_lat = 0.0f;
+        w.grounded = false;
+        w.contact_point = Vec3{};
+        w.contact_normal = Vec3{0.0f, 1.0f, 0.0f};
+        w.force_susp = Vec3{};
+        w.force_long = Vec3{};
+        w.force_lat = Vec3{};
+    }
+}
+
+Quat wheel_visual_rot(Quat body_rot, const Wheel& wheel, bool right_side)
+{
+    Quat q = body_rot * quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, -wheel.steer_rad);
+    q = q * quat_from_axis_angle(Vec3{1.0f, 0.0f, 0.0f}, wheel.spin_angle);
+    if (right_side) {
+        q = q * quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, kPi);
+    }
+    return q;
 }
 
 } // namespace anom

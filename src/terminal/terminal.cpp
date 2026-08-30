@@ -13,6 +13,7 @@ void Terminal::init(Arena& arena, DiskStore& disks)
     mail_.init();
     shell_.init(&disks);
     map_.init(arena);
+    travel_.init(arena);
 }
 
 void Terminal::power(bool on)
@@ -53,6 +54,8 @@ Program& Terminal::program(TermMode mode)
         return tapes_;
     case TermMode::Dev:
         return dev_;
+    case TermMode::Travel:
+        return travel_;
     case TermMode::Shell:
         break;
     }
@@ -220,6 +223,10 @@ void Terminal::launch(const FsNode& node, const TermView& view)
 
     case FsExe::Tapes:
         set_mode(TermMode::Tapes, view);
+        break;
+
+    case FsExe::Travel:
+        set_mode(TermMode::Travel, view);
         break;
 
     case FsExe::None:

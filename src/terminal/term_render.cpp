@@ -79,6 +79,15 @@ bool TermRenderer::init(FontChain& fonts, Arena& scratch)
     glVertexArrayAttribFormat(point_vao_, 0, 4, GL_FLOAT, GL_FALSE, 0);
     glVertexArrayAttribBinding(point_vao_, 0, 0);
 
+    glCreateBuffers(1, &line_vbo_);
+    glNamedBufferStorage(line_vbo_, kTermMaxLineVerts * sizeof(TermPoint), nullptr,
+                         GL_DYNAMIC_STORAGE_BIT);
+    glCreateVertexArrays(1, &line_vao_);
+    glVertexArrayVertexBuffer(line_vao_, 0, line_vbo_, 0, sizeof(TermPoint));
+    glEnableVertexArrayAttrib(line_vao_, 0);
+    glVertexArrayAttribFormat(line_vao_, 0, 4, GL_FLOAT, GL_FALSE, 0);
+    glVertexArrayAttribBinding(line_vao_, 0, 0);
+
     glCreateVertexArrays(1, &empty_vao_);
 
     glCreateTextures(GL_TEXTURE_2D, 1, &pic_tex_);
@@ -151,6 +160,24 @@ void TermRenderer::draw_points(RenderDevice& device, const TermScene& scene, f32
     glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(scene.point_count));
     glDisable(GL_PROGRAM_POINT_SIZE);
     glDisable(GL_DEPTH_TEST);
+}
+
+void TermRenderer::draw_lines(RenderDevice& device, const TermScene& scene)
+{
+    const u32 program = device.shaders().program("term_grid");
+    if (!program || scene.line_vertex_count < 2 || !scene.lines) {
+        return;
+    }
+    const u32 count = scene.line_vertex_count < kTermMaxLineVerts ? scene.line_vertex_count
+                                                                 : kTermMaxLineVerts;
+    glNamedBufferSubData(line_vbo_, 0, static_cast<GLsizeiptr>(count * sizeof(TermPoint)),
+                         scene.lines);
+
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(program);
+    glProgramUniformMatrix4fv(program, 0, 1, GL_FALSE, scene.vp3d.m);
+    glBindVertexArray(line_vao_);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(count));
 }
 
 void TermRenderer::draw_photo(RenderDevice& device, const DiskStore& disks,
@@ -253,6 +280,7 @@ void TermRenderer::render(RenderDevice& device, const DiskStore& disks, const Sc
     glViewport(0, 0, kTermTexW, kTermTexH);
 
     draw_points(device, scene, time);
+    draw_lines(device, scene);
     draw_photo(device, disks, scene);
     draw_video(device, scene);
     draw_wires(device, scene);

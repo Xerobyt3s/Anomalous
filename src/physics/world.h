@@ -64,6 +64,7 @@ public:
     void statics_reserve(Arena& arena, u32 max_tris) { statics_.reserve(arena, max_tris); }
     void add_static_tri(Vec3 a, Vec3 b, Vec3 c) { statics_.add(a, b, c); }
     void statics_build(Arena& arena) { statics_.build(arena); }
+    void statics_clear() { statics_.clear(); }
     const StaticGrid& statics() const { return statics_; }
     const Heightfield* heightfield() const { return hf_; }
 

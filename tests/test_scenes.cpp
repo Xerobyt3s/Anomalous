@@ -5,6 +5,7 @@
 #include "physics/body.h"
 #include "physics/heightfield.h"
 #include "physics/world.h"
+#include "player/interact.h"
 #include "player/player.h"
 #include "vehicle/vehicle.h"
 #include "world/entity.h"
@@ -507,4 +508,93 @@ TEST(scene_walk, the_scripted_walk_is_bit_identical_across_repeats)
         checksum_player(checksums[pass], p);
     }
     CHECK(checksums[0] == checksums[1]);
+}
+
+namespace {
+
+struct ZoneSwapRig {
+    Arena perm{megabytes(32)};
+    Arena zone{megabytes(64)};
+    Arena scratch{megabytes(64)};
+    World world;
+    PhysWorld phys;
+    Terrain terrain;
+    ZoneSpawn spawn;
+    ZonePickups pickups;
+
+    void setup()
+    {
+        world.init(perm);
+        phys.init(perm, &terrain.heightfield());
+    }
+
+    bool swap(const char* dir)
+    {
+        for (u32 idx : world.entities().live_indices()) {
+            Entity* e = world.entities().at(idx);
+            if (e && phys.body(e->body)) {
+                phys.body_destroy(e->body);
+                e->body = BodyHandle{};
+            }
+        }
+        world.clear();
+        phys.statics_clear();
+        zone.reset();
+        if (!zone_load(dir, zone, scratch, world, phys, terrain, spawn, &pickups)) {
+            return false;
+        }
+        interact_spawn_zone_pickups(world, phys, terrain, pickups);
+        return true;
+    }
+};
+
+} // namespace
+
+TEST(travel_zone, swapping_zones_returns_the_arena_to_where_it_started)
+{
+    ZoneSwapRig rig;
+    rig.setup();
+
+    CHECK(rig.swap("assets/zones/testzone"));
+    const u64 first = rig.zone.used();
+    const f32 first_span = rig.terrain.heightfield().span_x();
+
+    CHECK(rig.swap("assets/zones/touge"));
+    const u64 other = rig.zone.used();
+    CHECK(rig.terrain.heightfield().span_x() > first_span);
+
+    CHECK(rig.swap("assets/zones/testzone"));
+    CHECK(rig.zone.used() == first);
+    CHECK(other != first);
+    CHECK_NEAR(rig.terrain.heightfield().span_x(), first_span, 1e-3);
+}
+
+TEST(travel_zone, swapping_zones_hands_back_every_pickup_body)
+{
+    ZoneSwapRig rig;
+    rig.setup();
+
+    CHECK(rig.swap("assets/zones/testzone"));
+    const u32 settled = rig.phys.bodies().count();
+    CHECK(settled > 0);
+
+    for (i32 i = 0; i < 6; i++) {
+        CHECK(rig.swap(i % 2 == 0 ? "assets/zones/touge" : "assets/zones/testzone"));
+    }
+    CHECK(rig.swap("assets/zones/testzone"));
+    CHECK(rig.phys.bodies().count() == settled);
+}
+
+TEST(travel_zone, the_arriving_terrain_is_the_one_that_was_asked_for)
+{
+    ZoneSwapRig rig;
+    rig.setup();
+
+    CHECK(rig.swap("assets/zones/touge"));
+    const Vec3 car = rig.spawn.car_pos;
+    const f32 ground = rig.terrain.heightfield().sample(car.x, car.z);
+
+    // The spawn has to be standing on the new heightfield, not the one it replaced.
+    CHECK(f_abs(car.y - ground) < 2.0f);
+    CHECK(contains(rig.terrain.heightfield().bounds(), Vec3{car.x, ground + 0.1f, car.z}));
 }

@@ -228,6 +228,11 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
                          offset_from(base, part_def(PART_ANTENNA).socket_pos - com));
     }
 
+    if (sys.parts[PART_COIL].installed) {
+        device.draw_mesh(assets.mesh(part_def(PART_COIL).mesh),
+                         offset_from(base, part_def(PART_COIL).socket_pos - com));
+    }
+
     if (sys.parts[PART_COMPUTER].installed) {
         const Mat4 term = offset_from(base, part_def(PART_COMPUTER).socket_pos - com,
                                       part_computer_rest_rot());

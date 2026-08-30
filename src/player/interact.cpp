@@ -522,6 +522,8 @@ void Interact::resolve_doors(Candidate& best, const InteractBoxes& boxes,
     const Vec3 com = ctx.veh->config().com_offset;
     const InteractBox& door_box = boxes.box(IBOX_DOOR);
     const Vec3 door_half = door_box.half;
+    // You get in on the driver's side; the other door only ever opens and shuts.
+    const i32 driver_side = ctx.veh->config().seat_eye.x < 0.0f ? 0 : 1;
     f32 t = 0.0f;
 
     for (i32 side = 0; side < 2; side++) {
@@ -536,7 +538,7 @@ void Interact::resolve_doors(Candidate& best, const InteractBoxes& boxes,
                 if (!open) {
                     taken = best.consider(t + 0.05f, InteractAction::OpenDoor, center, door_half,
                                           false, "[E] open door");
-                } else if (side == 1 && sys.parts[PART_COMPUTER].installed) {
+                } else if (side != driver_side) {
                     taken = false;
                 } else if (ctx.player->can_enter(*ctx.phys, ctx.veh)) {
                     taken = best.consider(t + 0.05f, InteractAction::EnterCar, center, door_half,

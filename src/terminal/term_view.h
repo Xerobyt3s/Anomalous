@@ -15,6 +15,7 @@ class Vehicle;
 
 inline constexpr u32 kTermMaxWires = 12;
 inline constexpr u32 kTermMaxPoints = 36928;
+inline constexpr u32 kTermMaxLineVerts = 16384;
 
 enum PortState : i32 {
     PORT_UNPLUGGED = 0,
@@ -39,6 +40,10 @@ struct TermView {
     f32 rpm = 0.0f;
     f32 orbit = 0.0f;
     f32 zoom = 1.0f;
+
+    f32 travel_charge = 0.0f;
+    bool travel_ready = false;
+    bool travel_primed = false;
 
     i32 coax_state = PORT_UNPLUGGED;
     i32 bus_state = PORT_UNPLUGGED;
@@ -70,6 +75,9 @@ struct TermScene {
     const TermPoint* points = nullptr;
     u32 point_count = 0;
     bool points_dirty = false;
+
+    const TermPoint* lines = nullptr;
+    u32 line_vertex_count = 0;
     f32 point_reveal = 0.0f;
     Vec3 point_center;
     f32 sweep = 0.0f;
@@ -84,6 +92,8 @@ struct TermScene {
         points = nullptr;
         point_count = 0;
         points_dirty = false;
+        lines = nullptr;
+        line_vertex_count = 0;
         photo = -1;
         video_texture = 0;
         image_reveal = 1.0f;
@@ -103,6 +113,9 @@ struct TermScene {
 
 struct TermRequest {
     bool breach_open = false;
+    bool travel_arm = false;
+    bool travel_disarm = false;
+    i32 travel_destination = -1;
     bool tower_download = false;
     bool link_port[2] = {};
     bool tape_write = false;

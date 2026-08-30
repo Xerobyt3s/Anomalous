@@ -431,3 +431,22 @@ TEST(world, clear_removes_everything)
     CHECK(world.count() == 0);
     CHECK(world.entities().live_indices().empty());
 }
+
+TEST(carsys, the_roof_coil_starts_uninstalled_and_maps_to_its_item)
+{
+    CarRig rig;
+    CHECK(rig.setup());
+    CHECK(!rig.sys.parts[PART_COIL].installed);
+    CHECK(item_for_part(PART_COIL) == ITEM_COIL);
+    CHECK(part_def(PART_COIL).removable);
+    CHECK(part_def(PART_COIL).socket_pos.y > 0.4f);
+    CHECK(!part_def(PART_COIL).engine_bay);
+    CHECK(part_def(PART_COIL).mesh == "part_coil");
+}
+
+TEST(items, the_coil_round_trips_through_its_id)
+{
+    CHECK(item_from_id("coil") == ITEM_COIL);
+    CHECK(item_id(ITEM_COIL) == "coil");
+    CHECK(item_mass(ITEM_COIL) > 20.0f);
+}
