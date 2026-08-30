@@ -21,7 +21,7 @@ constexpr f32 kProbeNormalBand = 0.02f;
 // Ride height of the underside proxy above the tread. At a couple of centimetres the
 // chassis spheres sat level with the contact patches and dragged the moment the
 // suspension loaded up, carrying weight the tyres should have had.
-constexpr f32 kChassisClearance = 0.13f;
+constexpr f32 kChassisClearance = 0.20f;
 
 } // namespace
 
@@ -409,8 +409,8 @@ void Vehicle::tick(PhysWorld& world, f32 dt)
         const f32 lat_grip_mul = (input_.handbrake && !wc.steered) ? cfg_.handbrake_grip_mul
                                                                   : 1.0f;
         const f32 limit = tp.peak_mu * tire_load * grip_mul;
-        const TireForces tf = tire_compute(tp, w.slip_ratio, w.slip_angle, tire_load, grip_mul,
-                                           lat_grip_mul);
+        const TireForces tf = tire_compute(tp, w.slip_ratio, w.slip_angle, slip_vel, v_lat,
+                                           tire_load, grip_mul, lat_grip_mul);
         const Vec3 force_pacejka = long_dir * tf.fx + lat_dir * tf.fy;
 
         Vec3 force_tire = force_pacejka;

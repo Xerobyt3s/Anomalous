@@ -1,6 +1,7 @@
 #include "test.h"
 
 #include "core/arena.h"
+#include "core/log.h"
 #include "core/rng.h"
 #include "physics/body.h"
 #include "physics/heightfield.h"

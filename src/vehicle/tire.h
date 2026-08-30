@@ -20,7 +20,7 @@ struct TireForces {
 
 TireParams tire_derive_params(const VehicleConfig& cfg);
 f32 tire_curve(f32 slip, f32 b, f32 c);
-TireForces tire_compute(const TireParams& tp, f32 slip_ratio, f32 slip_angle, f32 load,
-                        f32 grip_mul, f32 lat_grip_mul);
+TireForces tire_compute(const TireParams& tp, f32 slip_ratio, f32 slip_angle, f32 slip_vel,
+                        f32 lat_vel, f32 load, f32 grip_mul, f32 lat_grip_mul);
 
 } // namespace anom

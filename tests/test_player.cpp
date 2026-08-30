@@ -475,7 +475,7 @@ TEST(chase_cam, steering_right_turns_the_car_and_the_front_wheels_right)
                                      -rotate(car->rot, Vec3{0.0f, 0.0f, -1.0f}).z);
 
     for (i32 i = 0; i < 400; i++) {
-        rig.veh.driver_input(rig.world, 1.0f, 0.0f, 1.0f, false);
+        rig.veh.driver_input(rig.world, 0.30f, 0.0f, 1.0f, false);
         rig.veh.tick(rig.world, kDt);
         rig.world.tick(kDt);
     }

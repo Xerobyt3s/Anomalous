@@ -1,10 +1,15 @@
 #include "test.h"
 
+#include "assets/mesh_data.h"
 #include "core/arena.h"
+#include "core/log.h"
 #include "physics/heightfield.h"
 #include "physics/world.h"
 #include "vehicle/tire.h"
+#include "vehicle/vehicle_config.h"
 #include "vehicle/vehicle.h"
+
+#include <cmath>
 
 using namespace anom;
 
@@ -32,9 +37,9 @@ struct Rig {
     PhysWorld world;
     Vehicle car;
 
-    bool setup()
+    bool setup(u32 size = 128, f32 cell = 2.0f)
     {
-        hf = make_flat(arena);
+        hf = make_flat(arena, size, cell);
         world.init(arena, &hf);
         return car.init(world, arena, kCarPath, Vec3{0.0f, 1.0f, 0.0f}, 0.0f);
     }
@@ -308,7 +313,7 @@ TEST(tire, combined_force_respects_the_friction_circle)
     const TireParams tp = tire_derive_params(cfg);
     const f32 load = 4000.0f;
 
-    const TireForces tf = tire_compute(tp, 0.9f, 0.8f, load, 1.0f, 1.0f);
+    const TireForces tf = tire_compute(tp, 0.9f, 0.8f, 18.0f, 20.0f, load, 1.0f, 1.0f);
     const f32 magnitude = std::sqrt(tf.fx * tf.fx + tf.fy * tf.fy);
     CHECK(magnitude <= tp.peak_mu * load * 1.001f);
 }
@@ -317,7 +322,7 @@ TEST(tire, zero_slip_produces_no_force)
 {
     VehicleConfig cfg;
     const TireParams tp = tire_derive_params(cfg);
-    const TireForces tf = tire_compute(tp, 0.0f, 0.0f, 4000.0f, 1.0f, 1.0f);
+    const TireForces tf = tire_compute(tp, 0.0f, 0.0f, 0.0f, 0.0f, 4000.0f, 1.0f, 1.0f);
     CHECK_NEAR(tf.fx, 0.0f, 1e-4);
     CHECK_NEAR(tf.fy, 0.0f, 1e-4);
 }
@@ -478,7 +483,7 @@ TEST(tire, the_trail_settles_the_car_into_a_tighter_yaw_rate)
             rig.car.config().tire_mech_trail = 0.0f;
         }
         rig.step(0.0f, 0.0f, 0.0f, false, 240);
-        rig.step(1.0f, 0.0f, 0.6f, false, 600);
+        rig.step(0.35f, 0.0f, 0.6f, false, 600);
         return f_abs(rig.body().angular_vel.y);
     };
 
@@ -582,4 +587,236 @@ TEST(suspension, the_chassis_proxy_rides_clear_of_the_contact_patches)
     // The floor must not reach the ground until most of the travel is gone, or it carries
     // load the tyres should have and the car stops steering.
     CHECK(lowest_sphere - lowest_tread > cfg.wheels[0].travel * 0.5f);
+}
+
+namespace {
+
+f32 body_slip_deg(const Rig& rig)
+{
+    const RigidBody& b = rig.body();
+    const Vec3 flat{b.vel.x, 0.0f, b.vel.z};
+    const f32 speed = length(flat);
+    if (speed < 0.5f) {
+        return 0.0f;
+    }
+    const Vec3 fwd = rotate(b.rot, Vec3{0.0f, 0.0f, -1.0f});
+    const Vec3 f2 = normalize(Vec3{fwd.x, 0.0f, fwd.z});
+    return std::acos(f_clamp(dot(flat * (1.0f / speed), f2), -1.0f, 1.0f)) * kRadToDeg;
+}
+
+bool reach_speed(Rig& rig, f32 target_kmh)
+{
+    for (i32 i = 0; i < 4000; i++) {
+        rig.step(1.0f, 0.0f, 0.0f, false, 1);
+        if (length(rig.body().vel) * 3.6f >= target_kmh) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+TEST(tire, a_sliding_wheel_gives_up_its_cornering_force)
+{
+    VehicleConfig cfg;
+    Arena arena{megabytes(1)};
+    CHECK(vehicle_config_load(cfg, arena, kCarPath));
+    const TireParams tp = tire_derive_params(cfg);
+
+    // Twenty metres a second down the road at six degrees of drift, rolling then locked.
+    const f32 road = 20.0f;
+    const f32 angle = 6.0f * kDegToRad;
+    const f32 lat = road * std::tan(angle);
+    const TireForces rolling = tire_compute(tp, 0.0f, angle, 0.0f, lat, 3000.0f, 1.0f, 1.0f);
+    const TireForces locked = tire_compute(tp, -1.0f, angle, -road, lat, 3000.0f, 1.0f, 1.0f);
+
+    // A wheel dragged along the road cannot also be cornering: nearly all of the friction
+    // it has left is spent resisting the direction it is actually sliding.
+    CHECK(f_abs(rolling.fy) > 1000.0f);
+    CHECK(f_abs(locked.fy) < f_abs(rolling.fy) * 0.35f);
+    CHECK(f_abs(locked.fx) > f_abs(locked.fy) * 3.0f);
+}
+
+TEST(tire, the_friction_circle_is_never_exceeded)
+{
+    VehicleConfig cfg;
+    Arena arena{megabytes(1)};
+    CHECK(vehicle_config_load(cfg, arena, kCarPath));
+    const TireParams tp = tire_derive_params(cfg);
+
+    const f32 load = 2800.0f;
+    const f32 limit = tp.peak_mu * load;
+    for (i32 r = -40; r <= 40; r++) {
+        for (i32 a = -40; a <= 40; a++) {
+            const f32 ratio = static_cast<f32>(r) * 0.1f;
+            const f32 angle = static_cast<f32>(a) * 0.05f;
+            const TireForces f = tire_compute(tp, ratio, angle, ratio * 20.0f,
+                                              std::tan(angle) * 20.0f, load, 1.0f, 1.0f);
+            CHECK(std::sqrt(f.fx * f.fx + f.fy * f.fy) <= limit * 1.001f);
+        }
+    }
+}
+
+TEST(handling, the_handbrake_breaks_the_rear_loose_at_speed)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    CHECK(reach_speed(rig, 110.0f));
+
+    f32 peak_slip = 0.0f;
+    f32 peak_yaw = 0.0f;
+    f32 peak_lock = 0.0f;
+    for (i32 i = 0; i < 240; i++) {
+        rig.step(0.0f, 0.0f, -1.0f, true, 1);
+        peak_slip = f_max(peak_slip, body_slip_deg(rig));
+        peak_yaw = f_max(peak_yaw, f_abs(rig.body().angular_vel.y) * kRadToDeg);
+        peak_lock = f_max(peak_lock, f_abs(rig.car.wheel(WHEEL_RL).slip_ratio));
+    }
+    CHECK(peak_slip > 30.0f);
+    CHECK(peak_yaw > 60.0f);
+    CHECK(peak_lock > 0.8f);
+}
+
+TEST(handling, cornering_on_the_throttle_stays_hooked_up)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    CHECK(reach_speed(rig, 90.0f));
+
+    f32 peak_slip = 0.0f;
+    for (i32 i = 0; i < 400; i++) {
+        rig.step(0.35f, 0.0f, -1.0f, false, 1);
+        peak_slip = f_max(peak_slip, body_slip_deg(rig));
+    }
+    // The same lock without the handbrake has to stay a corner, not become a spin.
+    CHECK(peak_slip < 15.0f);
+    CHECK(f_abs(rig.body().angular_vel.y) * kRadToDeg > 8.0f);
+}
+
+TEST(handling, the_underside_stays_clear_over_a_crest)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+
+    // A rise the wheelbase can straddle: the underside must ride over it on the tyres.
+    for (u32 z = 0; z < rig.hf.size_z(); z++) {
+        for (u32 x = 0; x < rig.hf.size_x(); x++) {
+            const f32 wx = rig.hf.origin().x + static_cast<f32>(x) * rig.hf.cell_size();
+            rig.hf.set_height(x, z, 0.35f * std::exp(-(wx * wx) / (2.0f * 14.0f * 14.0f)));
+        }
+    }
+    rig.hf.recompute_extents();
+
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    f32 worst = 1.0e9f;
+    for (i32 i = 0; i < 900; i++) {
+        rig.step(0.5f, 0.0f, 0.0f, false, 1);
+        const RigidBody& b = rig.body();
+        for (u32 s = 0; s < b.sphere_count; s++) {
+            const Vec3 w = b.pos + rotate(b.rot, b.sphere_offsets[s]);
+            worst = f_min(worst, (w.y - b.sphere_radius) - rig.hf.sample(w.x, w.z));
+        }
+    }
+    CHECK(worst > 0.0f);
+}
+
+TEST(handling, the_body_model_clears_the_road_it_rides_on)
+{
+    Arena arena{megabytes(16)};
+    VehicleConfig cfg;
+    CHECK(vehicle_config_load(cfg, arena, kCarPath));
+
+    MeshData body;
+    CHECK(load_mesh("assets/meshes/excel_body.amsh", arena, body) == MeshParseError::Ok);
+    f32 lowest = 1.0e9f;
+    for (const AmshVertex& v : body.vertices) {
+        lowest = f_min(lowest, v.pos[1]);
+    }
+
+    // Where the road sits in mesh space once the springs have taken the car's weight.
+    const WheelConfig& wc = cfg.wheels[WHEEL_FL];
+    const f32 sag = (cfg.mass * 9.81f * 0.25f) / wc.spring_k;
+    const f32 road = wc.pos.y - wc.travel - wc.radius + sag;
+
+    CHECK(lowest - road > 0.08f);
+}
+
+TEST(tire, a_sliding_wheel_pushes_back_along_the_way_it_is_sliding)
+{
+    VehicleConfig cfg;
+    Arena arena{megabytes(1)};
+    CHECK(vehicle_config_load(cfg, arena, kCarPath));
+    const TireParams tp = tire_derive_params(cfg);
+
+    // Locked, and dragged sideways at twenty degrees to where it points. Friction has to
+    // come back along that line, so a fifth of it is cornering force -- not none.
+    const f32 road = 20.0f;
+    const f32 drift = 20.0f * kDegToRad;
+    const TireForces f = tire_compute(tp, -1.0f, drift, -road, road * std::tan(drift), 3000.0f,
+                                      1.0f, 1.0f);
+    const f32 total = std::sqrt(f.fx * f.fx + f.fy * f.fy);
+    CHECK(total > 1500.0f);
+    CHECK_NEAR(f_abs(f.fy) / total, std::sin(drift), 0.02);
+    // Both components oppose the slide: braking force, and cornering force against it.
+    CHECK(f.fx < 0.0f);
+    CHECK(f.fy < 0.0f);
+}
+
+TEST(handling, braking_into_a_corner_stays_catchable)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    CHECK(reach_speed(rig, 85.0f));
+
+    for (i32 i = 0; i < 90; i++) {
+        rig.step(0.30f, 0.0f, -0.55f, false, 1);
+    }
+
+    f32 peak = 0.0f;
+    for (i32 i = 0; i < 300; i++) {
+        rig.step(0.0f, 0.55f, -0.55f, false, 1);
+        peak = f_max(peak, body_slip_deg(rig));
+    }
+    // Trail braking may step the back out, but it has to come back, not spin.
+    CHECK(peak < 45.0f);
+    CHECK(body_slip_deg(rig) < 15.0f);
+}
+
+TEST(handling, lifting_mid_corner_does_not_throw_the_car)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    CHECK(reach_speed(rig, 85.0f));
+
+    for (i32 i = 0; i < 90; i++) {
+        rig.step(0.30f, 0.0f, -0.55f, false, 1);
+    }
+    f32 peak = 0.0f;
+    for (i32 i = 0; i < 300; i++) {
+        rig.step(0.0f, 0.0f, -0.55f, false, 1);
+        peak = f_max(peak, body_slip_deg(rig));
+    }
+    CHECK(peak < 20.0f);
+}
+
+TEST(handling, the_rear_brakes_let_go_after_the_front_ones)
+{
+    const VehicleConfig* cfg = nullptr;
+    Rig rig;
+    CHECK(rig.setup());
+    cfg = &rig.car.config();
+    CHECK(cfg->wheels[WHEEL_RL].brake_share < cfg->wheels[WHEEL_FL].brake_share);
+
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    rig.step(1.0f, 0.0f, 0.0f, false, 420);
+    // Half pedal in a straight line must not lock anything.
+    rig.step(0.0f, 0.5f, 0.0f, false, 40);
+    for (u32 i = 0; i < kWheelCount; i++) {
+        CHECK(f_abs(rig.car.wheel(i).slip_ratio) < 0.9f);
+    }
 }
