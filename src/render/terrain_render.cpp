@@ -158,6 +158,7 @@ bool TerrainRenderer::init(RenderDevice& device, Arena& scratch, const Heightfie
     tex_grass_ = device.assets().texture_slot("grass");
     tex_rock_ = device.assets().texture_slot("rock");
     tex_road_ = device.assets().texture_slot("road");
+    tex_meadow_ = device.assets().texture_slot("meadow_ground");
 
     params_ = Vec4{hf.origin().x, hf.origin().z, 1.0f / hf.span_x(), 1.0f / hf.span_z()};
 
@@ -193,6 +194,7 @@ void TerrainRenderer::draw(RenderDevice& device)
         device.bind_texture(1, device.assets().texture_gl(tex_rock_));
         device.bind_texture(2, device.assets().texture_gl(tex_road_));
         device.bind_texture(3, mask_texture_);
+        device.bind_texture(5, device.assets().texture_gl(tex_meadow_));
     }
     device.set_cull(true);
 
@@ -231,7 +233,16 @@ void TerrainRenderer::draw_scrub(RenderDevice& device, Vec3 cam_pos, f32 time)
     device.bind_texture(3, mask_texture_);
     device.bind_texture(4, height_texture_);
     device.set_cull(false);
-    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 12, kScrubGrid * kScrubGrid);
+    glProgramUniform4f(program, 20, kScrubNearSpacing, static_cast<f32>(kScrubNearGrid),
+                       kScrubRingStart, kScrubRingEnd);
+    glProgramUniform1i(program, 21, 0);
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, kScrubBladeVerts,
+                          kScrubNearGrid * kScrubNearGrid * kScrubSlots);
+    glProgramUniform4f(program, 20, kScrubFarSpacing, static_cast<f32>(kScrubFarGrid),
+                       kScrubRingStart, kScrubRingEnd);
+    glProgramUniform1i(program, 21, 1);
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, kScrubBladeVerts,
+                          kScrubFarGrid * kScrubFarGrid * kScrubSlots);
 }
 
 void TerrainRenderer::add_press_volume(Vec3 centre, Vec3 half_extents, Quat rot)

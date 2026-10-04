@@ -6,10 +6,14 @@
 
 namespace anom {
 
+constexpr u32 kNoTexture = 0xFFFFFFFFu;
+
 struct GpuSubmesh {
     u32 first_index = 0;
     u32 index_count = 0;
     u32 texture_slot = 0;
+    u32 normal_slot = kNoTexture;
+    u32 surface_slot = kNoTexture;
 };
 
 struct GpuMesh {

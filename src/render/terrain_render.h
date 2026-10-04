@@ -13,7 +13,14 @@ class TerrainRenderer {
 public:
     static constexpr u32 kChunkQuads = 64;
     static constexpr u32 kMaxChunks = 256;
-    static constexpr u32 kScrubGrid = 512;
+    static constexpr u32 kScrubNearGrid = 165;
+    static constexpr f32 kScrubNearSpacing = 0.17f;
+    static constexpr u32 kScrubFarGrid = 212;
+    static constexpr f32 kScrubFarSpacing = 0.36f;
+    static constexpr f32 kScrubRingStart = 10.0f;
+    static constexpr f32 kScrubRingEnd = 14.0f;
+    static constexpr u32 kScrubSlots = 8;
+    static constexpr u32 kScrubBladeVerts = 16;
     static constexpr f32 kScrubFadeEnd = 38.0f;
     static constexpr u32 kMaxPressVolumes = 8;
 
@@ -53,6 +60,7 @@ private:
     u32 tex_grass_ = 0;
     u32 tex_rock_ = 0;
     u32 tex_road_ = 0;
+    u32 tex_meadow_ = 0;
     Vec4 params_{0.0f, 0.0f, 1.0f, 1.0f};
     bool ready_ = false;
 };

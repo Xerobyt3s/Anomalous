@@ -10,6 +10,7 @@ enum class WeatherMode : u32 {
     Clear,
     Drizzle,
     Rain,
+    Snow,
     Count,
 };
 
@@ -27,6 +28,8 @@ public:
     f32 overcast() const { return overcast_; }
     f32 wetness() const { return wetness_; }
     f32 wind() const { return wind_; }
+    f32 snow() const { return snow_; }
+    f32 snow_cover() const { return snow_cover_; }
 
 private:
     void pick_target();
@@ -38,6 +41,9 @@ private:
     f32 overcast_ = 0.0f;
     f32 wetness_ = 0.0f;
     f32 wind_ = 0.0f;
+    f32 snow_ = 0.0f;
+    f32 snow_target_ = 0.0f;
+    f32 snow_cover_ = 0.0f;
     f32 wind_phase_ = 0.0f;
     f32 next_shift_ = 0.0f;
 };

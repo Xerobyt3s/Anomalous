@@ -2,6 +2,7 @@
 #include "common.glsl"
 #include "frame.glsl"
 #include "shadow.glsl"
+#include "snow_ground.glsl"
 
 in vec3 v_world;
 in vec3 v_normal;
@@ -12,14 +13,22 @@ layout(binding = 0) uniform sampler2D u_grass;
 layout(binding = 1) uniform sampler2D u_rock;
 layout(binding = 2) uniform sampler2D u_road;
 layout(binding = 3) uniform sampler2D u_roadmask;
+layout(binding = 5) uniform sampler2D u_meadow;
 
 out vec4 o_color;
 
-const vec3 ALBEDO_GRASS = vec3(0.068, 0.104, 0.036);
-const vec3 ALBEDO_DRY = vec3(0.150, 0.125, 0.060);
 const vec3 ALBEDO_ROCK = vec3(0.088, 0.082, 0.074);
 const vec3 ALBEDO_ROAD = vec3(0.052, 0.052, 0.056);
 const float EDGE_FADE_METRES = 70.0;
+const vec3 MEADOW_SOIL = vec3(0.034, 0.030, 0.017);
+const vec3 MEADOW_BASE = vec3(0.024, 0.052, 0.015);
+const vec3 MEADOW_FAR = vec3(0.075, 0.120, 0.034);
+const vec3 MEADOW_FAR_DRY = vec3(0.120, 0.125, 0.045);
+const float MEADOW_FAR_START = 20.0;
+const float MEADOW_FAR_END = 45.0;
+const float MEADOW_TILE_METRES = 4.0;
+const float MEADOW_GAIN = 0.55;
+const vec3 MEADOW_GRADE = vec3(0.92, 1.12, 1.60);
 
 float vnoise(vec2 p)
 {
@@ -78,24 +87,28 @@ void main()
     vec3 n = normalize(v_normal);
     vec2 wp = v_world.xz;
 
-    vec3 grass_a = texture(u_grass, wp * 0.16).rgb;
-    vec3 grass_b = texture(u_grass, wp * 0.043).rgb;
     float tile_break = smoothstep(0.30, 0.70, vnoise(wp * 0.021));
-    vec3 grass = mix(grass_a, grass_b, tile_break * 0.65);
-    float dry = smoothstep(0.38, 0.80, vnoise(wp * 0.009 + 13.7));
-    grass = mix(grass, grass * vec3(1.10, 1.02, 0.68), dry * 0.55);
+    float patches = fbm2(wp * 0.011, 4) + 0.5;
+    float fine = fbm2(wp * 0.14, 3);
+    vec3 photo = srgbToLinear(texture(u_meadow, wp / MEADOW_TILE_METRES).rgb) * MEADOW_GAIN
+               * MEADOW_GRADE;
+    vec3 tint = mix(MEADOW_SOIL, MEADOW_BASE, clamp(patches * 1.1 + fine * 0.5, 0.0, 1.0));
+    vec3 near = photo * (0.6 + 0.4 * tint / (0.5 * (MEADOW_SOIL + MEADOW_BASE)));
+    vec3 far = mix(MEADOW_FAR, MEADOW_FAR_DRY, clamp(patches * 1.3, 0.0, 1.0));
+    float ground_distance = length(u_cam_pos.xyz - v_world);
+    vec3 grass = mix(near, far, smoothstep(MEADOW_FAR_START, MEADOW_FAR_END, ground_distance));
+    grass *= 0.85 + 0.3 * fine;
 
     vec3 rock = texture(u_rock, wp * 0.11).rgb;
     vec3 rock_b = texture(u_rock, wp * 0.031).rgb;
     rock = mix(rock, rock_b, tile_break * 0.5);
     vec3 road = texture(u_road, wp * 0.28).rgb;
 
-    grass = mix(ALBEDO_GRASS, ALBEDO_DRY, dry * 0.35) * (0.70 + 0.85 * luminance(grass));
     rock = ALBEDO_ROCK * (0.70 + 0.85 * luminance(rock));
     road = ALBEDO_ROAD * (0.70 + 0.85 * luminance(road));
 
     float slope_noise = (vnoise(wp * 0.06) - 0.5) * 0.22;
-    float rockiness = 1.0 - smoothstep(0.6 + slope_noise, 0.85 + slope_noise, n.y);
+    float rockiness = 1.0 - smoothstep(0.58 + slope_noise, 0.74 + slope_noise, n.y);
     rockiness = clamp(rockiness + smoothstep(24.0, 34.0, v_world.y) * 0.55, 0.0, 1.0);
     vec3 albedo = mix(grass, rock, rockiness);
 
@@ -107,11 +120,18 @@ void main()
     albedo *= mix(0.84 + 0.32 * macro, 1.0, road_amount * 0.7);
 
     float wetness = u_shadow_params.z;
+    float snow = snow_coverage(v_world, n, road_amount);
+    if (snow > 0.0) {
+        albedo = mix(albedo, snow_albedo(v_world), snow);
+        n = normalize(mix(n, snow_normal(v_world, n), snow));
+        wetness *= 1.0 - snow;
+    }
     albedo *= 1.0 - wetness * (0.28 + road_amount * 0.22);
 
     float ndl = max(dot(n, -u_sun_dir.xyz), 0.0);
     float shadow = shadow_factor(v_world, ndl);
     vec3 hemi = ambient_for_normal(n);
+    hemi *= mix(vec3(1.0), snow_shade_tint(n), snow);
     vec3 lit = albedo * (INV_PI * u_sun_color_ambient.rgb * ndl * shadow + hemi);
     if (wetness > 0.01) {
         vec3 view = normalize(u_cam_pos.xyz - v_world);

@@ -110,6 +110,8 @@ bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view pa
     out.diff_preload = f_max(cfg.get_f32("gearbox.diff_preload", 55.0f), 0.0f);
     out.diff_power_ramp = f_max(cfg.get_f32("gearbox.diff_power_ramp", 0.40f), 0.0f);
     out.diff_coast_ramp = f_max(cfg.get_f32("gearbox.diff_coast_ramp", 0.18f), 0.0f);
+    out.tc_strength = f_clamp01(cfg.get_f32("gearbox.traction_control", 0.0f));
+    out.tc_slip = f_max(cfg.get_f32("gearbox.traction_slip", 1.3f), 0.1f);
 
     out.brake_torque = cfg.get_f32("brakes.torque", 1700.0f);
     out.handbrake_torque = cfg.get_f32("brakes.handbrake_torque", 2500.0f);

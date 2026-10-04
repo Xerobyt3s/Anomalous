@@ -80,6 +80,8 @@ struct VehicleConfig {
     f32 diff_preload = 55.0f;
     f32 diff_power_ramp = 0.40f;
     f32 diff_coast_ramp = 0.18f;
+    f32 tc_strength = 0.0f;
+    f32 tc_slip = 1.3f;
 
     f32 brake_torque = 1700.0f;
     f32 handbrake_torque = 2500.0f;

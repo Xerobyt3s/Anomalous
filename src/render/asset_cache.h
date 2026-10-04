@@ -22,6 +22,7 @@ public:
 
     u32 texture_slot(std::string_view name);
     u32 texture_gl(u32 slot) const;
+    u32 companion_slot(std::string_view material, std::string_view suffix);
     const GpuMesh* mesh(std::string_view name);
 
     u32 reload_count() const { return reload_count_; }

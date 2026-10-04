@@ -20,6 +20,7 @@ struct Drivetrain {
     bool shifting = false;
     bool manual = false;
     i32 shift_request = 0;
+    f32 tc_cut = 0.0f;
 };
 
 struct Wheel {

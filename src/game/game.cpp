@@ -1107,6 +1107,7 @@ void Game::render_video_feed(RenderDevice& device, TerrainRenderer& terrain_rend
     device.draw_sky(time);
     car_render_.draw_glass(device, carsys_, vehicle_, phys_, alpha_, time);
     device.draw_rain(weather_.rain(), weather_.wind(), Vec3{}, time);
+    device.draw_snow(weather_.snow(), weather_.wind(), time);
 
     terminal_.set_video_texture(device.video_end());
 }
@@ -1161,7 +1162,8 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
         return;
     }
 
-    device.set_weather(weather_.wetness(), weather_.overcast());
+    device.set_weather(weather_.overcast(), weather_.wetness());
+    device.set_snow(weather_.snow_cover(), weather_.snow(), weather_.wind());
     device.set_windshield(carsys_.windshield_wet, carsys_.wiper_sweep, carsys_.glass_wet);
 
     collect_trees();
@@ -1194,6 +1196,7 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
     device.flush_meshes();
 
     device.draw_rain(weather_.rain(), weather_.wind(), cam_vel_, time);
+    device.draw_snow(weather_.snow(), weather_.wind(), time);
     car_render_.draw_glass(device, carsys_, vehicle_, phys_, alpha_, time);
 
     draw_coil_arcs(device, debug);

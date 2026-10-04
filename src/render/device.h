@@ -67,6 +67,7 @@ public:
     void set_headlights(Vec3 left, Vec3 right, Vec3 dir, f32 intensity);
     void set_point_light(u32 index, Vec3 pos, Vec3 color, f32 radius);
     void set_weather(f32 overcast, f32 wetness);
+    void set_snow(f32 cover, f32 fall, f32 wind);
     void set_windshield(f32 wet, f32 wiper_sweep, f32 glass_wet);
     void set_travel_warp(f32 warp, f32 flash) { warp_ = warp; warp_flash_ = flash; }
     void set_screen_fx(const ScreenFx& fx) { screen_fx_ = fx; }
@@ -89,6 +90,7 @@ public:
     void flush_meshes();
     void draw_glass(const GpuMesh* mesh, const Mat4& model, f32 time);
     void draw_rain(f32 intensity, f32 wind, Vec3 cam_vel, f32 time);
+    void draw_snow(f32 intensity, f32 wind, f32 time);
     void scene_grab();
     void post_process(f32 time);
     void blit_texture(f32 x, f32 y, f32 w, f32 h, u32 gl_texture, f32 alpha, f32 time);
@@ -175,6 +177,9 @@ private:
 
     f32 weather_overcast_ = 0.0f;
     f32 weather_wetness_ = 0.0f;
+    f32 snow_cover_ = 0.0f;
+    f32 snow_fall_ = 0.0f;
+    f32 wind_ = 0.0f;
     f32 shield_wet_ = 0.0f;
     f32 shield_wiper_ = 0.0f;
     f32 shield_incar_ = 0.0f;

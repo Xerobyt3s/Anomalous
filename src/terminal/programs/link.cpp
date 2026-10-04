@@ -163,18 +163,19 @@ void DevProgram::update(const ProgramContext& ctx, const TermView& view, f32 dt)
     const f32 hours = tod_ * 24.0f;
     const i32 hh = static_cast<i32>(hours);
     const i32 mm = static_cast<i32>((hours - static_cast<f32>(hh)) * 60.0f);
-    static const char* kWeatherNames[4] = {"AUTO", "CLEAR", "DRIZZLE", "RAIN"};
+    static const char* kWeatherNames[5] = {"AUTO", "CLEAR", "DRIZZLE", "RAIN", "SNOW"};
 
     s.grid_text(3, 4, TC_BRIGHT, "TIME      %02d:%02d  (%s)", hh, mm, phase_name(tod_));
     s.grid_text(4, 4, TC_GREEN, "WARP      %s", warp_ ? "60X ENGAGED" : "OFF");
     s.grid_text(6, 4, TC_BRIGHT, "WEATHER   %s   RAIN %3.0f%%   GROUND WET %3.0f%%",
-                kWeatherNames[wmode_ & 3], static_cast<f64>(rain_ * 100.0f),
+                kWeatherNames[(wmode_ >= 0 && wmode_ < 5) ? wmode_ : 0],
+                static_cast<f64>(rain_ * 100.0f),
                 static_cast<f64>(wet_ * 100.0f));
 
     s.grid_text(9, 4, TC_GREEN, "[LEFT]/[RIGHT]  TIME -/+ 30 MIN");
     s.grid_text(10, 4, TC_GREEN, "[1] DAWN   [2] NOON   [3] DUSK   [4] MIDNIGHT");
     s.grid_text(11, 4, TC_GREEN, "[T] TOGGLE TIME WARP");
-    s.grid_text(12, 4, TC_GREEN, "[5] WX AUTO   [6] CLEAR   [7] DRIZZLE   [8] RAIN");
+    s.grid_text(12, 4, TC_GREEN, "[5] WX AUTO  [6] CLEAR  [7] DRIZZLE  [8] RAIN  [9] SNOW");
 
     if (std::fmod(ctx.blink, 1.4f) < 0.8f) {
         s.grid_text(14, 4, TC_AMBER, "ENGINEERING BUILD -- NOT FOR FIELD UNITS");
@@ -195,7 +196,7 @@ void DevProgram::key_char(const ProgramContext& ctx, const TermView& view, char 
         request_time(ctx, 0.0f);
     } else if (c == 'T') {
         warp_ = !warp_;
-    } else if (c >= '5' && c <= '8') {
+    } else if (c >= '5' && c <= '9') {
         wmode_ = c - '5';
         ctx.request->weather_mode = wmode_;
     }

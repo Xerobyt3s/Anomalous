@@ -692,7 +692,7 @@ TEST(handling, cornering_on_the_throttle_stays_hooked_up)
         peak_slip = f_max(peak_slip, body_slip_deg(rig));
     }
     // The same lock without the handbrake has to stay a corner, not become a spin.
-    CHECK(peak_slip < 15.0f);
+    CHECK(peak_slip < 10.0f);
     CHECK(f_abs(rig.body().angular_vel.y) * kRadToDeg > 8.0f);
 }
 
@@ -782,7 +782,7 @@ TEST(handling, braking_into_a_corner_stays_catchable)
         peak = f_max(peak, body_slip_deg(rig));
     }
     // Trail braking may step the back out, but it has to come back, not spin.
-    CHECK(peak < 45.0f);
+    CHECK(peak < 20.0f);
     CHECK(body_slip_deg(rig) < 15.0f);
 }
 
@@ -801,7 +801,7 @@ TEST(handling, lifting_mid_corner_does_not_throw_the_car)
         rig.step(0.0f, 0.0f, -0.55f, false, 1);
         peak = f_max(peak, body_slip_deg(rig));
     }
-    CHECK(peak < 20.0f);
+    CHECK(peak < 10.0f);
 }
 
 TEST(handling, the_rear_brakes_let_go_after_the_front_ones)
@@ -819,4 +819,67 @@ TEST(handling, the_rear_brakes_let_go_after_the_front_ones)
     for (u32 i = 0; i < kWheelCount; i++) {
         CHECK(f_abs(rig.car.wheel(i).slip_ratio) < 0.9f);
     }
+}
+
+TEST(handling, a_hard_lane_change_at_speed_settles)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    CHECK(reach_speed(rig, 100.0f));
+    rig.step(0.3f, 0.0f, 0.0f, false, 30);
+
+    f32 peak = 0.0f;
+    for (i32 i = 0; i < 360; i++) {
+        const f32 steer = i < 60 ? -1.0f : (i < 120 ? 1.0f : 0.0f);
+        rig.step(0.3f, 0.0f, steer, false, 1);
+        peak = f_max(peak, body_slip_deg(rig));
+    }
+    CHECK(peak < 16.0f);
+    CHECK(body_slip_deg(rig) < 3.0f);
+}
+
+TEST(handling, flooring_it_out_of_a_corner_stays_catchable)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    CHECK(reach_speed(rig, 50.0f));
+    rig.step(0.2f, 0.0f, -0.6f, false, 120);
+
+    f32 peak = 0.0f;
+    for (i32 i = 0; i < 300; i++) {
+        rig.step(1.0f, 0.0f, -0.6f, false, 1);
+        peak = f_max(peak, body_slip_deg(rig));
+    }
+    CHECK(peak < 18.0f);
+    CHECK(body_slip_deg(rig) < 12.0f);
+}
+
+TEST(drivetrain, kickdown_never_drops_into_a_gear_past_the_shift_point)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    CHECK(reach_speed(rig, 50.0f));
+    rig.step(0.2f, 0.0f, 0.0f, false, 240);
+
+    for (i32 i = 0; i < 240; i++) {
+        rig.step(1.0f, 0.0f, 0.0f, false, 1);
+        CHECK(rig.car.train().gear >= 2);
+    }
+}
+
+TEST(drivetrain, traction_control_does_not_strangle_a_launch)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+
+    i32 ticks = 0;
+    while (ticks < 1200 && length(rig.body().vel) * 3.6f < 50.0f) {
+        rig.step(1.0f, 0.0f, 0.0f, false, 1);
+        ticks++;
+    }
+    CHECK(static_cast<f32>(ticks) * kDt < 4.5f);
 }

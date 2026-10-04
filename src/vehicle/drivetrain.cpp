@@ -9,6 +9,10 @@ constexpr f32 kIdleGovernorGain = 1.5f;
 constexpr f32 kIdleGovernorMax = 80.0f;
 constexpr f32 kShiftLockoutTime = 0.8f;
 constexpr f32 kShiftSlipGate = 0.4f;
+constexpr f32 kKickdownCeiling = 0.85f;
+constexpr f32 kTcAttack = 12.0f;
+constexpr f32 kTcRelease = 10.0f;
+constexpr f32 kTcSpeedFloor = 8.0f;
 constexpr f32 kClutchLockRads = 40.0f;
 
 void axle_lsd(const VehicleConfig& cfg, Wheel* wheels, u32 left, u32 right, f32 wheel_inertia,
@@ -42,6 +46,7 @@ void drivetrain_init(Drivetrain& train, const VehicleConfig& cfg)
     train.shift_lockout = 0.0f;
     train.shifting = false;
     train.shift_request = 0;
+    train.tc_cut = 0.0f;
 }
 
 f32 drivetrain_rpm(const Drivetrain& train)
@@ -93,11 +98,15 @@ void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels,
     u32 driven_count = 0;
     f32 avg_driven_omega = 0.0f;
     f32 avg_driven_slip = 0.0f;
+    f32 max_drive_spin = 0.0f;
     for (u32 i = 0; i < kWheelCount; i++) {
         wheels[i].drive_torque = 0.0f;
         if (cfg.wheels[i].driven) {
             avg_driven_omega += wheels[i].omega;
             avg_driven_slip += f_abs(wheels[i].slip_ratio);
+            const f32 road = wheels[i].omega * wheels[i].radius - wheels[i].slide_long;
+            const f32 spin = wheels[i].slide_long / f_max(f_abs(road), kTcSpeedFloor);
+            max_drive_spin = f_max(max_drive_spin, spin * (train.gear < 0 ? -1.0f : 1.0f));
             driven_count++;
         }
     }
@@ -137,7 +146,9 @@ void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels,
             train.shift_timer = cfg.shift_time;
             train.shift_lockout = kShiftLockoutTime;
         } else if (throttle > 0.85f && train.gear > 1
-                   && synced_rpm < cfg.shift_down_rpm * 1.9f) {
+                   && synced_rpm < cfg.shift_down_rpm * 1.9f
+                   && synced_rpm * cfg.gear_ratios[train.gear - 2] / cfg.gear_ratios[train.gear - 1]
+                          < cfg.shift_up_rpm * kKickdownCeiling) {
             train.gear--;
             train.shifting = true;
             train.shift_timer = cfg.shift_time;
@@ -147,7 +158,14 @@ void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels,
         train.shift_request = 0;
     }
 
-    f32 engine_torque = drivetrain_torque_curve(cfg, rpm) * throttle * power_mul;
+    const f32 tc_start = cfg.tire_peak_slip * cfg.tc_slip;
+    const f32 tc_target = cfg.tc_strength
+                        * f_clamp01((max_drive_spin - tc_start) / f_max(tc_start * 2.0f, 0.01f));
+    const f32 tc_rate = tc_target > train.tc_cut ? kTcAttack : kTcRelease;
+    train.tc_cut = f_move_toward(train.tc_cut, tc_target, tc_rate * dt);
+
+    f32 engine_torque = drivetrain_torque_curve(cfg, rpm) * throttle * power_mul
+                      * (1.0f - train.tc_cut);
     if (train.engine_omega > max_omega) {
         engine_torque = f_min(engine_torque, 0.0f);
     }

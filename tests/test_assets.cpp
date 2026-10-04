@@ -173,6 +173,23 @@ TEST(mesh, loads_the_shipped_garage_mesh)
     CHECK(mesh.bounds.max.y > mesh.bounds.min.y);
 }
 
+TEST(mesh, the_telescope_ships_with_a_collision_hull_under_its_structure)
+{
+    Arena arena(megabytes(32));
+    MeshData render;
+    MeshData hull;
+    CHECK(load_mesh("assets/meshes/telescope.amsh", arena, render) == MeshParseError::Ok);
+    CHECK(load_mesh("assets/meshes/telescope_col.amsh", arena, hull) == MeshParseError::Ok);
+    CHECK(render.submeshes.size() >= 3);
+    CHECK(!hull.indices.empty());
+
+    CHECK(render.bounds.max.y > 18.0f);
+    CHECK(render.bounds.max.x - render.bounds.min.x > 20.0f);
+    CHECK(hull.bounds.min.x < -5.0f && hull.bounds.max.x > 5.0f);
+    CHECK(hull.bounds.min.z < -5.0f && hull.bounds.max.z > 5.0f);
+    CHECK(hull.bounds.max.y < render.bounds.max.y);
+}
+
 TEST(mesh, missing_file_reports_read_failure)
 {
     Arena arena(megabytes(1));

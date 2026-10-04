@@ -4,6 +4,7 @@
 #include "assets/watcher.h"
 #include "core/arena.h"
 #include "core/log.h"
+#include "platform/filesystem.h"
 #include "platform/gl_loader.h"
 
 #include <cstddef>
@@ -120,6 +121,19 @@ u32 AssetCache::texture_gl(u32 slot) const
     return white_texture_;
 }
 
+u32 AssetCache::companion_slot(std::string_view material, std::string_view suffix)
+{
+    FixedString<32> name;
+    name.format("%.*s%.*s", static_cast<int>(material.size()), material.data(),
+                static_cast<int>(suffix.size()), suffix.data());
+    FixedString<128> path;
+    path.format("assets/textures/%s.png", name.c_str());
+    if (!fs::exists(path.view())) {
+        return kNoTexture;
+    }
+    return texture_slot(name.view());
+}
+
 bool AssetCache::upload_mesh(MeshEntry& entry)
 {
     ArenaScope scope(*scratch_);
@@ -174,6 +188,8 @@ bool AssetCache::upload_mesh(MeshEntry& entry)
         mesh.submeshes[i].first_index = data.submeshes[i].first_index;
         mesh.submeshes[i].index_count = data.submeshes[i].index_count;
         mesh.submeshes[i].texture_slot = texture_slot(data.submeshes[i].material);
+        mesh.submeshes[i].normal_slot = companion_slot(data.submeshes[i].material, "_n");
+        mesh.submeshes[i].surface_slot = companion_slot(data.submeshes[i].material, "_s");
     }
     mesh.bounds = data.bounds;
     mesh.loaded = true;

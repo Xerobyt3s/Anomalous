@@ -52,6 +52,7 @@ struct Options {
     bool panels = false;
     bool brush = false;
     f32 rain = 0.0f;
+    bool snow = false;
     bool have_campos = false;
     anom::Vec3 campos{0.0f, 0.0f, 0.0f};
     bool have_camlook = false;
@@ -77,6 +78,8 @@ Options parse_options(int argc, char** argv)
             options.time_of_day = static_cast<f32>(std::atof(argv[i] + 6));
         } else if (std::strncmp(argv[i], "--rain=", 7) == 0) {
             options.rain = static_cast<f32>(std::atof(argv[i] + 7));
+        } else if (std::strcmp(argv[i], "--snow") == 0) {
+            options.snow = true;
         } else if (std::strcmp(argv[i], "--noretro") == 0) {
             options.retro = false;
         } else if (std::strcmp(argv[i], "--brush") == 0) {
@@ -188,7 +191,7 @@ int main(int argc, char** argv)
     retro.enabled = options.retro;
     device.set_retro_fx(retro);
 
-    for (const char* name : {"mesh", "glass", "rain", "debug2d", "blit", "screen"}) {
+    for (const char* name : {"mesh", "glass", "rain", "snow", "debug2d", "blit", "screen"}) {
         device.shaders().program(name);
     }
 
@@ -245,6 +248,12 @@ int main(int argc, char** argv)
     }
     if (options.rain > 0.0f) {
         game.weather().set_mode(WeatherMode::Rain);
+    }
+    if (options.snow) {
+        game.weather().set_mode(WeatherMode::Snow);
+        for (i32 i = 0; i < 1800; i++) {
+            game.weather().tick(0.1f);
+        }
     }
 
     const f64 start_time = time_seconds();

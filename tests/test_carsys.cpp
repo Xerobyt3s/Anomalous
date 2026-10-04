@@ -378,6 +378,42 @@ TEST(weather, modes_drive_rain_toward_their_target)
     CHECK(w.rain() < 0.05f);
 }
 
+TEST(weather, snow_falls_settles_and_melts)
+{
+    Weather w;
+    w.init(11);
+    w.set_mode(WeatherMode::Snow);
+    for (i32 i = 0; i < 24000; i++) {
+        w.tick(kDt);
+    }
+    CHECK(w.snow() > 0.6f);
+    CHECK(w.rain() < 0.01f);
+    CHECK(w.overcast() > 0.7f);
+    CHECK(w.snow_cover() > 0.95f);
+    CHECK(w.wetness() < 0.05f);
+
+    w.set_mode(WeatherMode::Clear);
+    for (i32 i = 0; i < 28800; i++) {
+        w.tick(kDt);
+    }
+    const f32 after_clear = w.snow_cover();
+    CHECK(after_clear < 0.95f);
+    CHECK(after_clear > 0.3f);
+
+    Weather r = w;
+    r.set_mode(WeatherMode::Rain);
+    for (i32 i = 0; i < 7200; i++) {
+        w.tick(kDt);
+        r.tick(kDt);
+    }
+    CHECK(r.snow_cover() < w.snow_cover());
+
+    for (i32 i = 0; i < 60000; i++) {
+        w.tick(kDt);
+    }
+    CHECK(w.snow_cover() == 0.0f);
+}
+
 TEST(weather, is_deterministic_for_a_seed)
 {
     Weather a;

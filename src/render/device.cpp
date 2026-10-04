@@ -9,6 +9,12 @@
 namespace anom {
 namespace {
 
+constexpr f32 kSnowFlakes = 60000.0f;
+constexpr f32 kSnowWindSpeed = 7.0f;
+constexpr Vec2 kSnowWindDir{0.86f, 0.51f};
+constexpr f32 kOvercastSunBlock = 0.7f;
+constexpr i32 kMeshMapsLocation = 10;
+
 struct CameraUbo {
     Mat4 view;
     Mat4 proj;
@@ -31,6 +37,7 @@ struct CameraUbo {
     Vec4 exposure_params;
     Vec4 retro_params;
     Vec4 cloud_sun_color;
+    Vec4 weather;
 };
 
 } // namespace
@@ -208,6 +215,13 @@ void RenderDevice::set_weather(f32 overcast, f32 wetness)
     weather_wetness_ = wetness;
 }
 
+void RenderDevice::set_snow(f32 cover, f32 fall, f32 wind)
+{
+    snow_cover_ = cover;
+    snow_fall_ = fall;
+    wind_ = wind;
+}
+
 void RenderDevice::set_windshield(f32 wet, f32 wiper_sweep, f32 glass_wet)
 {
     shield_wet_ = wet;
@@ -231,7 +245,8 @@ void RenderDevice::view_setup(const Camera& cam, f32 width, f32 height)
     ubo.sun_dir = vec4_from_vec3(normalize(env_.sun_dir), 0.0f);
 
     const f32 ambient_scalar = f_clamp01(0.25f + luminance(lighting_.ambient_zenith) * 4.0f);
-    ubo.sun_color_ambient = vec4_from_vec3(lighting_.sun_color, ambient_scalar);
+    const f32 sun_through = 1.0f - kOvercastSunBlock * f_clamp01(weather_overcast_);
+    ubo.sun_color_ambient = vec4_from_vec3(lighting_.sun_color * sun_through, ambient_scalar);
 
     const Vec3 fog_color = lighting_.ambient_horizon;
     ubo.fog_color_density = vec4_from_vec3(fog_color, env_.fog_density);
@@ -240,6 +255,7 @@ void RenderDevice::view_setup(const Camera& cam, f32 width, f32 height)
                                retro_.enabled ? retro_.pixel_scale : 1.0f};
     ubo.retro_params = Vec4{retro_.near_distance, retro_.far_distance, 1.0f, time_seconds_};
     ubo.cloud_sun_color = vec4_from_vec3(lighting_.cloud_sun_color, 0.0f);
+    ubo.weather = Vec4{snow_cover_, snow_fall_, wind_, 0.0f};
 
     const f32 cone = std::cos(24.0f * kDegToRad);
     for (u32 i = 0; i < 2; i++) {
@@ -618,6 +634,15 @@ void RenderDevice::flush_meshes()
             const GpuSubmesh& sub = mesh->submeshes[s];
             if (!shadow_pass_) {
                 bind_texture0(assets_.texture_gl(sub.texture_slot));
+                const i32 maps = (sub.normal_slot != kNoTexture ? 1 : 0)
+                               | (sub.surface_slot != kNoTexture ? 2 : 0);
+                glProgramUniform1i(program, kMeshMapsLocation, maps);
+                if (maps & 1) {
+                    bind_texture(4, assets_.texture_gl(sub.normal_slot));
+                }
+                if (maps & 2) {
+                    bind_texture(5, assets_.texture_gl(sub.surface_slot));
+                }
             }
             stats_.draw_calls++;
             stats_.instanced_submeshes += run;
@@ -686,6 +711,35 @@ void RenderDevice::draw_rain(f32 intensity, f32 wind, Vec3 cam_vel, f32 time)
     bind_vao(quad_vao_);
     stats_.draw_calls++;
     glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(drops * 6));
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
+void RenderDevice::draw_snow(f32 intensity, f32 wind, f32 time)
+{
+    flush_meshes();
+    if (intensity <= 0.003f) {
+        return;
+    }
+    const u32 program = shaders_.program("snow");
+    if (!program) {
+        return;
+    }
+    const u32 near_count = static_cast<u32>(kSnowFlakes * f_clamp01(intensity));
+    const u32 total = near_count + near_count / 3;
+    const f32 wind_speed = wind * kSnowWindSpeed;
+    use_program(program);
+    glProgramUniform4f(program, 1, time, intensity, wind, static_cast<f32>(near_count));
+    glProgramUniform4f(program, 2, kSnowWindDir.x * wind_speed, kSnowWindDir.y * wind_speed,
+                       0.0f, 0.0f);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    set_cull(false);
+    bind_vao(quad_vao_);
+    stats_.draw_calls++;
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, static_cast<GLsizei>(total));
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
 }

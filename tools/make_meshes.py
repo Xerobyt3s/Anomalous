@@ -1061,6 +1061,343 @@ def make_relay_tower():
     c.write(os.path.join(MESH_DIR, "relay_tower_col.amsh"))
 
 
+TELESCOPE_SCALE = 24.0 / 70.0
+TELESCOPE_ELEVATION_DEG = 28.0
+
+
+def v_add(a, b):
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def v_sub(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def v_scale(a, s):
+    return (a[0] * s, a[1] * s, a[2] * s)
+
+
+def v_dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def v_cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def v_lerp(a, b, t):
+    return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t)
+
+
+class Frame:
+    def __init__(self, origin, x, y, z):
+        self.origin = origin
+        self.x = x
+        self.y = y
+        self.z = z
+
+    def point(self, local):
+        return v_add(self.origin, self.direction(local))
+
+    def direction(self, local):
+        return v_add(v_add(v_scale(self.x, local[0]), v_scale(self.y, local[1])),
+                     v_scale(self.z, local[2]))
+
+
+def oriented_triangle(b, ia, ib, ic, hint):
+    pa, pb, pc = b.vertices[ia][0], b.vertices[ib][0], b.vertices[ic][0]
+    if v_dot(v_cross(v_sub(pb, pa), v_sub(pc, pa)), hint) >= 0.0:
+        b.triangle(ia, ib, ic)
+    else:
+        b.triangle(ia, ic, ib)
+
+
+def strut(b, a, c, radius):
+    if math.dist(a, c) > 1e-4:
+        beam(b, a, c, radius, radius, 0.5)
+
+
+def lathe(b, origin, axis, profile, sides, uv_per_metre=0.5):
+    _, right, forward = basis_from_axis(axis)
+    axis = normalize(axis)
+    rows = []
+    count = len(profile)
+    for i, (r, h) in enumerate(profile):
+        prev = profile[max(i - 1, 0)]
+        nxt = profile[min(i + 1, count - 1)]
+        tr, th = nxt[0] - prev[0], nxt[1] - prev[1]
+        tl = math.hypot(tr, th)
+        tr, th = (1.0, 0.0) if tl < 1e-6 else (tr / tl, th / tl)
+        nr, nh = th, -tr
+        row = []
+        for s in range(sides + 1):
+            ang = s / sides * 2.0 * math.pi
+            radial = v_add(v_scale(right, math.cos(ang)), v_scale(forward, math.sin(ang)))
+            pos = v_add(origin, v_add(v_scale(radial, r), v_scale(axis, h)))
+            normal = normalize(v_add(v_scale(radial, nr), v_scale(axis, nh)))
+            if abs(nh) > 0.7:
+                uv = (math.cos(ang) * r * uv_per_metre, math.sin(ang) * r * uv_per_metre)
+            else:
+                uv = (s / sides * 2.0 * math.pi * max(r, 0.5) * uv_per_metre, h * uv_per_metre)
+            row.append(b.vertex(pos, normal, uv))
+        rows.append(row)
+    for i in range(count - 1):
+        for s in range(sides):
+            a, c = rows[i][s], rows[i + 1][s]
+            hint = v_add(b.vertices[a][1], b.vertices[rows[i + 1][s + 1]][1])
+            oriented_triangle(b, a, c, rows[i][s + 1], hint)
+            oriented_triangle(b, rows[i][s + 1], c, rows[i + 1][s + 1], hint)
+
+
+def frame_box(b, centre, ax, ay, az, half, uv_per_metre=0.5):
+    axes = (ax, ay, az)
+    for n in range(3):
+        for sign in (1.0, -1.0):
+            normal = v_scale(axes[n], sign)
+            u = axes[(n + 1) % 3]
+            v = axes[(n + 2) % 3]
+            hu = half[(n + 1) % 3]
+            hv = half[(n + 2) % 3]
+            c = v_add(centre, v_scale(normal, half[n]))
+            ids = []
+            for su, sv in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+                p = v_add(c, v_add(v_scale(u, su * hu), v_scale(v, sv * hv)))
+                ids.append(b.vertex(p, normal, (su * hu * uv_per_metre, sv * hv * uv_per_metre)))
+            oriented_triangle(b, ids[0], ids[1], ids[2], normal)
+            oriented_triangle(b, ids[0], ids[2], ids[3], normal)
+
+
+def telescope_frames():
+    s = TELESCOPE_SCALE
+    e = math.radians(TELESCOPE_ELEVATION_DEG)
+    tip = Frame((0.0, 36.0 * s, 0.0), (1.0, 0.0, 0.0), None,
+                (0.0, math.sin(e), math.cos(e)))
+    tip.y = v_cross(tip.z, tip.x)
+    ali = Frame((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    return tip, ali
+
+
+def make_telescope():
+    s = TELESCOPE_SCALE
+    radius = 35.0 * s
+    focal = 28.0 * s
+    vertex_offset = 4.0 * s
+    pedestal_radius = 17.0 * s
+    pedestal_height = 5.0 * s
+    bearing_span = 14.0 * s
+    wheel_radius = 22.0 * s
+    wheel_half_span = 12.0 * s
+    leg_root_radius = 26.0 * s
+    apex_radius = 4.5 * s
+    sub_radius = 4.0 * s
+    rings = 12
+    sectors = 96
+
+    def sag(r):
+        return r * r / (4.0 * focal)
+
+    def truss_depth(r):
+        return (6.0 - 0.10 * r / s) * s
+
+    tip, ali = telescope_frames()
+    rim_z = vertex_offset + sag(radius)
+    b = MeshBuilder()
+
+    b.begin_material("dish_panel")
+    grid = []
+    for ri in range(rings + 1):
+        r = radius * ri / rings
+        row = []
+        for si in range(sectors + 1):
+            th = si / sectors * 2.0 * math.pi
+            c, sn = math.cos(th), math.sin(th)
+            slope = r / (2.0 * focal)
+            local = (r * c, r * sn, vertex_offset + sag(r))
+            normal = tip.direction(normalize((-slope * c, -slope * sn, 1.0)))
+            row.append(b.vertex(tip.point(local), normal, (si / sectors, r / radius)))
+        grid.append(row)
+    for ri in range(rings):
+        for si in range(sectors):
+            a, c = grid[ri][si], grid[ri + 1][si]
+            d, e = grid[ri + 1][si + 1], grid[ri][si + 1]
+            hint = b.vertices[d][1]
+            oriented_triangle(b, a, c, d, hint)
+            oriented_triangle(b, a, d, e, hint)
+    b.begin_material("dish_back")
+    back = {}
+    for ri in range(rings + 1):
+        for si in range(sectors + 1):
+            p, n, uv = b.vertices[grid[ri][si]]
+            back[(ri, si)] = b.vertex(v_sub(p, v_scale(n, 0.05)), v_scale(n, -1.0), uv)
+    for ri in range(rings):
+        for si in range(sectors):
+            a, c = back[(ri, si)], back[(ri + 1, si)]
+            d, e = back[(ri + 1, si + 1)], back[(ri, si + 1)]
+            hint = b.vertices[d][1]
+            oriented_triangle(b, a, c, d, hint)
+            oriented_triangle(b, a, d, e, hint)
+
+    b.begin_material("dish_sub")
+    sub_profile = [(sub_radius * i / 6.0, 0.075 / s * (sub_radius * i / 6.0) ** 2) for i in range(7)]
+    sub_profile += [(sub_radius, 0.075 / s * sub_radius ** 2 + 0.4 * s), (3.0 * s, 1.6 * s),
+                    (3.0 * s, 4.5 * s), (0.0, 4.5 * s)]
+    lathe(b, tip.point((0.0, 0.0, vertex_offset + focal - 1.4 * s)), tip.z, sub_profile, 24, 1.0)
+
+    b.begin_material("dish_steel")
+    for si in range(0, sectors, 2):
+        t0 = si / sectors * 2.0 * math.pi
+        t1 = (si + 2) / sectors * 2.0 * math.pi
+        strut(b, tip.point((radius * math.cos(t0), radius * math.sin(t0), rim_z)),
+              tip.point((radius * math.cos(t1), radius * math.sin(t1), rim_z)), 0.40 * s)
+
+    setback = 0.6 * s
+
+    def front_node(r, th):
+        return tip.point((r * math.cos(th), r * math.sin(th), vertex_offset + sag(r) - setback))
+
+    def rear_node(r, th):
+        return tip.point((r * math.cos(th), r * math.sin(th), vertex_offset + sag(r) - truss_depth(r)))
+
+    truss_rings = [v * s for v in (3.5, 9.0, 15.0, 21.0, 27.0, 33.0)]
+    ribs = 24
+    for j in range(ribs):
+        th = j / ribs * 2.0 * math.pi
+        thn = (j + 1) / ribs * 2.0 * math.pi
+        for i, r in enumerate(truss_rings):
+            strut(b, rear_node(r, th), front_node(r, th), 0.24 * s)
+            strut(b, rear_node(r, th), rear_node(r, thn), 0.26 * s)
+            if i + 1 < len(truss_rings):
+                rn = truss_rings[i + 1]
+                strut(b, rear_node(r, th), rear_node(rn, th), 0.34 * s)
+                strut(b, front_node(r, th), front_node(rn, th), 0.22 * s)
+                strut(b, rear_node(r, th), front_node(rn, th), 0.16 * s)
+                if i & 1:
+                    strut(b, rear_node(r, th), rear_node(rn, thn), 0.16 * s)
+                else:
+                    strut(b, rear_node(r, thn), rear_node(rn, th), 0.16 * s)
+            else:
+                strut(b, rear_node(r, th), front_node(radius, th), 0.30 * s)
+        strut(b, rear_node(truss_rings[0], th),
+              tip.point((0.0, 0.0, vertex_offset - truss_depth(0.0))), 0.30 * s)
+
+    rear = vertex_offset - truss_depth(0.0)
+    lathe(b, tip.origin, tip.z,
+          [(0.0, rear), (3.5 * s, rear), (3.5 * s, vertex_offset - 0.5 * s), (0.0, vertex_offset - 0.5 * s)], 16)
+    axle = bearing_span + 2.0 * s
+    lathe(b, tip.point((-axle, 0.0, 0.0)), tip.x,
+          [(0.0, 0.0), (1.3 * s, 0.0), (1.3 * s, 2.0 * axle), (0.0, 2.0 * axle)], 12)
+
+    apex_z = vertex_offset + focal + 1.0 * s
+    for leg in range(4):
+        th = (leg + 0.5) * math.pi * 0.5
+        around = tip.direction((-math.sin(th), math.cos(th), 0.0))
+        root = tip.point((leg_root_radius * math.cos(th), leg_root_radius * math.sin(th),
+                          vertex_offset + sag(leg_root_radius)))
+        apex = tip.point((apex_radius * math.cos(th), apex_radius * math.sin(th), apex_z))
+        side = v_scale(around, 0.75 * s)
+        strut(b, root, apex, 0.32 * s)
+        strut(b, v_add(root, side), v_add(apex, side), 0.20 * s)
+        strut(b, v_sub(root, side), v_sub(apex, side), 0.20 * s)
+        bays = 12
+        for k in range(bays):
+            p0 = v_lerp(root, apex, k / bays)
+            p1 = v_lerp(root, apex, (k + 1) / bays)
+            if k & 1:
+                strut(b, v_add(p0, side), v_sub(p1, side), 0.11 * s)
+            else:
+                strut(b, v_sub(p0, side), v_add(p1, side), 0.11 * s)
+            strut(b, v_sub(p1, side), v_add(p1, side), 0.11 * s)
+    for k in range(16):
+        t0 = k / 16 * 2.0 * math.pi
+        t1 = (k + 1) / 16 * 2.0 * math.pi
+        strut(b, tip.point((apex_radius * math.cos(t0), apex_radius * math.sin(t0), apex_z)),
+              tip.point((apex_radius * math.cos(t1), apex_radius * math.sin(t1), apex_z)), 0.22 * s)
+
+    for side in (-1, 1):
+        x = side * wheel_half_span
+        segments = 14
+        phi0, phi1 = math.radians(-40.0), math.radians(55.0)
+        previous = None
+        for k in range(segments + 1):
+            phi = phi0 + (phi1 - phi0) * k / segments
+            p = tip.point((x, wheel_radius * math.sin(phi), -wheel_radius * math.cos(phi)))
+            if previous is not None:
+                strut(b, previous, p, 0.55 * s)
+            if k % 2 == 0:
+                strut(b, tip.point((x, 0.0, 0.0)), p, 0.28 * s)
+            if k > 0 and k % 4 == 0 and side < 0:
+                q = tip.point((-x, wheel_radius * math.sin(phi), -wheel_radius * math.cos(phi)))
+                strut(b, p, q, 0.24 * s)
+            previous = p
+    for side in (-1, 1):
+        strut(b, tip.point((side * 6.0 * s, -9.0 * s, -17.0 * s)),
+              tip.point((side * 3.5 * s, 0.0, rear)), 0.34 * s)
+
+    leg_top, leg_front, leg_back = [], [], []
+    for sx in (-1.0, 1.0):
+        top = tip.point((sx * bearing_span, 0.0, 0.0))
+        front = ali.point((sx * 14.5 * s, pedestal_height + 0.6 * s, 9.0 * s))
+        back_leg = ali.point((sx * 14.5 * s, pedestal_height + 0.6 * s, -9.0 * s))
+        leg_top.append(top)
+        leg_front.append(front)
+        leg_back.append(back_leg)
+        frame_box(b, top, ali.x, ali.y, ali.z, (1.6 * s, 1.8 * s, 1.8 * s))
+        strut(b, front, top, 0.95 * s)
+        strut(b, back_leg, top, 0.95 * s)
+        for t in (0.35, 0.65):
+            strut(b, v_lerp(front, top, t), v_lerp(back_leg, top, t), 0.30 * s)
+        strut(b, v_lerp(front, top, 0.35), v_lerp(back_leg, top, 0.65), 0.18 * s)
+        strut(b, front, back_leg, 0.45 * s)
+    for t in (0.35, 0.65):
+        strut(b, v_lerp(leg_back[0], leg_top[0], t), v_lerp(leg_back[1], leg_top[1], t), 0.45 * s)
+    strut(b, leg_back[0], leg_back[1], 0.45 * s)
+    strut(b, v_lerp(leg_back[0], leg_top[0], 0.35), v_lerp(leg_back[1], leg_top[1], 0.65), 0.18 * s)
+
+    walk_z = rim_z - 0.9 * s
+    rail_radius = radius + 1.0 * s
+    catwalk = 1.4 * s
+    lathe(b, tip.point((0.0, 0.0, walk_z)), tip.z,
+          [(rail_radius - catwalk, 0.0), (rail_radius, 0.0), (rail_radius, 0.10 * s),
+           (rail_radius - catwalk, 0.10 * s)], sectors)
+    posts = 48
+    rail_top = []
+    for i in range(posts):
+        ang = i / posts * 2.0 * math.pi
+        radial = (math.cos(ang) * rail_radius, math.sin(ang) * rail_radius, walk_z)
+        foot = tip.point(radial)
+        top = tip.point((radial[0], radial[1], walk_z + 1.2))
+        strut(b, foot, top, 0.03)
+        rail_top.append(top)
+    for i in range(posts):
+        strut(b, rail_top[i], rail_top[(i + 1) % posts], 0.025)
+
+    b.begin_material("dish_concrete")
+    frame_box(b, tip.point((0.0, -9.0 * s, -17.0 * s)), tip.x, tip.y, tip.z, (8.0 * s, 2.6 * s, 2.6 * s),
+              1.0 / 3.0)
+    pedestal = [(0.0, -1.5 * s), (pedestal_radius, -1.5 * s), (pedestal_radius, pedestal_height),
+                (pedestal_radius - 1.5 * s, pedestal_height),
+                (pedestal_radius - 1.5 * s, pedestal_height + 0.6 * s), (0.0, pedestal_height + 0.6 * s)]
+    lathe(b, ali.origin, ali.y, pedestal, 32, 1.0 / 3.0)
+
+    cabin_top = vertex_offset + focal - 1.4 * s + 4.5 * s
+    b.begin_material("dish_steel")
+    strut(b, tip.point((0.0, 0.0, cabin_top)), tip.point((0.0, 0.0, cabin_top + 0.5)), 0.05)
+    b.begin_material("dish_beacon")
+    strut(b, tip.point((0.0, 0.0, cabin_top + 0.5)), tip.point((0.0, 0.0, cabin_top + 0.8)), 0.12)
+
+    b.write(os.path.join(MESH_DIR, "telescope.amsh"))
+
+    c = MeshBuilder()
+    c.begin_material("dish_concrete")
+    lathe(c, ali.origin, ali.y, pedestal, 16, 1.0 / 3.0)
+    for i in range(2):
+        strut(c, leg_front[i], leg_top[i], 0.95 * s)
+        strut(c, leg_back[i], leg_top[i], 0.95 * s)
+        strut(c, leg_front[i], leg_back[i], 0.45 * s)
+    strut(c, leg_back[0], leg_back[1], 0.45 * s)
+    c.write(os.path.join(MESH_DIR, "telescope_col.amsh"))
+
+
 def make_excel_wheel():
     b = MeshBuilder()
     sides = 18
@@ -1139,5 +1476,18 @@ def main():
     make_car_textures()
 
 
+GENERATORS = {
+    "telescope": make_telescope,
+    "telescope_textures": lambda: __import__("make_dish_textures").main(),
+    "relay_tower": make_relay_tower,
+}
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1:
+        os.makedirs(MESH_DIR, exist_ok=True)
+        for name in sys.argv[1:]:
+            GENERATORS[name]()
+    else:
+        main()
