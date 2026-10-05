@@ -11,6 +11,8 @@
 #include <string_view>
 
 namespace anom {
+class EntityMeshes;
+struct GpuMesh;
 
 class Arena;
 struct Camera;
@@ -66,6 +68,7 @@ void editor_destroy_entity(World& world, PhysWorld& phys, EntityHandle handle);
 
 class Editor {
 public:
+    void set_meshes(const EntityMeshes* meshes) { meshes_ = meshes; }
     void init(Arena& storage);
 
     void toggle(World& world, PhysWorld& phys);
@@ -121,6 +124,8 @@ public:
     void set_brush_mode(bool on) { brush_mode_ = on; }
 
 private:
+    const GpuMesh* mesh_of(u32 idx) const;
+    const EntityMeshes* meshes_ = nullptr;
     void push_op(const EditorOp& op);
     void patch_handle(EntityHandle from, EntityHandle to);
     void drive_gizmo(const Input& input, const Camera& cam, World& world, PhysWorld& phys,
@@ -152,4 +157,4 @@ private:
     u32 snapshot_count_ = 0;
 };
 
-} // namespace anom
+}

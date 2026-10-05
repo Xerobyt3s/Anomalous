@@ -2,8 +2,10 @@
 
 #include "core/arena.h"
 #include "physics/heightfield.h"
-#include "physics/jolt_world.h"
+#include "engine/physics/physics_world.h"
+#include "math/glm_bridge.h"
 #include "physics/world.h"
+#include "app/player_view.h"
 #include "player/player.h"
 #include "render/camera.h"
 #include "physics/body.h"
@@ -14,15 +16,15 @@
 using namespace anom;
 
 namespace {
-
 constexpr f32 kDt = 1.0f / 120.0f;
 
 struct WalkRig {
     Arena arena{megabytes(64)};
     Heightfield hf;
-    JoltWorld jolt;
+    ghost::engine::PhysicsWorld jolt;
     PhysWorld world;
     Player player;
+    PlayerView view;
 
     void setup(f32 slope = 0.0f)
     {
@@ -48,7 +50,7 @@ struct WalkRig {
     }
 };
 
-} // namespace
+}
 
 TEST(player, falls_and_lands_on_the_ground)
 {
@@ -291,7 +293,7 @@ TEST(player, the_camera_sits_at_eye_height_on_foot)
     rig.player.init(Vec3{3.0f, 0.0f, 4.0f}, 0.6f);
 
     Camera cam;
-    rig.player.camera(rig.world, nullptr, 1.0f, kDt, false, cam);
+    rig.view.camera(rig.player, rig.world, nullptr, 1.0f, kDt, false, 0.0f, 0.0f, cam);
 
     CHECK_NEAR(cam.pos.x, 3.0f, 1e-4);
     CHECK_NEAR(cam.pos.y, kPlayerEyeHeight, 1e-4);
@@ -313,8 +315,8 @@ TEST(player, the_camera_interpolates_between_ticks)
 
     Camera at_prev;
     Camera at_now;
-    rig.player.camera(rig.world, nullptr, 0.0f, kDt, false, at_prev);
-    rig.player.camera(rig.world, nullptr, 1.0f, kDt, false, at_now);
+    rig.view.camera(rig.player, rig.world, nullptr, 0.0f, kDt, false, 0.0f, 0.0f, at_prev);
+    rig.view.camera(rig.player, rig.world, nullptr, 1.0f, kDt, false, 0.0f, 0.0f, at_now);
 
     CHECK(distance(at_prev.pos, at_now.pos) > 0.0f);
     CHECK_NEAR(at_prev.pos.z, rig.player.prev_pos().z + 0.0f, 1e-4);
@@ -322,13 +324,13 @@ TEST(player, the_camera_interpolates_between_ticks)
 }
 
 namespace {
-
 struct ChaseRig {
     Arena arena{megabytes(64)};
     Heightfield hf;
     PhysWorld world;
     Vehicle veh;
     Player player;
+    PlayerView view;
 
     bool setup()
     {
@@ -356,13 +358,13 @@ struct ChaseRig {
         Camera cam;
         for (i32 i = 0; i < ticks; i++) {
             world.body(veh.body())->vel = vel;
-            player.camera(world, &veh, 1.0f, kDt, true, cam);
+            view.camera(player, world, &veh, 1.0f, kDt, true, 0.0f, 0.0f, cam);
         }
         return cam;
     }
 };
 
-} // namespace
+}
 
 TEST(chase_cam, the_boom_sits_behind_a_stationary_car)
 {
@@ -384,7 +386,6 @@ TEST(chase_cam, the_boom_trails_the_direction_of_travel)
     ChaseRig rig;
     CHECK(rig.setup());
 
-    // Car pointing down -Z, sliding 40 degrees off its nose.
     const f32 travel = 40.0f * kDegToRad;
     const f32 speed = 24.0f;
     const Camera cam = rig.settle(Vec3{std::sin(travel) * speed, 0.0f, -std::cos(travel) * speed},
@@ -417,7 +418,7 @@ TEST(chase_cam, leaving_chase_returns_the_camera_to_the_seat)
     const Camera chased = rig.settle(Vec3{0.0f, 0.0f, -20.0f}, 200);
 
     Camera seated;
-    rig.player.camera(rig.world, &rig.veh, 1.0f, kDt, false, seated);
+    rig.view.camera(rig.player, rig.world, &rig.veh, 1.0f, kDt, false, 0.0f, 0.0f, seated);
     const RigidBody* car = rig.world.body(rig.veh.body());
 
     CHECK(distance(chased.pos, car->pos) > distance(seated.pos, car->pos));
@@ -431,18 +432,16 @@ TEST(chase_cam, the_mouse_overrides_the_follow_while_it_is_moving)
 
     rig.settle(Vec3{0.0f, 0.0f, -20.0f}, 60);
 
-    // Swing the look a quarter turn, then keep nudging it so the override stays live while
-    // the car heading walks away underneath.
     Camera cam;
-    rig.player.look(360.0f, 0.0f);
+    rig.view.chase_look(360.0f, 0.0f);
     rig.world.body(rig.veh.body())->vel = Vec3{0.0f, 0.0f, -20.0f};
-    rig.player.camera(rig.world, &rig.veh, 1.0f, kDt, true, cam);
+    rig.view.camera(rig.player, rig.world, &rig.veh, 1.0f, kDt, true, 0.0f, 0.0f, cam);
     const f32 held = cam.yaw;
 
     for (i32 i = 0; i < 60; i++) {
-        rig.player.look(1.0f, 0.0f);
+        rig.view.chase_look(1.0f, 0.0f);
         rig.world.body(rig.veh.body())->vel = Vec3{14.0f, 0.0f, -14.0f};
-        rig.player.camera(rig.world, &rig.veh, 1.0f, kDt, true, cam);
+        rig.view.camera(rig.player, rig.world, &rig.veh, 1.0f, kDt, true, 0.0f, 0.0f, cam);
     }
 
     CHECK(f_abs(f_wrap_angle(cam.yaw - held)) < 0.25f);
@@ -454,12 +453,12 @@ TEST(chase_cam, the_look_returns_to_the_follow_once_the_mouse_settles)
     CHECK(rig.setup());
 
     rig.settle(Vec3{0.0f, 0.0f, -20.0f}, 60);
-    rig.player.look(360.0f, 120.0f);
+    rig.view.chase_look(360.0f, 120.0f);
 
     Camera cam;
     for (i32 i = 0; i < 30; i++) {
         rig.world.body(rig.veh.body())->vel = Vec3{0.0f, 0.0f, -20.0f};
-        rig.player.camera(rig.world, &rig.veh, 1.0f, kDt, true, cam);
+        rig.view.camera(rig.player, rig.world, &rig.veh, 1.0f, kDt, true, 0.0f, 0.0f, cam);
     }
     CHECK(f_abs(cam.yaw) > 0.5f);
 
@@ -486,7 +485,6 @@ TEST(chase_cam, steering_right_turns_the_car_and_the_front_wheels_right)
     const Vec3 fwd = rotate(car->rot, Vec3{0.0f, 0.0f, -1.0f});
     const f32 end_yaw = std::atan2(fwd.x, -fwd.z);
 
-    // Right steer must swing the nose toward the car's own right, which is +yaw here.
     CHECK(f_wrap_angle(end_yaw - start_yaw) > 0.02f);
     CHECK(rig.veh.wheel(WHEEL_FL).steer_rad > 0.0f);
 }
@@ -557,7 +555,6 @@ TEST(player, the_passenger_door_is_not_a_way_in)
     const f32 reach = body->half_extents.x + 0.4f;
     const f32 seat_z = body->pos.z + car.config().seat_eye.z;
 
-    // Standing at the handle on the wrong side is still the wrong side.
     rig.player.init(Vec3{body->pos.x + reach, 0.5f, seat_z}, 0.0f);
     rig.player.tick(rig.world, &car, PlayerCommand{}, kDt);
     CHECK(!rig.player.can_enter(rig.world, &car));

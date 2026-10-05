@@ -1,0 +1,14 @@
+{
+  "_comment": "Element x element -> result. Order-independent. Used by the mortar AND by projectiles/volumes in the world.",
+  "reactions": [
+    { "a": "fire", "b": "wind", "result": "inferno" },
+    { "a": "lightning", "b": "wind", "result": "thunderstrike" },
+    { "a": "wind", "b": "voodoo", "result": "tailwind" },
+    { "a": "haze", "b": "voodoo", "result": "shroud" },
+    { "a": "lightning", "b": "voodoo", "result": "blink" },
+    { "a": "haze", "b": "wind", "result": "fog" },
+    { "a": "fire", "b": "haze", "result": "ghostfire" },
+    { "a": "fire", "b": "voodoo", "result": "firelight" },
+    { "a": "fire", "b": "fog", "result": "steam" }
+  ]
+}

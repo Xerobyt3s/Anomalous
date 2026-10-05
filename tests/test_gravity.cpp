@@ -4,7 +4,8 @@
 #include "physics/body.h"
 #include "physics/gravity_field.h"
 #include "physics/heightfield.h"
-#include "physics/jolt_world.h"
+#include "engine/physics/physics_world.h"
+#include "math/glm_bridge.h"
 #include "physics/static_grid.h"
 #include "physics/world.h"
 #include "vehicle/vehicle.h"
@@ -14,7 +15,10 @@
 using namespace anom;
 
 namespace {
-
+void add_jolt_box(ghost::engine::PhysicsWorld& jolt, Vec3 center, Quat rot, Vec3 half)
+{
+    jolt.addStaticBox(to_glm(center), to_glm(rot), to_glm(half), 0);
+}
 constexpr f32 kDt = 1.0f / 120.0f;
 
 Quat roll_deg(f32 deg)
@@ -36,7 +40,7 @@ struct FlatRig {
     Arena arena{megabytes(32)};
     Heightfield hf;
     PhysWorld world;
-    JoltWorld jolt;
+    ghost::engine::PhysicsWorld jolt;
     Movement move;
 
     void setup(Vec3 feet = Vec3{0.0f, 0.0f, 0.0f})
@@ -68,7 +72,7 @@ MoveCommand forward_cmd()
     return cmd;
 }
 
-} // namespace
+}
 
 TEST(gravity_field, outside_every_volume_gravity_is_plain_down)
 {
@@ -277,7 +281,7 @@ TEST(movement, walking_settles_at_walk_speed_and_sprinting_faster)
     FlatRig walk;
     walk.setup();
     walk.run(forward_cmd(), 120);
-    CHECK_NEAR(walk.planar_speed(), walk.move.tuning().walk_speed, 0.05);
+    CHECK_NEAR(walk.planar_speed(), walk.move.tuning().walk_speed * walk.move.tuning().holstered_speed, 0.05);
     CHECK(walk.move.state().grounded);
 
     FlatRig sprint;
@@ -285,7 +289,7 @@ TEST(movement, walking_settles_at_walk_speed_and_sprinting_faster)
     MoveCommand cmd = forward_cmd();
     cmd.sprint = true;
     sprint.run(cmd, 120);
-    CHECK_NEAR(sprint.planar_speed(), sprint.move.tuning().sprint_speed, 0.05);
+    CHECK_NEAR(sprint.planar_speed(), sprint.move.tuning().sprint_speed * sprint.move.tuning().holstered_speed, 0.05);
 }
 
 TEST(movement, letting_go_stops_quickly)
@@ -305,7 +309,7 @@ TEST(movement, crouching_is_slow_and_low)
     cmd.crouch = true;
     rig.run(cmd, 120);
     CHECK(rig.move.state().stance == Stance::Crouch);
-    CHECK(rig.planar_speed() <= rig.move.tuning().crouch_speed + 0.01f);
+    CHECK(rig.planar_speed() <= rig.move.tuning().crouch_speed * rig.move.tuning().holstered_speed + 0.01f);
     CHECK(rig.move.state().eye_height < rig.move.tuning().eye_height - 0.2f);
 }
 
@@ -346,7 +350,7 @@ TEST(movement, there_is_no_standing_up_under_a_low_beam)
 {
     FlatRig rig;
     rig.setup();
-    rig.jolt.add_static_box(Vec3{0.0f, 1.45f, -3.0f}, quat_identity(), Vec3{3.0f, 0.1f, 1.5f});
+    add_jolt_box(rig.jolt, Vec3{0.0f, 1.45f, -3.0f}, quat_identity(), Vec3{3.0f, 0.1f, 1.5f});
     MoveCommand cmd = forward_cmd();
     cmd.crouch = true;
     rig.run(cmd, 150);
@@ -359,7 +363,7 @@ TEST(movement, a_quarter_metre_ledge_is_stepped_up)
 {
     FlatRig rig;
     rig.setup();
-    rig.jolt.add_static_box(Vec3{0.0f, 0.125f, -6.0f}, quat_identity(), Vec3{3.0f, 0.125f, 3.0f});
+    add_jolt_box(rig.jolt, Vec3{0.0f, 0.125f, -6.0f}, quat_identity(), Vec3{3.0f, 0.125f, 3.0f});
     rig.run(forward_cmd(), 150);
     CHECK(rig.move.state().pos.z < -4.0f);
     CHECK_NEAR(rig.move.state().pos.y, 0.25f, 0.05);
@@ -370,7 +374,7 @@ TEST(movement, on_a_wall_with_its_own_gravity_you_stand_walk_and_jump_off_it)
     FlatRig rig;
     rig.setup();
     const Quat wall = roll_deg(90.0f);
-    rig.jolt.add_static_box(Vec3{0.0f, 8.0f, 0.0f}, wall, Vec3{6.0f, 0.5f, 6.0f});
+    add_jolt_box(rig.jolt, Vec3{0.0f, 8.0f, 0.0f}, wall, Vec3{6.0f, 0.5f, 6.0f});
     GravityField field;
     field.add(box_volume(Vec3{-3.0f, 8.0f, 0.0f}, wall, Vec3{6.0f, 3.0f, 6.0f}, 2.0f));
 
@@ -453,9 +457,7 @@ TEST(movement, walking_across_a_slope_stops_when_you_let_go)
     CHECK(length(rig.move.state().vel) < 0.2f);
 }
 
-
 namespace {
-
 void add_box_tris(PhysWorld& world, Vec3 c, Vec3 h)
 {
     const Vec3 p[8] = {
@@ -477,7 +479,7 @@ bool finite(Vec3 v)
         && f_abs(v.z) < 1e30f;
 }
 
-} // namespace
+}
 
 TEST(hardening, stepping_up_never_carries_you_through_a_thin_wall)
 {
@@ -636,9 +638,9 @@ TEST(hardening, the_jolt_terrain_matches_the_engine_heightfield)
         for (int i = 0; i < 200; i++) {
             const f32 x = -20.0f + 0.37f * static_cast<f32>(i);
             const f32 z = 3.1f + 0.11f * static_cast<f32>(i % 17);
-            JoltRayHit hit;
-            if (rig.jolt.raycast(Vec3{x, 200.0f, z}, Vec3{x, -200.0f, z}, &hit)) {
-                worst = f_max(worst, f_abs(hit.point.y - rig.hf.sample(x, z)));
+            const auto hit = rig.jolt.raycast(glm::vec3(x, 200.0f, z), glm::vec3(x, -200.0f, z));
+            if (hit) {
+                worst = f_max(worst, f_abs(hit->point.y - rig.hf.sample(x, z)));
             }
         }
         CHECK(worst < 0.03f);

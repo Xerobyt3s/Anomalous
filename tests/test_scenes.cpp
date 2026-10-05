@@ -1,12 +1,15 @@
 #include "test.h"
 
+#include "world/pickup_body.h"
+
 #include "core/arena.h"
 #include "core/log.h"
 #include "core/rng.h"
 #include "physics/body.h"
 #include "physics/gravity_field.h"
 #include "physics/heightfield.h"
-#include "physics/jolt_world.h"
+#include "engine/physics/physics_world.h"
+#include "math/glm_bridge.h"
 #include "physics/world.h"
 #include "player/interact.h"
 #include "player/player.h"
@@ -22,7 +25,6 @@
 using namespace anom;
 
 namespace {
-
 constexpr f32 kDt = 1.0f / 120.0f;
 constexpr const char* kCarCfg = "assets/cars/excel.cfg";
 constexpr const char* kZoneDir = "assets/zones/testzone";
@@ -170,7 +172,7 @@ struct CarRig {
     const RigidBody& body() const { return *world.body(veh.body()); }
 };
 
-} // namespace
+}
 
 TEST(scene_phys, twenty_four_bodies_settle_without_escaping)
 {
@@ -401,7 +403,7 @@ TEST(scene_walk, two_seconds_of_walking_covers_seven_to_nine_metres)
     Arena arena{megabytes(32)};
     Heightfield hf;
     PhysWorld world;
-    JoltWorld jolt;
+    ghost::engine::PhysicsWorld jolt;
     hf.init_procedural(arena, 96, 1.0f, 5u, 0.0f);
     world.init(arena, &hf);
     world.set_jolt(&jolt);
@@ -425,7 +427,7 @@ TEST(scene_walk, a_jump_clears_a_third_of_a_metre_and_lands_grounded)
     Arena arena{megabytes(32)};
     Heightfield hf;
     PhysWorld world;
-    JoltWorld jolt;
+    ghost::engine::PhysicsWorld jolt;
     hf.init_procedural(arena, 96, 1.0f, 5u, 0.0f);
     world.init(arena, &hf);
     world.set_jolt(&jolt);
@@ -450,7 +452,7 @@ TEST(scene_walk, a_wall_stops_the_capsule_without_letting_it_through)
     Arena arena{megabytes(32)};
     Heightfield hf;
     PhysWorld world;
-    JoltWorld jolt;
+    ghost::engine::PhysicsWorld jolt;
     hf.init_procedural(arena, 96, 1.0f, 5u, 0.0f);
     world.init(arena, &hf);
     world.set_jolt(&jolt);
@@ -475,7 +477,7 @@ TEST(scene_walk, a_quarter_metre_step_is_climbed_and_stepped_back_off)
     Arena arena{megabytes(32)};
     Heightfield hf;
     PhysWorld world;
-    JoltWorld jolt;
+    ghost::engine::PhysicsWorld jolt;
     hf.init_procedural(arena, 96, 1.0f, 5u, 0.0f);
     world.init(arena, &hf);
     world.set_jolt(&jolt);
@@ -512,7 +514,7 @@ TEST(scene_walk, the_scripted_walk_is_bit_identical_across_repeats)
         Arena arena{megabytes(32)};
         Heightfield hf;
         PhysWorld world;
-        JoltWorld jolt;
+        ghost::engine::PhysicsWorld jolt;
         hf.init_procedural(arena, 96, 1.0f, 5u, 0.0f);
         world.init(arena, &hf);
         world.set_jolt(&jolt);
@@ -532,13 +534,13 @@ TEST(scene_walk, the_scripted_walk_is_bit_identical_across_repeats)
 }
 
 namespace {
-
 struct ZoneSwapRig {
     Arena perm{megabytes(32)};
     Arena zone{megabytes(64)};
     Arena scratch{megabytes(64)};
     World world;
     PhysWorld phys;
+    ghost::engine::PhysicsWorld jolt;
     Terrain terrain;
     ZoneSpawn spawn;
     ZonePickups pickups;
@@ -547,15 +549,15 @@ struct ZoneSwapRig {
     {
         world.init(perm);
         phys.init(perm, &terrain.heightfield());
+        phys.set_jolt(&jolt);
     }
 
     bool swap(const char* dir)
     {
         for (u32 idx : world.entities().live_indices()) {
             Entity* e = world.entities().at(idx);
-            if (e && phys.body(e->body)) {
-                phys.body_destroy(e->body);
-                e->body = BodyHandle{};
+            if (e && e->body != kNoEntityBody) {
+                pickup_body_destroy(phys, *e);
             }
         }
         world.clear();
@@ -569,7 +571,7 @@ struct ZoneSwapRig {
     }
 };
 
-} // namespace
+}
 
 TEST(travel_zone, swapping_zones_returns_the_arena_to_where_it_started)
 {
@@ -596,14 +598,15 @@ TEST(travel_zone, swapping_zones_hands_back_every_pickup_body)
     rig.setup();
 
     CHECK(rig.swap("assets/zones/testzone"));
-    const u32 settled = rig.phys.bodies().count();
+    const u32 settled = rig.jolt.dynamicCount();
     CHECK(settled > 0);
 
     for (i32 i = 0; i < 6; i++) {
         CHECK(rig.swap(i % 2 == 0 ? "assets/zones/touge" : "assets/zones/testzone"));
     }
     CHECK(rig.swap("assets/zones/testzone"));
-    CHECK(rig.phys.bodies().count() == settled);
+    CHECK(rig.jolt.dynamicCount() == settled);
+    CHECK(rig.jolt.staticCount() <= 2u);
 }
 
 TEST(travel_zone, the_arriving_terrain_is_the_one_that_was_asked_for)
@@ -615,13 +618,11 @@ TEST(travel_zone, the_arriving_terrain_is_the_one_that_was_asked_for)
     const Vec3 car = rig.spawn.car_pos;
     const f32 ground = rig.terrain.heightfield().sample(car.x, car.z);
 
-    // The spawn has to be standing on the new heightfield, not the one it replaced.
     CHECK(f_abs(car.y - ground) < 2.0f);
     CHECK(contains(rig.terrain.heightfield().bounds(), Vec3{car.x, ground + 0.1f, car.z}));
 }
 
 namespace {
-
 struct GravityZoneRig {
     Arena perm{megabytes(256)};
     Arena scratch{megabytes(64)};
@@ -744,7 +745,7 @@ struct IslandTrack {
     }
 };
 
-} // namespace
+}
 
 TEST(scene_gravity, the_car_climbs_a_sideways_island_and_drives_onto_an_upside_down_one)
 {
@@ -921,7 +922,7 @@ TEST(scene_walk, walking_and_running_over_the_zone_stay_grounded_and_stop_cleanl
 {
     GravityZoneRig rig;
     CHECK(rig.load());
-    JoltWorld jolt;
+    ghost::engine::PhysicsWorld jolt;
     rig.phys.set_jolt(&jolt);
     const f32 headings[6] = {0.0f, 1.0f, 2.1f, 3.14f, 4.2f, 5.3f};
     for (u32 h = 0; h < 6; h++) {
@@ -956,7 +957,7 @@ TEST(scene_walk, walking_the_links_reaches_a_sideways_island_and_an_upside_down_
 {
     GravityZoneRig rig;
     CHECK(rig.load());
-    JoltWorld jolt;
+    ghost::engine::PhysicsWorld jolt;
     rig.phys.set_jolt(&jolt);
     const char* routes[2][2] = {{"isle_a", "isle_b"}, {"isle_g", "isle_c"}};
     for (u32 r = 0; r < 2; r++) {
@@ -1031,8 +1032,6 @@ TEST(scene_gravity, every_link_bends_gently_and_turns_gravity_slowly)
     }
 }
 
-
-
 TEST(scene_gravity, no_link_or_low_rock_sits_on_the_road)
 {
     GravityZoneRig rig;
@@ -1058,4 +1057,3 @@ TEST(scene_gravity, no_link_or_low_rock_sits_on_the_road)
         }
     }
 }
-

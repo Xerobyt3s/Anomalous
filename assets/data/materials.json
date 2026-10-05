@@ -1,0 +1,13 @@
+{
+  "_comment": "Crafting materials ground in the mortar. Every round needs one propellant dose; elemental doses decide the element. Ghost material names are placeholders. look: how a dropped one is drawn (glow, storm_orb, haze_bubble, wind_cloud, small_fire, thread_knot).",
+  "maxDoses": 3,
+  "turnsPerDose": 2.5,
+  "materials": [
+    { "name": "gunpowder", "display": "Gunpowder", "propellant": true, "color": [0.12, 0.12, 0.13] },
+    { "name": "ember_ash", "display": "Ember Ash", "element": "fire", "color": [0.85, 0.32, 0.08], "look": "small_fire" },
+    { "name": "gale_wisp", "display": "Gale Wisp", "element": "wind", "color": [0.7, 0.88, 0.95], "look": "wind_cloud" },
+    { "name": "storm_glass", "display": "Storm Glass", "element": "lightning", "color": [0.62, 0.66, 1.0], "look": "storm_orb" },
+    { "name": "ectoplasm", "display": "Ectoplasm", "element": "haze", "color": [0.18, 0.26, 0.62], "look": "haze_bubble" },
+    { "name": "effigy_thread", "display": "Effigy Thread", "element": "voodoo", "color": [0.42, 0.12, 0.5], "look": "thread_knot" }
+  ]
+}

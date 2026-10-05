@@ -2,30 +2,13 @@
 #include "physics/collide.h"
 #include "physics/heightfield.h"
 #include "physics/world.h"
-#include "render/device.h"
-#include "render/gpu_mesh.h"
 #include "world/terrain.h"
 
 namespace anom {
 namespace {
-
 constexpr u32 kCableIters = 8;
 
-Quat quat_y_to(Vec3 dir)
-{
-    const Vec3 up{0.0f, 1.0f, 0.0f};
-    const f32 d = dot(up, dir);
-    if (d > 0.9999f) {
-        return quat_identity();
-    }
-    if (d < -0.9999f) {
-        return quat_from_axis_angle(Vec3{1.0f, 0.0f, 0.0f}, kPi);
-    }
-    return quat_from_axis_angle(normalize(cross(up, dir)), std::acos(f_clamp(d, -1.0f, 1.0f)));
-}
-
 constexpr u32 kCableBoxCount = 14;
-constexpr u32 kCableNearBodies = 12;
 constexpr i32 kCableAnchorIdx =
     static_cast<i32>(static_cast<f32>(kCablePoints - 1)
                          * (kCableLength / (kCableLength + kReelLength))
@@ -53,53 +36,6 @@ constexpr CarBox kCarBoxes[kCableBoxCount] = {
     {{0.72f, -0.255f, 1.24f}, {0.10f, 0.31f, 0.31f}},
 };
 
-struct NearBody {
-    Vec3 pos;
-    Quat rot;
-    Vec3 half;
-};
-
-struct NearBodies {
-    NearBody items[kCableNearBodies];
-    u32 count = 0;
-};
-
-NearBodies gather_near_bodies(PhysWorld& phys, BodyHandle exclude_body, Vec3 root, Vec3 end,
-                              const Vec3* anchor)
-{
-    NearBodies near;
-    const RigidBody* exclude = phys.body(exclude_body);
-
-    Vec3 lo = vec_min(root, end);
-    Vec3 hi = vec_max(root, end);
-    if (anchor) {
-        lo = vec_min(lo, *anchor);
-        hi = vec_max(hi, *anchor);
-    }
-    const Vec3 margin{2.0f, 2.0f, 2.0f};
-    lo -= margin;
-    hi += margin;
-
-    for (const u32 slot : phys.bodies().live_indices()) {
-        if (near.count >= kCableNearBodies) {
-            break;
-        }
-        const RigidBody* body = phys.bodies().at(slot);
-        if (!body || body == exclude) {
-            continue;
-        }
-        if (body->pos.x < lo.x || body->pos.x > hi.x || body->pos.y < lo.y || body->pos.y > hi.y
-            || body->pos.z < lo.z || body->pos.z > hi.z) {
-            continue;
-        }
-        near.items[near.count].pos = body->pos;
-        near.items[near.count].rot = body->rot;
-        near.items[near.count].half = body->half_extents;
-        near.count++;
-    }
-    return near;
-}
-
 void push_out_of_box(Vec3& local, Vec3 center, Vec3 box_half)
 {
     const Vec3 d = local - center;
@@ -119,7 +55,7 @@ void push_out_of_box(Vec3& local, Vec3 center, Vec3 box_half)
     }
 }
 
-void cable_collide(Vec3& p, const CableSimInput& in, const NearBodies& near)
+void cable_collide(Vec3& p, const CableSimInput& in)
 {
     if (in.terrain) {
         const f32 floor_y = in.terrain->heightfield().sample(p.x, p.z) + kCableRadius + 0.005f;
@@ -142,12 +78,6 @@ void cable_collide(Vec3& p, const CableSimInput& in, const NearBodies& near)
         p = obs.pos + rotate(obs.rot, obs_local);
     }
 
-    for (u32 b = 0; b < near.count; b++) {
-        Vec3 body_local = rotate(conjugate(near.items[b].rot), p - near.items[b].pos);
-        push_out_of_box(body_local, Vec3{0.0f, 0.0f, 0.0f}, near.items[b].half);
-        p = near.items[b].pos + rotate(near.items[b].rot, body_local);
-    }
-
     if (in.phys) {
         Sphere sphere;
         sphere.center = p;
@@ -160,7 +90,7 @@ void cable_collide(Vec3& p, const CableSimInput& in, const NearBodies& near)
     }
 }
 
-} // namespace
+}
 
 void Cable::reset()
 {
@@ -228,12 +158,6 @@ void Cable::sim(const CableSimInput& in, f32 dt)
 
     const f32 seg = let_out / static_cast<f32>(kCablePoints - 1);
 
-    NearBodies near;
-    if (in.phys) {
-        near = gather_near_bodies(*in.phys, in.exclude_body, in.root,
-                                  in.end ? *in.end : in.root, in.anchor);
-    }
-
     for (u32 i = 1; i < kCablePoints; i++) {
         const bool pinned = (in.end && i == kCablePoints - 1)
                          || (aidx >= 0 && static_cast<i32>(i) == aidx);
@@ -281,39 +205,9 @@ void Cable::sim(const CableSimInput& in, f32 dt)
             if ((in.end && i == kCablePoints - 1) || (aidx >= 0 && static_cast<i32>(i) == aidx)) {
                 continue;
             }
-            cable_collide(p[i], in, near);
+            cable_collide(p[i], in);
         }
     }
 }
 
-void Cable::render(RenderDevice& device) const
-{
-    if (state == CableState::Stowed || !sim_init) {
-        return;
-    }
-
-    const GpuMesh* seg = device.assets().mesh("cable_seg");
-    for (u32 i = 0; i + 1 < kCablePoints; i++) {
-        const Vec3 delta = p[i + 1] - p[i];
-        const f32 len = length(delta);
-        if (len < 1e-5f) {
-            continue;
-        }
-        device.draw_mesh(seg, mat4_trs(p[i], quat_y_to(delta * (1.0f / len)),
-                                       Vec3{kCableRadius, len * 1.02f, kCableRadius}));
-    }
-
-    if (state != CableState::Dragged) {
-        return;
-    }
-    const Vec3 delta = p[kCablePoints - 1] - p[kCablePoints - 2];
-    const f32 len = length(delta);
-    const Quat rot = len > 1e-5f
-                       ? quat_y_to(delta * (1.0f / len))
-                             * quat_from_axis_angle(Vec3{1.0f, 0.0f, 0.0f}, -kPi * 0.5f)
-                       : quat_identity();
-    device.draw_mesh(device.assets().mesh("cable_plug"),
-                     mat4_trs(p[kCablePoints - 1], rot, Vec3{1.0f, 1.0f, 1.0f}));
 }
-
-} // namespace anom

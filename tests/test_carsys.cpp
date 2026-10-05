@@ -11,7 +11,6 @@
 using namespace anom;
 
 namespace {
-
 constexpr f32 kDt = 1.0f / 120.0f;
 
 struct CarRig {
@@ -45,7 +44,7 @@ struct CarRig {
     }
 };
 
-} // namespace
+}
 
 TEST(carsys, starts_with_a_healthy_car)
 {
@@ -446,7 +445,7 @@ TEST(world, spawn_and_despawn_entities)
     CHECK(e->mesh_name == "garage");
     CHECK(e->kind == EntityKind::Building);
     CHECK((e->flags & kEntityFlagCollides) != 0);
-    CHECK(!e->body.valid());
+    CHECK(e->body == kNoEntityBody);
 
     world.despawn(h);
     CHECK(world.count() == 0);

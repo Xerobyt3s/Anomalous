@@ -1,4 +1,5 @@
 #include "player/interact.h"
+#include "world/pickup_body.h"
 #include "audio/tapes.h"
 #include "carsys/carsys.h"
 #include "core/arena.h"
@@ -17,7 +18,6 @@
 
 namespace anom {
 namespace {
-
 constexpr f32 kHoodOpenForBay = 0.8f;
 constexpr f32 kDoorOpenForUse = 0.6f;
 constexpr f32 kExitLookYaw = 1.15f;
@@ -54,7 +54,7 @@ Ray chassis_local_ray(const RigidBody& body, Ray view_ray)
     return local;
 }
 
-} // namespace
+}
 
 struct Interact::Candidate {
     f32 t = 1e30f;
@@ -177,6 +177,13 @@ bool Interact::take_terminal_request()
     return value;
 }
 
+void Interact::adopt_holdings(const Interact& other)
+{
+    hands_ = other.hands_;
+    has_key_ = other.has_key_;
+    cable_drag_ = other.cable_drag_;
+}
+
 void Interact::perform(const InteractContext& ctx)
 {
     CarSys& sys = *ctx.sys;
@@ -261,8 +268,8 @@ void Interact::perform(const InteractContext& ctx)
                 hands_.condition = entity->aux_value;
                 hands_.aux = static_cast<i32>(entity->aux_data);
             }
-            if (entity->body.valid()) {
-                ctx.phys->body_destroy(entity->body);
+            if (entity->body != kNoEntityBody) {
+                pickup_body_destroy(*ctx.phys, *entity);
             }
             ctx.world->despawn(target_entity_);
         } else if (action_ == InteractAction::TerminalUse
@@ -377,11 +384,7 @@ EntityHandle interact_spawn_pickup(World& world, PhysWorld& phys, Item item, Vec
     entity->aux_data = static_cast<u32>(item.aux);
 
     if (item.kind != ITEM_KEY) {
-        entity->body = phys.body_create_box(pos, rot, item_cargo_half(item.kind),
-                                            f_max(item_mass(item.kind), 1.0f));
-        if (RigidBody* body = phys.body(entity->body)) {
-            body->vel = vel;
-        }
+        entity->body = pickup_body_create(phys, pos, rot, item_cargo_half(item.kind), f_max(item_mass(item.kind), 1.0f), vel);
     }
     return handle;
 }
@@ -522,7 +525,7 @@ void Interact::resolve_doors(Candidate& best, const InteractBoxes& boxes,
     const Vec3 com = ctx.veh->config().com_offset;
     const InteractBox& door_box = boxes.box(IBOX_DOOR);
     const Vec3 door_half = door_box.half;
-    // You get in on the driver's side; the other door only ever opens and shuts.
+
     const i32 driver_side = ctx.veh->config().seat_eye.x < 0.0f ? 0 : 1;
     f32 t = 0.0f;
 
@@ -540,7 +543,7 @@ void Interact::resolve_doors(Candidate& best, const InteractBoxes& boxes,
                                           false, "[E] open door");
                 } else if (side != driver_side) {
                     taken = false;
-                } else if (ctx.player->can_enter(*ctx.phys, ctx.veh)) {
+                } else if (!ctx.seat_taken && ctx.player->can_enter(*ctx.phys, ctx.veh)) {
                     taken = best.consider(t + 0.05f, InteractAction::EnterCar, center, door_half,
                                           false, "[E] enter car");
                 }
@@ -1109,7 +1112,9 @@ void Interact::update(const InteractBoxes& boxes, const InteractContext& ctx, f3
     } else {
         crank_latch_ = false;
     }
-    ctx.sys->crank_request = crank_latch_;
+    if (crank_latch_ && !ctx.preview) {
+        ctx.sys->crank_request = true;
+    }
 
     if (ctx.e_pressed) {
         press_latch_ = true;
@@ -1121,7 +1126,9 @@ void Interact::update(const InteractBoxes& boxes, const InteractContext& ctx, f3
                 if (press_latch_) {
                     hold_time_ += dt;
                     if (hold_time_ >= kInteractHoldTime) {
-                        perform(ctx);
+                        if (!ctx.preview) {
+                            perform(ctx);
+                        }
                         hold_time_ = 0.0f;
                         press_latch_ = false;
                     }
@@ -1155,7 +1162,9 @@ void Interact::update(const InteractBoxes& boxes, const InteractContext& ctx, f3
         } else if (press_latch_) {
             hold_time_ += dt;
             if (hold_time_ >= kInteractHoldTime) {
-                perform(ctx);
+                if (!ctx.preview) {
+                    perform(ctx);
+                }
                 hold_time_ = 0.0f;
                 press_latch_ = false;
             }
@@ -1182,7 +1191,9 @@ void Interact::update(const InteractBoxes& boxes, const InteractContext& ctx, f3
             if (press_latch_) {
                 hold_time_ += dt;
                 if (hold_time_ >= kInteractHoldTime) {
-                    perform(ctx);
+                    if (!ctx.preview) {
+                        perform(ctx);
+                    }
                     hold_time_ = 0.0f;
                     press_latch_ = false;
                 }
@@ -1205,7 +1216,9 @@ void Interact::update(const InteractBoxes& boxes, const InteractContext& ctx, f3
     } else {
         hold_progress_ = 0.0f;
         if (ctx.e_pressed && press_latch_) {
-            perform(ctx);
+            if (!ctx.preview) {
+                perform(ctx);
+            }
             press_latch_ = false;
         }
     }
@@ -1223,4 +1236,4 @@ bool Interact::drop(World& world, PhysWorld& phys, Vec3 origin, Vec3 dir, f32 po
     return true;
 }
 
-} // namespace anom
+}

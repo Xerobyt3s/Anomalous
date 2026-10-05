@@ -15,7 +15,6 @@
 #include "terminal/virus.h"
 
 namespace anom {
-
 class Arena;
 class DiskStore;
 class TapeLibrary;
@@ -33,6 +32,20 @@ enum class TermMode : u32 {
     Tapes,
     Dev,
     Travel,
+};
+
+struct TermMirror {
+    Screen screen;
+    TermMode mode = TermMode::Boot;
+    bool powered = false;
+    f32 pixelate = 1.0f;
+    f32 virus = 0.0f;
+    TermWire wires[kTermMaxWires];
+    u32 wire_count = 0;
+    Mat4 vp3d = mat4_identity();
+    f32 sweep = 0.0f;
+    f32 image_reveal = 1.0f;
+    i32 photo = -1;
 };
 
 class Terminal {
@@ -66,6 +79,8 @@ public:
 
     f32 pixelate();
     f32 virus_fx() const;
+    void mirror(TermMirror& out);
+    void adopt(const TermMirror& in);
 
 private:
     Program& program(TermMode mode);
@@ -101,7 +116,10 @@ private:
     TermMode mode_ = TermMode::Boot;
     f32 blink_ = 0.0f;
     bool powered_ = false;
+    bool mirrored_ = false;
+    f32 mirror_pixelate_ = 1.0f;
+    f32 mirror_virus_ = 0.0f;
     bool wants_off_ = false;
 };
 
-} // namespace anom
+}

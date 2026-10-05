@@ -8,11 +8,10 @@
 #include "physics/body.h"
 
 namespace anom {
-
 class Arena;
-struct GpuMesh;
 
 inline constexpr u32 kMaxEntities = 4096;
+inline constexpr u32 kNoEntityBody = 0xFFFFFFFFu;
 
 inline constexpr u32 kEntityFlagCollides = 1u << 0;
 inline constexpr u32 kEntityFlagInteractable = 1u << 1;
@@ -37,12 +36,11 @@ struct Entity {
     Quat rot;
     f32 scale;
     Vec3 half;
-    const GpuMesh* mesh;
     FixedString<32> mesh_name;
     u32 aux_kind;
     f32 aux_value;
     u32 aux_data;
-    BodyHandle body;
+    u32 body;
 };
 
 using EntityHandle = Handle<Entity>;
@@ -66,4 +64,4 @@ private:
     Pool<Entity> entities_;
 };
 
-} // namespace anom
+}

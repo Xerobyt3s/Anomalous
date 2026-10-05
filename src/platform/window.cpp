@@ -7,7 +7,6 @@
 
 namespace anom {
 namespace {
-
 void glfw_error_callback(int error, const char* description)
 {
     log_error("glfw: (%d) %s", error, description);
@@ -31,7 +30,7 @@ void GL_APIENTRY gl_debug_callback(GLenum source, GLenum type, GLuint id, GLenum
     }
 }
 
-} // namespace
+}
 
 Window::~Window()
 {
@@ -196,6 +195,11 @@ FramebufferSize Window::framebuffer_size() const
     return size;
 }
 
+void Window::set_vsync(bool on)
+{
+    glfwSwapInterval(on ? 1 : 0);
+}
+
 void Window::set_cursor_captured(bool captured)
 {
     if (!handle_ || cursor_captured_ == captured) {
@@ -209,4 +213,4 @@ void Window::set_cursor_captured(bool captured)
     input_.resync_mouse();
 }
 
-} // namespace anom
+}

@@ -11,7 +11,6 @@
 #include <string_view>
 
 namespace anom {
-
 class Arena;
 class CarSys;
 class PhysWorld;
@@ -113,6 +112,8 @@ struct InteractContext {
     Ray view_ray;
     bool e_down = false;
     bool e_pressed = false;
+    bool seat_taken = false;
+    bool preview = false;
 };
 
 class Interact {
@@ -138,6 +139,7 @@ public:
     Vec3 place_pos() const { return place_pos_; }
 
     bool take_terminal_request();
+    void adopt_holdings(const Interact& other);
     void set_tower(bool present, Vec3 port);
 
 private:
@@ -189,4 +191,4 @@ EntityHandle interact_spawn_pickup(World& world, PhysWorld& phys, Item item, Vec
 void interact_spawn_zone_pickups(World& world, PhysWorld& phys, const Terrain& terrain,
                                  const ZonePickups& pickups);
 
-} // namespace anom
+}

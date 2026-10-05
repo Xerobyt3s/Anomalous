@@ -1,5 +1,8 @@
 #include "test.h"
 
+#include "engine/physics/physics_world.h"
+#include "world/pickup_body.h"
+
 #include "carsys/items.h"
 #include "core/arena.h"
 #include "editor/editor.h"
@@ -15,11 +18,11 @@
 using namespace anom;
 
 namespace {
-
 struct Bay {
     Arena arena{megabytes(32)};
     Heightfield hf;
     PhysWorld phys;
+    ghost::engine::PhysicsWorld jolt;
     World world;
     Editor editor;
 
@@ -28,6 +31,7 @@ struct Bay {
         hf.alloc(arena, 64, 4.0f);
         hf.recompute_extents();
         phys.init(arena, &hf);
+        phys.set_jolt(&jolt);
         world.init(arena);
         editor.init(arena);
     }
@@ -49,7 +53,7 @@ struct Bay {
     }
 };
 
-} // namespace
+}
 
 TEST(editor, undo_removes_a_created_entity_and_redo_brings_it_back)
 {
@@ -159,13 +163,13 @@ TEST(editor, deleting_a_pickup_also_frees_its_body)
     const EntityHandle h = bay.add_pickup(ITEM_BATTERY, Vec3{3.0f, 1.0f, 3.0f});
     const Entity* e = bay.world.entity(h);
     CHECK(e != nullptr);
-    CHECK(e->body.valid());
-    CHECK(bay.phys.body(e->body) != nullptr);
-    const BodyHandle body = e->body;
+    CHECK(e->body != kNoEntityBody);
+    CHECK(pickup_has_body(bay.phys, *e));
+    const u32 body = e->body;
 
     bay.editor.select(bay.world, h);
     bay.editor.delete_selection(bay.world, bay.phys);
-    CHECK(bay.phys.body(body) == nullptr);
+    CHECK(!bay.jolt.valid(body));
 
     bay.editor.undo(bay.world, bay.phys);
     CHECK(bay.world.count() == 1);
@@ -173,7 +177,7 @@ TEST(editor, deleting_a_pickup_also_frees_its_body)
     CHECK(back != nullptr);
     CHECK(back->kind == EntityKind::PartPickup);
     CHECK(back->aux_kind == static_cast<u32>(ITEM_BATTERY));
-    CHECK(bay.phys.body(back->body) != nullptr);
+    CHECK(pickup_has_body(bay.phys, *back));
 }
 
 TEST(editor, duplicating_offsets_the_copy_and_selects_it)

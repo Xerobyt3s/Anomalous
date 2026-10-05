@@ -6,7 +6,6 @@
 struct GLFWwindow;
 
 namespace anom {
-
 struct FramebufferSize {
     i32 width;
     i32 height;
@@ -34,6 +33,7 @@ public:
     FramebufferSize framebuffer_size() const;
 
     void set_cursor_captured(bool captured);
+    void set_vsync(bool on);
     bool cursor_captured() const { return cursor_captured_; }
 
     Input& input() { return input_; }
@@ -54,4 +54,4 @@ private:
     bool glfw_owned_ = false;
 };
 
-} // namespace anom
+}

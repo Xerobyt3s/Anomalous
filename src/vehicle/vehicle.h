@@ -8,7 +8,6 @@
 #include <string_view>
 
 namespace anom {
-
 class Arena;
 class PhysWorld;
 
@@ -66,6 +65,17 @@ struct VehicleInput {
     bool handbrake = false;
 };
 
+struct CarWire {
+    Vec3 pos{};
+    Quat rot = quat_identity();
+    Vec3 vel{};
+    Vec3 angular_vel{};
+    Wheel wheels[kWheelCount];
+    Drivetrain train;
+    VehicleInput input;
+    f32 steer_deg = 0.0f;
+};
+
 void drivetrain_init(Drivetrain& train, const VehicleConfig& cfg);
 f32 drivetrain_rpm(const Drivetrain& train);
 f32 drivetrain_ratio(const Drivetrain& train, const VehicleConfig& cfg);
@@ -91,6 +101,8 @@ public:
     void teleport(PhysWorld& world, Vec3 pos, f32 yaw);
     void teleport(PhysWorld& world, Vec3 pos, Quat rot);
     void recover(PhysWorld& world);
+    CarWire wire(const PhysWorld& world) const;
+    void adopt(PhysWorld& world, const CarWire& wire);
 
     f32 forward_speed(const PhysWorld& world) const;
 
@@ -120,4 +132,4 @@ private:
     FixedString<128> cfg_path_;
 };
 
-} // namespace anom
+}

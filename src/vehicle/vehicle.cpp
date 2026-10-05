@@ -7,7 +7,6 @@
 
 namespace anom {
 namespace {
-
 constexpr f32 kMinGravity = 1.0f;
 constexpr f32 kRecoverLift = 1.2f;
 constexpr f32 kDamperVelClamp = 3.0f;
@@ -19,12 +18,10 @@ constexpr f32 kStickMinMass = 40.0f;
 constexpr u32 kMaxSuspProbes = 7;
 constexpr f32 kProbeSpread = 0.85f;
 constexpr f32 kProbeNormalBand = 0.02f;
-// Ride height of the underside proxy above the tread. At a couple of centimetres the
-// chassis spheres sat level with the contact patches and dragged the moment the
-// suspension loaded up, carrying weight the tyres should have had.
+
 constexpr f32 kChassisClearance = 0.20f;
 
-} // namespace
+}
 
 void Vehicle::apply_config(PhysWorld& world)
 {
@@ -153,6 +150,44 @@ void Vehicle::teleport(PhysWorld& world, Vec3 pos, Quat rot)
     steer_deg_ = 0.0f;
     input_ = VehicleInput{};
     drivetrain_init(train_, cfg_);
+}
+
+CarWire Vehicle::wire(const PhysWorld& world) const
+{
+    CarWire out;
+    if (const RigidBody* body = world.body(body_)) {
+        out.pos = body->pos;
+        out.rot = body->rot;
+        out.vel = body->vel;
+        out.angular_vel = body->angular_vel;
+    }
+    for (u32 i = 0; i < kWheelCount; i++) {
+        out.wheels[i] = wheels_[i];
+    }
+    out.train = train_;
+    out.input = input_;
+    out.steer_deg = steer_deg_;
+    return out;
+}
+
+void Vehicle::adopt(PhysWorld& world, const CarWire& wire)
+{
+    if (RigidBody* body = world.body(body_)) {
+        body->pos = wire.pos;
+        body->rot = wire.rot;
+        body->vel = wire.vel;
+        body->angular_vel = wire.angular_vel;
+        body->force_accum = Vec3{};
+        body->torque_accum = Vec3{};
+        body->asleep = 0;
+        body->sleep_timer = 0.0f;
+    }
+    for (u32 i = 0; i < kWheelCount; i++) {
+        wheels_[i] = wire.wheels[i];
+    }
+    train_ = wire.train;
+    input_ = wire.input;
+    steer_deg_ = wire.steer_deg;
 }
 
 void Vehicle::recover(PhysWorld& world)
@@ -525,11 +560,6 @@ void Vehicle::tick(PhysWorld& world, f32 dt)
     }
 }
 
-
-// Positive steer_rad is a right-hand turn, so the tyre swings toward the car's +X. A
-// rotation about +Y carries the forward axis the other way, hence the negation.
-// Dropping the car somewhere else leaves the suspension holding last frame's contacts,
-// which reads as a jolt on the first tick in the new zone.
 void Vehicle::reset_contacts()
 {
     for (Wheel& w : wheels_) {
@@ -561,4 +591,4 @@ Quat wheel_visual_rot(Quat body_rot, const Wheel& wheel, bool right_side)
     return q;
 }
 
-} // namespace anom
+}

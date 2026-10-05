@@ -1,11 +1,14 @@
 #pragma once
 
-#include "core/log.h"
+#include <spdlog/spdlog.h>
 
-#include <format>
-#include <string>
+namespace ghost::engine {
+void initLogging();
 
-#define GHOST_TRACE(...) ((void)0)
-#define GHOST_INFO(...) log_info("%s", std::format(__VA_ARGS__).c_str())
-#define GHOST_WARN(...) log_warn("%s", std::format(__VA_ARGS__).c_str())
-#define GHOST_ERROR(...) log_error("%s", std::format(__VA_ARGS__).c_str())
+}
+
+#define GHOST_TRACE(...) ::spdlog::trace(__VA_ARGS__)
+#define GHOST_DEBUG(...) ::spdlog::debug(__VA_ARGS__)
+#define GHOST_INFO(...) ::spdlog::info(__VA_ARGS__)
+#define GHOST_WARN(...) ::spdlog::warn(__VA_ARGS__)
+#define GHOST_ERROR(...) ::spdlog::error(__VA_ARGS__)

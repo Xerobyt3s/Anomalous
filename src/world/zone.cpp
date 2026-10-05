@@ -1,4 +1,5 @@
 #include "world/zone.h"
+#include "world/pickup_body.h"
 #include "assets/mesh_data.h"
 #include "carsys/items.h"
 #include "core/arena.h"
@@ -9,7 +10,7 @@
 #include "physics/heightfield.h"
 #include "physics/world.h"
 #include "platform/filesystem.h"
-#include "render/tree.h"
+#include "world/tree_gen.h"
 #include "world/entity.h"
 #include "world/terrain.h"
 
@@ -18,7 +19,6 @@
 
 namespace anom {
 namespace {
-
 class Tokens {
 public:
     explicit Tokens(std::string_view line) : cursor_(line) {}
@@ -333,7 +333,6 @@ void spawn_tower(World& world, PhysWorld& phys, Arena& scratch, const Terrain& t
     }
 }
 
-
 void collect_pickup(std::string_view line, ZonePickups* out_pickups)
 {
     if (!out_pickups || out_pickups->count >= kZoneMaxPickups) {
@@ -523,9 +522,10 @@ void write_entities(std::FILE* out, const World& world, const PhysWorld& phys,
             const ItemKind item = static_cast<ItemKind>(e->aux_kind);
             Vec3 pos = e->pos + rotate(e->rot, item_mesh_center(item));
             Quat rot = e->rot * conjugate(item_cargo_rot(item));
-            if (const RigidBody* body = phys.body(e->body)) {
-                pos = body->pos;
-                rot = body->rot;
+            PickupState body;
+            if (pickup_body_state(phys, *e, body)) {
+                pos = body.pos;
+                rot = body.rot;
             }
             const std::string_view id = item_id(item);
             std::fprintf(out, "pickup = %.*s %.3f %.3f %.2f %.3f %d\n",
@@ -566,7 +566,7 @@ void write_entities(std::FILE* out, const World& world, const PhysWorld& phys,
     }
 }
 
-} // namespace
+}
 
 bool zone_load(std::string_view zone_dir, Arena& arena, Arena& scratch, World& world,
                PhysWorld& phys, Terrain& terrain, ZoneSpawn& out_spawn,
@@ -638,9 +638,9 @@ bool zone_reload(std::string_view zone_dir, Arena& arena, Arena& scratch, World&
 
     Pool<Entity>& pool = world.entities();
     for (u32 idx = 0; idx < pool.capacity(); idx++) {
-        const Entity* e = pool.at(idx);
-        if (e && e->body.valid()) {
-            phys.body_destroy(e->body);
+        Entity* e = pool.at(idx);
+        if (e && e->body != kNoEntityBody) {
+            pickup_body_destroy(phys, *e);
         }
     }
     world.clear();
@@ -769,4 +769,4 @@ bool zone_save(std::string_view zone_dir, Arena& scratch, const World& world,
     return true;
 }
 
-} // namespace anom
+}

@@ -1,25 +1,12 @@
 #include "core/log.h"
 #include "core/types.h"
 
+#include <spdlog/spdlog.h>
+
 #include <cstdarg>
 #include <cstdio>
 
-#include <windows.h>
-
 namespace anom {
-namespace {
-
-const char* level_prefix(LogLevel level)
-{
-    switch (level) {
-    case LogLevel::Info: return "[info]  ";
-    case LogLevel::Warn: return "[warn]  ";
-    case LogLevel::Error: return "[error] ";
-    }
-    return "[?]     ";
-}
-
-} // namespace
 
 void log_msg(LogLevel level, const char* fmt, ...)
 {
@@ -29,11 +16,11 @@ void log_msg(LogLevel level, const char* fmt, ...)
     std::vsnprintf(message, sizeof(message), fmt, args);
     va_end(args);
 
-    char line[1100];
-    std::snprintf(line, sizeof(line), "%s%s\n", level_prefix(level), message);
-    std::fputs(line, stdout);
-    std::fflush(stdout);
-    OutputDebugStringA(line);
+    switch (level) {
+    case LogLevel::Info: spdlog::info("{}", message); break;
+    case LogLevel::Warn: spdlog::warn("{}", message); break;
+    case LogLevel::Error: spdlog::error("{}", message); break;
+    }
 }
 
 } // namespace anom

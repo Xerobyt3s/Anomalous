@@ -4,31 +4,22 @@
 #include "physics/collide.h"
 #include "physics/gravity_field.h"
 #include "physics/heightfield.h"
-#include "physics/jolt_world.h"
+#include "engine/physics/physics_world.h"
+#include "game/ballistics/surface.h"
+#include "math/glm_bridge.h"
+
+#include <vector>
 
 #include <algorithm>
 
 namespace anom {
 namespace {
-
-constexpr u32 kMaxPairs = 4096;
-constexpr f32 kBroadCell = 2.0f;
+constexpr u32 kHeightBlock = 4;
 constexpr f32 kGravityWakeSq = 0.05f;
 
 u64 static_key(u32 slot, u32 sphere, u32 feature)
 {
     return (static_cast<u64>(slot) << 40) | (static_cast<u64>(sphere) << 32) | feature;
-}
-
-u64 pair_key(u32 a, u32 b, u32 sphere, u32 side)
-{
-    return (1ull << 63) | (static_cast<u64>(a) << 40) | (static_cast<u64>(b) << 24)
-         | (static_cast<u64>(sphere) << 8) | side;
-}
-
-f32 body_reach(const RigidBody& body)
-{
-    return length(body.half_extents) + length(body.box_offset);
 }
 
 void tangent_basis(Vec3 n, Vec3& t0, Vec3& t1)
@@ -38,7 +29,7 @@ void tangent_basis(Vec3 n, Vec3& t0, Vec3& t1)
     t1 = cross(n, t0);
 }
 
-} // namespace
+}
 
 void PhysWorld::init(Arena& arena, const Heightfield* hf)
 {
@@ -46,8 +37,6 @@ void PhysWorld::init(Arena& arena, const Heightfield* hf)
     hf_ = hf;
     contacts_ = arena.push_array<PhysContact>(kMaxContacts);
     previous_ = arena.push_array<PhysContact>(kMaxContacts);
-    pair_a_ = arena.push_array<u32>(kMaxPairs);
-    pair_b_ = arena.push_array<u32>(kMaxPairs);
     contact_count_ = 0;
     previous_count_ = 0;
     sync_jolt();
@@ -58,13 +47,31 @@ void PhysWorld::sync_jolt()
     if (!jolt_) {
         return;
     }
-    jolt_->reset();
+    jolt_->clearStatics();
+    const auto ground = static_cast<std::uint64_t>(ghost::game::Surface::Ground);
     if (hf_ && hf_->valid()) {
-        jolt_->set_terrain(*hf_);
+        const u32 n = hf_->size_x() > hf_->size_z() ? hf_->size_x() : hf_->size_z();
+        const u32 padded = ((n + kHeightBlock - 1) / kHeightBlock) * kHeightBlock;
+        std::vector<float> samples(static_cast<size_t>(padded) * padded, kNoCollisionHeight);
+        for (u32 z = 0; z < hf_->size_z(); z++) {
+            for (u32 x = 0; x < hf_->size_x(); x++) {
+                samples[static_cast<size_t>(z) * padded + x] = hf_->height_at(x, z);
+            }
+        }
+        const Vec3 origin = hf_->origin();
+        jolt_->addHeightfield(samples, padded, glm::vec3(origin.x, 0.0f, origin.z),
+                              glm::vec3(hf_->cell_size(), 1.0f, hf_->cell_size()), kHeightBlock, ground);
     }
     const std::span<const StaticTri> tris = statics_.tris();
     if (!tris.empty()) {
-        jolt_->add_static_mesh(std::span<const Vec3>(&tris[0].a, tris.size() * 3));
+        std::vector<glm::vec3> points;
+        points.reserve(tris.size() * 3);
+        for (const StaticTri& t : tris) {
+            points.push_back(to_glm(t.a));
+            points.push_back(to_glm(t.b));
+            points.push_back(to_glm(t.c));
+        }
+        jolt_->addStaticMesh(points, ground);
     }
     jolt_->optimize();
 }
@@ -215,54 +222,9 @@ void PhysWorld::collect_static_contacts(u32 slot)
     }
 }
 
-void PhysWorld::collect_pair_contacts()
-{
-    for (u32 p = 0; p < pair_count_; p++) {
-        const u32 slot_a = pair_a_[p];
-        const u32 slot_b = pair_b_[p];
-        RigidBody& a = *bodies_.at(slot_a);
-        RigidBody& b = *bodies_.at(slot_b);
-
-        for (u32 i = 0; i < b.sphere_count; i++) {
-            Sphere sphere;
-            sphere.center = body_sphere_center(b, i);
-            sphere.radius = b.sphere_radius;
-            SphereContact hit{};
-            if (collide_sphere_obb(sphere, a, hit)) {
-                PhysContact contact{};
-                contact.key = pair_key(slot_a, slot_b, i, 0);
-                contact.body_a = slot_a;
-                contact.body_b = slot_b;
-                contact.point = hit.point;
-                contact.normal = hit.normal;
-                contact.depth = hit.depth;
-                add_contact(contact);
-            }
-        }
-        for (u32 i = 0; i < a.sphere_count; i++) {
-            Sphere sphere;
-            sphere.center = body_sphere_center(a, i);
-            sphere.radius = a.sphere_radius;
-            SphereContact hit{};
-            if (collide_sphere_obb(sphere, b, hit)) {
-                PhysContact contact{};
-                contact.key = pair_key(slot_a, slot_b, i, 1);
-                contact.body_a = slot_b;
-                contact.body_b = slot_a;
-                contact.point = hit.point;
-                contact.normal = hit.normal;
-                contact.depth = hit.depth;
-                add_contact(contact);
-            }
-        }
-    }
-}
-
 void PhysWorld::collect_contacts()
 {
     contact_count_ = 0;
-    pair_count_ = 0;
-    stats_.pair_tests = 0;
 
     const std::span<const u32> live = bodies_.live_indices();
     stats_.live_bodies = static_cast<u32>(live.size());
@@ -270,31 +232,6 @@ void PhysWorld::collect_contacts()
     for (const u32 slot : live) {
         collect_static_contacts(slot);
     }
-
-    for (std::size_t i = 0; i < live.size(); i++) {
-        const RigidBody& a = *bodies_.at(live[i]);
-        const f32 reach_a = body_reach(a);
-        for (std::size_t j = i + 1; j < live.size(); j++) {
-            const RigidBody& b = *bodies_.at(live[j]);
-            if (a.asleep && b.asleep) {
-                continue;
-            }
-            stats_.pair_tests++;
-            const f32 reach = reach_a + body_reach(b) + 0.2f;
-            if (distance_sq(a.pos, b.pos) > reach * reach) {
-                continue;
-            }
-            if (pair_count_ < kMaxPairs) {
-                const u32 slot_a = live[i] < live[j] ? live[i] : live[j];
-                const u32 slot_b = live[i] < live[j] ? live[j] : live[i];
-                pair_a_[pair_count_] = slot_a;
-                pair_b_[pair_count_] = slot_b;
-                pair_count_++;
-            }
-        }
-    }
-
-    collect_pair_contacts();
 
     std::sort(contacts_, contacts_ + contact_count_,
               [](const PhysContact& x, const PhysContact& y) { return x.key < y.key; });
@@ -463,27 +400,6 @@ void PhysWorld::update_sleep(f32 dt)
             body.sleep_timer = 0.0f;
         }
     }
-
-    for (u32 i = 0; i < contact_count_; i++) {
-        const PhysContact& c = contacts_[i];
-        if (c.normal_impulse <= 0.0f) {
-            continue;
-        }
-        if (c.body_a == kStaticBody) {
-            continue;
-        }
-        RigidBody* a = bodies_.at(c.body_a);
-        RigidBody* b = bodies_.at(c.body_b);
-        if (!a || !b) {
-            continue;
-        }
-        if (!a->asleep && b->asleep && length_sq(a->vel) > 0.02f) {
-            body_wake(*b);
-        }
-        if (!b->asleep && a->asleep && length_sq(b->vel) > 0.02f) {
-            body_wake(*a);
-        }
-    }
 }
 
 void PhysWorld::tick(f32 dt)
@@ -527,4 +443,4 @@ bool PhysWorld::raycast(Ray ray, f32 max_t, PhysRayHit* out_hit) const
     return found;
 }
 
-} // namespace anom
+}

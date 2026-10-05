@@ -36,6 +36,13 @@ struct ModelData {
     std::vector<ModelNode> nodes;
     std::vector<int> roots;
     std::vector<MeshData> meshes;
+
+    int findNode(std::string_view name) const;
+    std::vector<glm::mat4> bindLocals() const;
+
+    std::vector<glm::mat4> computeWorld(std::span<const glm::mat4> locals) const;
 };
+
+ModelData loadGltf(const std::filesystem::path& path);
 
 }

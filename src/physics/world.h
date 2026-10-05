@@ -6,14 +6,19 @@
 #include "physics/body.h"
 #include "physics/static_grid.h"
 
+#include <cfloat>
 #include <span>
 
+namespace ghost::engine {
+class PhysicsWorld;
+}
+
 namespace anom {
+inline constexpr f32 kNoCollisionHeight = FLT_MAX;
 
 class Arena;
 class Heightfield;
 class GravityField;
-class JoltWorld;
 
 struct PhysContact {
     u64 key;
@@ -50,7 +55,6 @@ struct PhysTuning {
 
 struct PhysStats {
     u32 live_bodies = 0;
-    u32 pair_tests = 0;
     u32 contacts = 0;
     u32 warm_started = 0;
 };
@@ -97,12 +101,12 @@ public:
     Vec3 up_at(Vec3 p) const;
     void set_gravity_field(const GravityField* field) { field_ = field; }
     const GravityField* gravity_field() const { return field_; }
-    void set_jolt(JoltWorld* jolt)
+    void set_jolt(ghost::engine::PhysicsWorld* jolt)
     {
         jolt_ = jolt;
         sync_jolt();
     }
-    JoltWorld* jolt() const { return jolt_; }
+    ghost::engine::PhysicsWorld* jolt() const { return jolt_; }
     void sync_jolt();
 
 private:
@@ -110,7 +114,6 @@ private:
     void integrate_positions(f32 dt);
     void collect_contacts();
     void collect_static_contacts(u32 slot);
-    void collect_pair_contacts();
     void warm_start();
     void solve(f32 dt);
     void update_sleep(f32 dt);
@@ -120,19 +123,15 @@ private:
     StaticGrid statics_;
     const Heightfield* hf_ = nullptr;
     const GravityField* field_ = nullptr;
-    JoltWorld* jolt_ = nullptr;
+    ghost::engine::PhysicsWorld* jolt_ = nullptr;
 
     PhysContact* contacts_ = nullptr;
     PhysContact* previous_ = nullptr;
     u32 contact_count_ = 0;
     u32 previous_count_ = 0;
 
-    u32* pair_a_ = nullptr;
-    u32* pair_b_ = nullptr;
-    u32 pair_count_ = 0;
-
     PhysTuning tuning_;
     PhysStats stats_;
 };
 
-} // namespace anom
+}

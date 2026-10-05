@@ -9,7 +9,6 @@
 using namespace anom;
 
 namespace {
-
 constexpr f32 kDt = 1.0f / 120.0f;
 
 Heightfield make_flat(Arena& arena, u32 size = 64, f32 cell = 2.0f)
@@ -38,7 +37,7 @@ void run(PhysWorld& world, i32 ticks)
     }
 }
 
-} // namespace
+}
 
 TEST(physics, body_falls_and_settles_on_ground)
 {
@@ -90,56 +89,6 @@ TEST(physics, body_sleeps_when_at_rest)
     CHECK(world.body(h)->asleep != 0);
 }
 
-TEST(physics, warm_started_stack_is_stable)
-{
-    Arena arena(megabytes(64));
-    Heightfield hf = make_flat(arena);
-    PhysWorld world;
-    world.init(arena, &hf);
-
-    BodyHandle handles[4];
-    for (i32 i = 0; i < 4; i++) {
-        handles[i] = spawn_box(world, Vec3{0.0f, 0.5f + static_cast<f32>(i) * 1.02f, 0.0f},
-                               Vec3{0.5f, 0.5f, 0.5f});
-    }
-
-    run(world, 900);
-
-    for (i32 i = 0; i < 4; i++) {
-        const RigidBody* body = world.body(handles[i]);
-        CHECK(body_state_valid(*body));
-        CHECK(body->pos.y > 0.25f);
-    }
-
-    for (i32 i = 1; i < 4; i++) {
-        CHECK(world.body(handles[i])->pos.y > world.body(handles[i - 1])->pos.y);
-    }
-
-    const f32 top = world.body(handles[3])->pos.y;
-    CHECK(top < 5.0f);
-}
-
-TEST(physics, stack_does_not_drift_sideways)
-{
-    Arena arena(megabytes(64));
-    Heightfield hf = make_flat(arena);
-    PhysWorld world;
-    world.init(arena, &hf);
-
-    BodyHandle handles[3];
-    for (i32 i = 0; i < 3; i++) {
-        handles[i] = spawn_box(world, Vec3{0.0f, 0.5f + static_cast<f32>(i) * 1.02f, 0.0f},
-                               Vec3{0.5f, 0.5f, 0.5f});
-    }
-    run(world, 900);
-
-    for (i32 i = 0; i < 3; i++) {
-        const RigidBody* body = world.body(handles[i]);
-        CHECK(f_abs(body->pos.x) < 0.6f);
-        CHECK(f_abs(body->pos.z) < 0.6f);
-    }
-}
-
 TEST(physics, simulation_is_deterministic)
 {
     const auto simulate = [](Vec3* out_positions) {
@@ -175,22 +124,6 @@ TEST(physics, simulation_is_deterministic)
         CHECK(first[i].y == second[i].y);
         CHECK(first[i].z == second[i].z);
     }
-}
-
-TEST(physics, boxes_do_not_interpenetrate)
-{
-    Arena arena(megabytes(64));
-    Heightfield hf = make_flat(arena);
-    PhysWorld world;
-    world.init(arena, &hf);
-
-    const BodyHandle a = spawn_box(world, Vec3{0.0f, 0.5f, 0.0f}, Vec3{0.5f, 0.5f, 0.5f});
-    const BodyHandle b = spawn_box(world, Vec3{0.4f, 0.5f, 0.0f}, Vec3{0.5f, 0.5f, 0.5f});
-
-    run(world, 600);
-
-    const f32 separation = distance(world.body(a)->pos, world.body(b)->pos);
-    CHECK(separation > 0.85f);
 }
 
 TEST(physics, raycast_hits_flat_ground)
@@ -239,30 +172,6 @@ TEST(physics, static_triangles_block_a_falling_body)
     const RigidBody* body = world.body(h);
     CHECK(body->pos.y > y);
     CHECK(body->pos.y < y + 1.5f);
-}
-
-TEST(physics, broadphase_only_tests_live_bodies)
-{
-    Arena arena(megabytes(64));
-    Heightfield hf = make_flat(arena);
-    PhysWorld world;
-    world.init(arena, &hf);
-
-    BodyHandle handles[8];
-    for (i32 i = 0; i < 8; i++) {
-        handles[i] = spawn_box(world, Vec3{static_cast<f32>(i) * 8.0f, 2.0f, 0.0f},
-                               Vec3{0.5f, 0.5f, 0.5f});
-    }
-    world.tick(kDt);
-    CHECK(world.stats().live_bodies == 8);
-    CHECK(world.stats().pair_tests == 28);
-
-    for (i32 i = 0; i < 6; i++) {
-        world.body_destroy(handles[i]);
-    }
-    world.tick(kDt);
-    CHECK(world.stats().live_bodies == 2);
-    CHECK(world.stats().pair_tests == 1);
 }
 
 TEST(physics, warm_starting_reports_reuse)

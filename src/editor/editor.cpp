@@ -1,4 +1,6 @@
 #include "editor/editor.h"
+#include "world/pickup_body.h"
+#include "render/entity_meshes.h"
 #include "assets/mesh_data.h"
 #include "carsys/items.h"
 #include "core/arena.h"
@@ -17,12 +19,16 @@
 #include "world/zone.h"
 
 namespace anom {
-namespace {
+const GpuMesh* Editor::mesh_of(u32 idx) const
+{
+    return meshes_ ? meshes_->get(idx) : nullptr;
+}
 
-Aabb entity_world_aabb(const Entity& e)
+namespace {
+Aabb entity_world_aabb(const Entity& e, const GpuMesh* mesh)
 {
     const Mat4 model = mat4_trs(e.pos, e.rot, Vec3{e.scale, e.scale, e.scale});
-    if (e.kind == EntityKind::Island && !e.mesh) {
+    if (e.kind == EntityKind::Island && !mesh) {
         const f32 r = e.half.x;
         const Aabb local{Vec3{-r, -e.aux_value, -r}, Vec3{r, 2.0f, r}};
         return transform(mat4_trs(e.pos, e.rot, Vec3{1.0f, 1.0f, 1.0f}), local);
@@ -31,8 +37,8 @@ Aabb entity_world_aabb(const Entity& e)
         const Aabb local{Vec3{-1.0f, -1.0f, -1.0f}, Vec3{1.0f, 1.0f, 1.0f}};
         return transform(mat4_trs(e.pos, quat_identity(), Vec3{1.0f, 1.0f, 1.0f}), local);
     }
-    if (e.mesh) {
-        return transform(model, e.mesh->bounds);
+    if (mesh) {
+        return transform(model, mesh->bounds);
     }
     const Aabb local{-e.half, e.half};
     return transform(mat4_trs(e.pos, e.rot, Vec3{1.0f, 1.0f, 1.0f}), local);
@@ -85,18 +91,7 @@ const char* gizmo_mode_name(GizmoMode mode)
     return "scale";
 }
 
-void freeze_body(RigidBody& body, Vec3 pos, Quat rot)
-{
-    body.pos = pos;
-    body.prev_pos = pos;
-    body.rot = rot;
-    body.prev_rot = rot;
-    body.vel = Vec3{0.0f, 0.0f, 0.0f};
-    body.angular_vel = Vec3{0.0f, 0.0f, 0.0f};
-    body_wake(body);
 }
-
-} // namespace
 
 bool operator==(const EntityRecord& a, const EntityRecord& b)
 {
@@ -126,9 +121,10 @@ void editor_record_entity(const World& world, const PhysWorld& phys, EntityHandl
     out.aux_data = e->aux_data;
     out.is_pickup = e->kind == EntityKind::PartPickup;
 
-    const RigidBody* body = phys.body(e->body);
-    out.body_pos = body ? body->pos : e->pos;
-    out.body_yaw = quat_yaw(body ? body->rot : e->rot);
+    PickupState body;
+    const bool has_body = pickup_body_state(phys, *e, body);
+    out.body_pos = has_body ? body.pos : e->pos;
+    out.body_yaw = quat_yaw(has_body ? body.rot : e->rot);
 }
 
 EntityHandle editor_respawn(World& world, PhysWorld& phys, const EntityRecord& rec)
@@ -160,8 +156,8 @@ void editor_destroy_entity(World& world, PhysWorld& phys, EntityHandle handle)
     if (!e) {
         return;
     }
-    if (e->body.valid()) {
-        phys.body_destroy(e->body);
+    if (e->body != kNoEntityBody) {
+        pickup_body_destroy(phys, *e);
     }
     world.despawn(handle);
 }
@@ -244,10 +240,7 @@ void Editor::undo(World& world, PhysWorld& phys)
             e->aux_value = op.before.aux_value;
             e->aux_data = op.before.aux_data;
             e->mesh_name = op.before.mesh_name;
-            if (RigidBody* body = phys.body(e->body)) {
-                freeze_body(*body, op.before.body_pos,
-                            quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, op.before.body_yaw));
-            }
+            pickup_freeze(phys, *e, op.before.body_pos, quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, op.before.body_yaw));
         }
     } else if (op.kind == EditorOpKind::Create) {
         editor_destroy_entity(world, phys, op.handle);
@@ -280,10 +273,7 @@ void Editor::redo(World& world, PhysWorld& phys)
             e->aux_value = op.after.aux_value;
             e->aux_data = op.after.aux_data;
             e->mesh_name = op.after.mesh_name;
-            if (RigidBody* body = phys.body(e->body)) {
-                freeze_body(*body, op.after.body_pos,
-                            quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, op.after.body_yaw));
-            }
+            pickup_freeze(phys, *e, op.after.body_pos, quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, op.after.body_yaw));
         }
     } else if (op.kind == EditorOpKind::Create) {
         const EntityHandle restored = editor_respawn(world, phys, op.after);
@@ -356,21 +346,22 @@ EntityHandle Editor::pick(const Camera& cam, const World& world, Arena& scratch,
     f32 best_t = 1e30f;
     for (u32 idx = 0; idx < pool.capacity(); idx++) {
         const Entity* e = pool.at(idx);
-        if (!e || (!e->mesh && e->kind != EntityKind::Trigger && e->kind != EntityKind::Gravity
+        const GpuMesh* mesh = mesh_of(idx);
+        if (!e || (!mesh && e->kind != EntityKind::Trigger && e->kind != EntityKind::Gravity
                    && e->kind != EntityKind::Island)) {
             continue;
         }
         if (e->kind == EntityKind::IslandLink && (e->aux_kind & 1u) == 0) {
             continue;
         }
-        if (e->kind == EntityKind::Gravity && contains(entity_world_aabb(*e), ray.origin)) {
+        if (e->kind == EntityKind::Gravity && contains(entity_world_aabb(*e, mesh), ray.origin)) {
             continue;
         }
         f32 t = 0.0f;
-        if (!ray_vs_aabb(ray, entity_world_aabb(*e), best_t, &t)) {
+        if (!ray_vs_aabb(ray, entity_world_aabb(*e, mesh), best_t, &t)) {
             continue;
         }
-        if (e->mesh && !e->mesh_name.empty() && e->kind != EntityKind::Island) {
+        if (mesh && !e->mesh_name.empty() && e->kind != EntityKind::Island) {
             const f32 exact = pick_mesh_t(*e, scratch, ray, best_t);
             if (exact < 0.0f) {
                 continue;
@@ -426,12 +417,13 @@ void Editor::drive_gizmo(const Input& input, const Camera& cam, World& world, Ph
         return;
     }
 
-    RigidBody* sel_body = phys.body(sel->body);
-    const bool no_scale = sel_body != nullptr || sel->kind == EntityKind::Trigger
+    PickupState sel_state;
+    const bool sel_body = pickup_body_state(phys, *sel, sel_state);
+    const bool no_scale = sel_body || sel->kind == EntityKind::Trigger
                        || sel->kind == EntityKind::Gravity || sel->kind == EntityKind::Island
                        || sel->kind == EntityKind::IslandLink;
 
-    Vec3 gizmo_pos = sel_body ? sel_body->pos : sel->pos;
+    Vec3 gizmo_pos = sel_body ? sel_state.pos : sel->pos;
     const Vec3 prev_pos = gizmo_pos;
     const f32 prev_yaw = sel_yaw_;
     const f32 prev_scale = sel->scale;
@@ -457,7 +449,7 @@ void Editor::drive_gizmo(const Input& input, const Camera& cam, World& world, Ph
     if (sel_body) {
         if (moved || turned) {
             const Quat rot = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, sel_yaw_);
-            freeze_body(*sel_body, gizmo_pos, rot);
+            pickup_freeze(phys, *sel, gizmo_pos, rot);
             if (sel->kind == EntityKind::PartPickup) {
                 const ItemKind kind = static_cast<ItemKind>(sel->aux_kind);
                 sel->rot = rot * item_cargo_rot(kind);
@@ -677,15 +669,16 @@ void Editor::render(Ui& ui, DebugDraw& debug, TextRenderer& text, const Input& i
 
     Entity* sel = world.entity(selection_);
     if (sel) {
-        const RigidBody* sel_body = phys.body(sel->body);
-        if (sel->mesh) {
-            const Aabb local = sel->mesh->bounds;
+        PickupState sel_state;
+        const bool sel_body = pickup_body_state(phys, *sel, sel_state);
+        if (const GpuMesh* sel_mesh = mesh_of(selection_.idx)) {
+            const Aabb local = sel_mesh->bounds;
             const Vec3 center_local = (local.min + local.max) * 0.5f;
             const Vec3 half = (local.max - local.min) * (0.5f * sel->scale);
             const Vec3 center = sel->pos + rotate(sel->rot, center_local * sel->scale);
             debug.obb(center, sel->rot, half, kDdYellow);
         }
-        gizmo_.render(debug, cam, sel_body ? sel_body->pos : sel->pos);
+        gizmo_.render(debug, cam, sel_body ? sel_state.pos : sel->pos);
     }
 
     ui.panel_begin("editor [f8]", 16.0f, 16.0f, 260.0f);
@@ -742,4 +735,4 @@ void Editor::render(Ui& ui, DebugDraw& debug, TextRenderer& text, const Input& i
     scene_.render(*this, ui, debug, cam, world, phys, terrain, veh, boxes, tapes, viewport);
 }
 
-} // namespace anom
+}

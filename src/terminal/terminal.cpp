@@ -7,7 +7,6 @@
 #include <cmath>
 
 namespace anom {
-
 void Terminal::init(Arena& arena, DiskStore& disks)
 {
     mail_.init();
@@ -83,8 +82,47 @@ TermRequest Terminal::take_request()
     return out;
 }
 
+void Terminal::mirror(TermMirror& out)
+{
+    out.screen = shell_.screen();
+    out.mode = mode_;
+    out.powered = powered_;
+    out.pixelate = pixelate();
+    out.virus = virus_fx();
+    out.wire_count = scene_.wire_count;
+    for (u32 i = 0; i < scene_.wire_count && i < kTermMaxWires; i++) {
+        out.wires[i] = scene_.wires[i];
+    }
+    out.vp3d = scene_.vp3d;
+    out.sweep = scene_.sweep;
+    out.image_reveal = scene_.image_reveal;
+    out.photo = scene_.photo;
+}
+
+void Terminal::adopt(const TermMirror& in)
+{
+    mirrored_ = true;
+    shell_.screen() = in.screen;
+    mode_ = in.mode;
+    powered_ = in.powered;
+    mirror_pixelate_ = in.pixelate;
+    mirror_virus_ = in.virus;
+    scene_.clear();
+    scene_.wire_count = in.wire_count < kTermMaxWires ? in.wire_count : kTermMaxWires;
+    for (u32 i = 0; i < scene_.wire_count; i++) {
+        scene_.wires[i] = in.wires[i];
+    }
+    scene_.vp3d = in.vp3d;
+    scene_.sweep = in.sweep;
+    scene_.image_reveal = in.image_reveal;
+    scene_.photo = in.photo;
+}
+
 f32 Terminal::pixelate()
 {
+    if (mirrored_) {
+        return mirror_pixelate_;
+    }
     if (!powered_) {
         return 1.0f;
     }
@@ -96,6 +134,9 @@ f32 Terminal::pixelate()
 
 f32 Terminal::virus_fx() const
 {
+    if (mirrored_) {
+        return mirror_virus_;
+    }
     return powered_ && virus_.active() && virus_.bursting() ? 1.0f : 0.0f;
 }
 
@@ -323,4 +364,4 @@ void Terminal::key(TermKey k)
     }
 }
 
-} // namespace anom
+}

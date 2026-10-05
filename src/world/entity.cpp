@@ -2,7 +2,6 @@
 #include "core/arena.h"
 
 namespace anom {
-
 void World::init(Arena& arena)
 {
     entities_.init(arena, kMaxEntities, "entities");
@@ -22,12 +21,11 @@ EntityHandle World::spawn(EntityKind kind, Vec3 pos, Quat rot, f32 scale,
     entity->rot = rot;
     entity->scale = scale;
     entity->half = Vec3{0.0f, 0.0f, 0.0f};
-    entity->mesh = nullptr;
-    entity->body = BodyHandle{};
+    entity->body = kNoEntityBody;
     if (!mesh_name.empty()) {
         entity->mesh_name.assign(mesh_name);
     }
     return handle;
 }
 
-} // namespace anom
+}

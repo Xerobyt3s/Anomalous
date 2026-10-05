@@ -86,15 +86,6 @@ set(ANOMALOUS_CORE_SOURCES
     src/editor/editor_brush.cpp
     src/editor/editor_scene.cpp
     src/editor/gizmo.cpp
-    src/engine/assets/asset_path.cpp
-    src/engine/debug/imgui_layer.cpp
-    src/engine/render/mesh.cpp
-    src/game/fx/draw_order.cpp
-    src/game/fx/lightning.cpp
-    src/engine/render/post_process.cpp
-    src/engine/render/primitives.cpp
-    src/engine/render/shader.cpp
-    src/engine/render/texture.cpp
     src/core/config.cpp
     src/core/log.cpp
     src/core/version.cpp
@@ -128,7 +119,6 @@ set(ANOMALOUS_CORE_SOURCES
     src/physics/collide.cpp
     src/physics/gravity_field.cpp
     src/physics/heightfield.cpp
-    src/physics/jolt_world.cpp
     src/physics/static_grid.cpp
     src/physics/world.cpp
     src/render/camera.cpp
@@ -137,6 +127,8 @@ set(ANOMALOUS_CORE_SOURCES
     src/render/text.cpp
     src/render/asset_cache.cpp
     src/render/device.cpp
+    src/render/cable_render.cpp
+    src/render/entity_meshes.cpp
     src/render/screenshot.cpp
     src/render/shader_set.cpp
     src/render/sky.cpp
@@ -156,6 +148,13 @@ set(ANOMALOUS_CORE_SOURCES
     src/world/terrain.cpp
     src/world/weather.cpp
     src/world/zone.cpp
+    src/world/tree_gen.cpp
+    src/world/pickup_body.cpp
+    src/app/player_view.cpp
+    src/sim/sim.cpp
+    src/sim/dummy.cpp
+    src/sim/sim_net.cpp
+    src/net/session.cpp
     src/platform/clock.cpp
     src/platform/filesystem.cpp
     src/platform/gl_loader.cpp
@@ -183,19 +182,6 @@ set(ANOMALOUS_CORE_HEADERS
     src/editor/editor_brush.h
     src/editor/editor_scene.h
     src/editor/gizmo.h
-    src/engine/assets/asset_path.h
-    src/engine/assets/model.h
-    src/engine/debug/imgui_layer.h
-    src/engine/render/camera.h
-    src/engine/render/gl_handle.h
-    src/engine/render/mesh.h
-    src/game/fx/draw_order.h
-    src/game/fx/lightning.h
-    src/engine/render/post_process.h
-    src/engine/render/primitives.h
-    src/engine/render/shader.h
-    src/engine/render/texture.h
-    src/engine/debug/log.h
     src/math/glm_bridge.h
     src/core/config.h
     src/core/fixed_string.h
@@ -238,7 +224,6 @@ set(ANOMALOUS_CORE_HEADERS
     src/physics/collide.h
     src/physics/gravity_field.h
     src/physics/heightfield.h
-    src/physics/jolt_world.h
     src/physics/static_grid.h
     src/physics/world.h
     src/render/camera.h
@@ -247,6 +232,8 @@ set(ANOMALOUS_CORE_HEADERS
     src/render/text.h
     src/render/asset_cache.h
     src/render/device.h
+    src/render/cable_render.h
+    src/render/entity_meshes.h
     src/render/gpu_mesh.h
     src/render/screenshot.h
     src/render/shader_set.h
@@ -266,6 +253,13 @@ set(ANOMALOUS_CORE_HEADERS
     src/world/terrain.h
     src/world/weather.h
     src/world/zone.h
+    src/world/tree_gen.h
+    src/world/pickup_body.h
+    src/app/player_view.h
+    src/sim/sim.h
+    src/sim/player_slot.h
+    src/sim/wire.h
+    src/net/session.h
     src/platform/clock.h
     src/platform/filesystem.h
     src/platform/gl_loader.h
@@ -274,6 +268,27 @@ set(ANOMALOUS_CORE_HEADERS
     src/platform/platform_info.h
     src/platform/window.h
 )
+
+file(GLOB_RECURSE GHOST_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/engine/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/engine/*.h"
+)
+foreach(dir ammo audio ballistics crafting fx ghosts net player weapons world)
+    file(GLOB_RECURSE GHOST_GAME_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/game/${dir}/*.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/game/${dir}/*.h"
+    )
+    list(APPEND GHOST_SOURCES ${GHOST_GAME_SOURCES})
+endforeach()
+list(APPEND GHOST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/game/events.h")
+
+add_library(ghost STATIC ${GHOST_SOURCES})
+target_include_directories(ghost PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(ghost PUBLIC GHOST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+target_link_libraries(ghost
+    PUBLIC anomalous_options anomalous_headers anomalous_graphics anomalous_ghost_deps
+)
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${GHOST_SOURCES})
 
 add_library(anomalous_core STATIC
     ${ANOMALOUS_CORE_SOURCES}
@@ -284,12 +299,10 @@ target_include_directories(anomalous_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
-target_compile_definitions(anomalous_core PUBLIC
-    GHOST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
-)
+
 
 target_link_libraries(anomalous_core
-    PUBLIC anomalous_options anomalous_headers anomalous_graphics
+    PUBLIC anomalous_options anomalous_headers anomalous_graphics ghost
     PRIVATE anomalous_external
 )
 
@@ -298,8 +311,10 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES
     ${ANOMALOUS_CORE_HEADERS})
 
 add_executable(anomalous
-    src/game/game.cpp
-    src/game/main.cpp
+    src/app/game.cpp
+    src/app/main.cpp
+    src/app/player_bodies.cpp
+    src/app/player_bodies.h
 )
 
 target_link_libraries(anomalous PRIVATE anomalous_core)

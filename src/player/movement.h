@@ -1,11 +1,14 @@
 #pragma once
 
 #include "core/types.h"
+#include "game/player/player.h"
 #include "math/vmath.h"
 
-namespace anom {
+namespace ghost::engine {
+class PhysicsWorld;
+}
 
-class JoltWorld;
+namespace anom {
 class GravityField;
 
 struct MoveCommand {
@@ -14,11 +17,16 @@ struct MoveCommand {
     bool jump = false;
     bool crouch = false;
     bool crawl = false;
+    bool aim = false;
+    bool holster = false;
+    bool hands_busy = false;
 };
 
 struct MoveTuning {
-    f32 walk_speed = 4.0f;
-    f32 sprint_speed = 6.4f;
+    f32 walk_speed = 3.64f;
+    f32 sprint_speed = 5.82f;
+    f32 aim_speed = 1.7f;
+    f32 busy_speed = 1.9f;
     f32 ground_accel = 22.0f;
     f32 ground_decel = 28.0f;
     f32 air_accel = 4.0f;
@@ -46,15 +54,15 @@ struct MoveTuning {
     f32 belly_friction = 6.0f;
     f32 up_turn_ground = 3.2f;
     f32 up_turn_air = 1.7f;
+    f32 roll_time = 0.3f;
+    f32 draw_time = 0.45f;
+    f32 holster_time = 0.35f;
+    f32 holstered_speed = 1.1f;
+    f32 downed_height = 0.65f;
+    f32 downed_eye_height = 0.35f;
 };
 
-enum class Stance : u32 {
-    Stand,
-    Crouch,
-    Slide,
-    Crawl,
-    Dive,
-};
+using Stance = ghost::game::Stance;
 
 struct MoveState {
     Vec3 pos{};
@@ -75,6 +83,17 @@ struct MoveState {
     f32 field_presence = 0.0f;
     Vec3 ground_vel{};
     Vec3 ground_normal{0.0f, 1.0f, 0.0f};
+    bool aiming = false;
+    bool holstered = true;
+    f32 holster = 1.0f;
+    f32 haste_time = 0.0f;
+    f32 haste_scale = 1.0f;
+    f32 shroud_time = 0.0f;
+    f32 health = 1.0f;
+    f32 since_hurt = 1e3f;
+    bool downed = false;
+    f32 lie_yaw = 0.0f;
+    f32 roll = 0.0f;
 };
 
 Vec3 frame_up(Quat frame);
@@ -83,11 +102,19 @@ Vec3 frame_right(Quat frame, f32 yaw);
 Vec3 frame_view(Quat frame, f32 yaw, f32 pitch);
 Quat frame_turn_up(Quat frame, Vec3 new_up);
 void frame_view_angles(Quat frame, Vec3 dir, f32& yaw, f32& pitch);
+ghost::game::PlayerState ghost_state(const MoveState& s);
 
 class Movement {
 public:
-    void init(JoltWorld* jolt, Vec3 feet, Vec3 up, f32 yaw);
-    void attach(JoltWorld* jolt);
+    void init(ghost::engine::PhysicsWorld* jolt, Vec3 feet, Vec3 up, f32 yaw);
+    void set_character(u32 id) { character_ = id; }
+    void adopt(const Movement& other);
+    u32 character() const { return character_; }
+    void apply_haste(f32 duration, f32 scale);
+    void apply_shroud(f32 duration);
+    void set_vitals(f32 health, f32 since_hurt, bool downed);
+    bool hidden_from_ghosts() const { return state_.shroud_time > 0.0f; }
+    void attach(ghost::engine::PhysicsWorld* jolt);
     void teleport(Vec3 feet);
     void align_up(Vec3 up);
     void settle(const GravityField* field);
@@ -109,11 +136,16 @@ private:
     void turn_up(Vec3 target, f32 dt);
     void apply_stance_height();
 
-    JoltWorld* jolt_ = nullptr;
+    void update_lying(Stance before, f32 speed_before, Vec3 planar, f32 dt);
+
+    int id() const { return static_cast<int>(character_); }
+
+    ghost::engine::PhysicsWorld* jolt_ = nullptr;
+    u32 character_ = 0;
     MoveTuning tuning_;
     MoveState state_;
     MoveState previous_;
     f32 speed_mul_ = 1.0f;
 };
 
-} // namespace anom
+}
