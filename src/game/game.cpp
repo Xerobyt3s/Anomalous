@@ -1,4 +1,5 @@
 #include "game/game.h"
+#include "math/glm_bridge.h"
 #include "assets/mesh_data.h"
 #include "carsys/items.h"
 #include "core/arena.h"
@@ -16,6 +17,8 @@
 #include "render/text.h"
 #include "render/sky.h"
 #include "world/destination.h"
+
+#include <exception>
 
 namespace anom {
 namespace {
@@ -53,6 +56,8 @@ constexpr f32 kJumpCollapse = 0.85f;
 constexpr f32 kJumpArrive = 1.10f;
 constexpr f32 kJumpCarrySpeed = 0.75f;
 constexpr u32 kArcSteps = 6;
+constexpr f32 kArcGlowToIntensity = 1.0f / 6.0f;
+constexpr f32 kArcHaloScale = 6.0f;
 constexpr Vec3 kBuildingPressMargin{0.6f, 0.0f, 0.6f};
 constexpr Vec3 kTerminalScreenOffset{0.0f, 0.047f, 0.170f};
 constexpr Vec3 kTerminalScreenScale{0.304f, 0.19f, 1.0f};
@@ -126,8 +131,10 @@ bool Game::init(RenderDevice& device, FontChain& fonts, Arena& perm, Arena& scra
     if (!tree_render_.init(scratch)) {
         return false;
     }
-    if (!bolt_.init(perm)) {
-        return false;
+    try {
+        lightning_.emplace();
+    } catch (const std::exception& e) {
+        log_error("game: lightning unavailable: %s", e.what());
     }
 
     editor_.init(perm);
@@ -383,6 +390,9 @@ void Game::handle_input(Window& window, const Input& input, f32 frame_dt)
         if (input.pressed(Key::F7)) {
             toggles_.tuning = !toggles_.tuning;
         }
+        if (input.pressed(Key::F9)) {
+            toggles_.debug_panels = !toggles_.debug_panels;
+        }
         if (input.pressed(Key::F8)) {
             editor_.toggle(world_, phys_);
             if (editor_.active()) {
@@ -429,7 +439,7 @@ void Game::handle_input(Window& window, const Input& input, f32 frame_dt)
         return;
     }
 
-    window.set_cursor_captured(context_.cursor_captured() && !toggles_.tuning);
+    window.set_cursor_captured(context_.cursor_captured() && !toggles_.tuning && !toggles_.debug_panels);
     if (window.cursor_captured()) {
         player_.look(input.mouse_delta().x, input.mouse_delta().y);
     }
@@ -645,8 +655,7 @@ static Vec3 snap_to_hull(Vec3 local, Vec3 half)
 
 void Game::draw_coil_arcs(RenderDevice& device, DebugDraw& debug)
 {
-    bolt_.begin_frame();
-    if (!carsys_.parts[PART_COIL].installed || travel_charge_ < kArcOnsetCharge) {
+    if (!lightning_ || !carsys_.parts[PART_COIL].installed || travel_charge_ < kArcOnsetCharge) {
         return;
     }
     const RigidBody* body = phys_.body(vehicle_.body());
@@ -667,42 +676,65 @@ void Game::draw_coil_arcs(RenderDevice& device, DebugDraw& debug)
         return static_cast<f32>(rng & 0xFFFFFFu) / 16777216.0f;
     };
 
-    Vec3 path[kBoltMaxPoints];
+    const Vec3 tint = lerp(Vec3{0.26f, 0.46f, 1.00f}, Vec3{0.44f, 0.62f, 1.00f}, heat);
+    const f32 glow = (5.0f + 7.0f * heat) * kArcGlowToIntensity;
+    ghost::game::BoltStyle style;
+    style.color = to_glm(tint);
+    style.haloScale = kArcHaloScale;
+
+    lightning_->begin(to_glm(device.view_proj()), to_glm(camera_.pos));
 
     const u32 body_arcs = 2 + static_cast<u32>(heat * 9.0f);
     for (u32 arc = 0; arc < body_arcs; arc++) {
-        Vec3 local = snap_to_hull(Vec3{(next() - 0.5f) * 2.2f * half.x,
-                                       (next() - 0.5f) * 2.2f * half.y,
-                                       (next() - 0.5f) * 2.2f * half.z},
-                                  half);
-        path[0] = local;
+        Vec3 walk[kArcSteps + 1];
+        walk[0] = snap_to_hull(Vec3{(next() - 0.5f) * 2.2f * half.x, (next() - 0.5f) * 2.2f * half.y,
+                                    (next() - 0.5f) * 2.2f * half.z},
+                               half);
         const f32 step = 0.16f + 0.22f * next();
         for (u32 i = 0; i < kArcSteps; i++) {
-            local = snap_to_hull(local + Vec3{(next() - 0.5f) * step, (next() - 0.5f) * step,
-                                              (next() - 0.5f) * step * 1.6f},
-                                 half);
-            path[i + 1] = local;
+            walk[i + 1] = snap_to_hull(walk[i] + Vec3{(next() - 0.5f) * step, (next() - 0.5f) * step,
+                                                      (next() - 0.5f) * step * 1.6f},
+                                       half);
         }
-        u32 count = BoltRenderer::subdivide(path, kArcSteps + 1, kBoltMaxPoints, 3, 0.16f, rng);
-        for (u32 i = 0; i < count; i++) {
-            path[i] = transform_point(base, snap_to_hull(path[i], half) - com);
+        ghost::game::BoltParams params;
+        params.levels = 2;
+        params.jaggedness = 0.16f;
+        params.branches = 0;
+        ghost::game::Bolt bolt;
+        ghost::game::BoltPath& path = bolt.paths.emplace_back();
+        for (u32 i = 0; i < kArcSteps; i++) {
+            const ghost::game::Bolt segment =
+                ghost::game::buildBolt(to_glm(walk[i]), to_glm(walk[i + 1]), rng + i * 7919u, params);
+            const std::vector<glm::vec3>& points = segment.paths[0].points;
+            for (size_t k = i == 0 ? 0 : 1; k < points.size(); k++) {
+                path.points.push_back(points[k]);
+            }
         }
-        bolt_.channel({path, count}, 0.014f, 0.55f + 0.55f * heat);
+        for (size_t k = 0; k < path.points.size(); k++) {
+            path.points[k] = to_glm(transform_point(base, snap_to_hull(from_glm(path.points[k]), half) - com));
+            path.width.push_back(1.0f);
+            path.reach.push_back(static_cast<f32>(k) / static_cast<f32>(path.points.size() - 1));
+        }
+        style.width = 0.014f;
+        style.intensity = (0.55f + 0.55f * heat) * glow;
+        lightning_->draw(bolt, style);
     }
 
-    // Discharges off the toroid down onto the roof.
-    const Vec3 crown = transform_point(base, part_def(PART_COIL).socket_pos - com
-                                                 + Vec3{0.0f, 0.43f, 0.0f});
+    const Vec3 crown = transform_point(base, part_def(PART_COIL).socket_pos - com + Vec3{0.0f, 0.43f, 0.0f});
     const u32 crown_arcs = 1 + static_cast<u32>(heat * 5.0f);
     for (u32 arc = 0; arc < crown_arcs; arc++) {
-        path[0] = crown;
-        path[1] = transform_point(base, Vec3{(next() - 0.5f) * 1.6f * half.x, half.y * 0.92f,
-                                             (next() - 0.5f) * 1.4f * half.z} - com);
-        const u32 count = BoltRenderer::subdivide(path, 2, kBoltMaxPoints, 6, 0.20f, rng);
-        bolt_.channel({path, count}, 0.026f, 0.9f + 0.7f * heat);
+        const Vec3 roof = transform_point(base, Vec3{(next() - 0.5f) * 1.6f * half.x, half.y * 0.92f,
+                                                     (next() - 0.5f) * 1.4f * half.z} - com);
+        ghost::game::BoltParams params;
+        params.levels = 6;
+        params.jaggedness = 0.20f;
+        params.branches = 1;
+        style.width = 0.026f;
+        style.intensity = (0.9f + 0.7f * heat) * glow;
+        lightning_->draw(ghost::game::buildBolt(to_glm(crown), to_glm(roof), rng + arc * 104729u, params), style);
+        next();
     }
 
-    // Earthing arcs at the contact patches, and the tyres start to cook.
     for (u32 w = 0; w < kWheelCount; w++) {
         const Wheel& wheel = vehicle_.wheel(w);
         if (!wheel.grounded || heat < 0.25f) {
@@ -711,19 +743,22 @@ void Game::draw_coil_arcs(RenderDevice& device, DebugDraw& debug)
         const Vec3 contact = wheel.contact_point;
         const u32 sparks = 1 + static_cast<u32>(heat * 3.0f);
         for (u32 i = 0; i < sparks; i++) {
-            path[0] = contact;
-            path[1] = contact + Vec3{(next() - 0.5f) * 0.30f, 0.10f + next() * 0.22f,
-                                     (next() - 0.5f) * 0.30f};
-            const u32 count = BoltRenderer::subdivide(path, 2, kBoltMaxPoints, 4, 0.22f, rng);
-            bolt_.channel({path, count}, 0.018f, 0.7f + 0.5f * heat);
+            const Vec3 tip = contact + Vec3{(next() - 0.5f) * 0.30f, 0.10f + next() * 0.22f,
+                                            (next() - 0.5f) * 0.30f};
+            ghost::game::BoltParams params;
+            params.levels = 4;
+            params.jaggedness = 0.22f;
+            params.branches = 0;
+            style.width = 0.018f;
+            style.intensity = (0.7f + 0.5f * heat) * glow;
+            lightning_->draw(ghost::game::buildBolt(to_glm(contact), to_glm(tip), rng + i * 31u + w, params), style);
         }
-        debug.circle(contact + Vec3{0.0f, 0.02f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f},
-                     0.18f + 0.22f * heat,
+        debug.circle(contact + Vec3{0.0f, 0.02f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f}, 0.18f + 0.22f * heat,
                      dd_rgba(30, 20, 16, static_cast<u8>(90 + 120 * heat)));
     }
 
-    const Vec3 channel = lerp(Vec3{0.26f, 0.46f, 1.00f}, Vec3{0.44f, 0.62f, 1.00f}, heat);
-    bolt_.draw(device, channel, 5.0f + 7.0f * heat);
+    lightning_->end();
+    device.reset_state_cache();
 }
 
 void Game::draw_debug_overlays(DebugDraw& debug)
@@ -1186,6 +1221,7 @@ void Game::draw_viewmodel(RenderDevice& device)
     const Quat rot = camera_.frame * quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, -camera_.yaw);
     const Vec3 pos = hands_item_pos() - rotate(rot, item_mesh_center(held.kind)) * scale;
     const Mat4 base = mat4_trs(pos, rot, Vec3{scale, scale, scale});
+    device.begin_viewmodel();
     device.draw_mesh(assets.mesh(item_mesh(held.kind)), base);
 
     const u32 screen_texture = terminal_screen_texture();
@@ -1194,6 +1230,7 @@ void Game::draw_viewmodel(RenderDevice& device)
                                              kTerminalScreenScale),
                              screen_texture, 0.0f);
     }
+    device.end_viewmodel();
 }
 
 void Game::update_camera_item(const Input& input, f32 frame_dt)

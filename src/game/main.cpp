@@ -1,7 +1,9 @@
 #include "assets/watcher.h"
+#include "carsys/items.h"
 #include "core/arena.h"
 #include "core/log.h"
 #include "core/version.h"
+#include "engine/debug/imgui_layer.h"
 #include "game/game.h"
 #include "math/vmath.h"
 #include "platform/clock.h"
@@ -21,6 +23,8 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
+
+#include <imgui.h>
 
 namespace {
 
@@ -47,6 +51,7 @@ struct Options {
     bool have_carat = false;
     anom::Vec3 carat{};
     bool have_playerat = false;
+    const char* hold = nullptr;
     anom::Vec3 playerat{};
     f32 playerat_yaw = 0.0f;
     const char* zone = "assets/zones/testzone";
@@ -80,6 +85,8 @@ Options parse_options(int argc, char** argv)
             options.screenshot = argv[i] + 13;
         } else if (std::strncmp(argv[i], "--exposure=", 11) == 0) {
             options.exposure = static_cast<f32>(std::atof(argv[i] + 11));
+        } else if (std::strncmp(argv[i], "--hold=", 7) == 0) {
+            options.hold = argv[i] + 7;
         } else if (std::strncmp(argv[i], "--tod=", 6) == 0) {
             options.time_of_day = static_cast<f32>(std::atof(argv[i] + 6));
         } else if (std::strncmp(argv[i], "--rain=", 7) == 0) {
@@ -177,6 +184,7 @@ int main(int argc, char** argv)
     if (!window.create("Anomalous", options.width, options.height)) {
         return 1;
     }
+    ghost::engine::ImGuiLayer imgui(window.handle());
 
     FileWatcher watcher;
     RenderDevice device;
@@ -208,11 +216,11 @@ int main(int argc, char** argv)
     env.sun_dir = -sun_direction_for_time(env.time_of_day);
     game.set_environment(env);
 
-    RetroFx retro;
-    retro.enabled = options.retro;
-    device.set_retro_fx(retro);
+    if (!options.retro && device.post()) {
+        device.post()->settings().mode = ghost::engine::PostProcess::Mode::Native;
+    }
 
-    for (const char* name : {"mesh", "glass", "rain", "snow", "debug2d", "blit", "screen"}) {
+    for (const char* name : {"lit", "glass", "rain", "snow", "debug2d", "blit", "screen"}) {
         device.shaders().program(name);
     }
 
@@ -233,6 +241,9 @@ int main(int argc, char** argv)
         const f32 ground = game.terrain().heightfield().sample(options.carat.x, options.carat.y);
         game.vehicle().teleport(game.phys(), anom::Vec3{options.carat.x, ground + 1.0f, options.carat.y},
                                 options.carat.z);
+    }
+    if (options.hold) {
+        game.interact().hands().kind = anom::item_from_id(options.hold);
     }
     if (options.have_playerat) {
         game.player().init(options.playerat, options.playerat_yaw);
@@ -268,6 +279,7 @@ int main(int argc, char** argv)
     }
     game.toggles().carsys = options.panels;
     game.toggles().telemetry = options.panels;
+    game.toggles().debug_panels = options.panels;
     if (options.have_campos) {
         game.camera().pos = options.campos;
     }
@@ -337,6 +349,7 @@ int main(int argc, char** argv)
         const Input& input = window.input();
 
         watcher.poll(now);
+        device.shaders().reload_if_changed(now);
         game.poll_hot_reload(scratch, now);
         if (options.term_cmd && frame_index == options.term_cmd_frame) {
             game.focus_terminal(true);
@@ -373,6 +386,19 @@ int main(int argc, char** argv)
         const Vec2 viewport{static_cast<f32>(size.width), static_cast<f32>(size.height)};
         game.render(device, terrain_renderer, debug, text, input, viewport,
                     static_cast<f32>(now), static_cast<f32>(frame_dt));
+
+        imgui.beginFrame();
+        if (game.toggles().debug_panels) {
+            ImGui::Begin("Stats");
+            ImGui::Text("%.2f ms/frame", frame_dt * 1000.0);
+            ImGui::Text("%u draws", device.stats().draw_calls);
+            ImGui::Text("%u/%u terrain chunks", terrain_renderer.chunks_drawn(), terrain_renderer.chunk_count());
+            ImGui::End();
+            if (device.post()) {
+                device.post()->debugUi();
+            }
+        }
+        imgui.endFrame();
 
         frame_index++;
         const bool last_frame = options.max_frames >= 0 && frame_index >= options.max_frames;

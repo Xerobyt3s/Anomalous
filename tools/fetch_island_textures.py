@@ -41,7 +41,18 @@ def srgb_to_linear(c):
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 
+def linear_to_srgb(c):
+    c = np.clip(c, 0.0, 1.0)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(np.maximum(c, 0.0031308), 1.0 / 2.4) - 0.055)
+
+
+def is_data_map(name):
+    stem = os.path.splitext(name)[0]
+    return stem.endswith(("_n", "_s", "_g"))
+
+
 def save(name, rgb):
+    rgb = rgb if is_data_map(name) else linear_to_srgb(rgb)
     out = np.clip(rgb * 255.0 + 0.5, 0.0, 255.0).astype(np.uint8)
     Image.fromarray(out, "RGB").save(os.path.join(TEX_DIR, f"{name}.png"))
     print(f"wrote {name}.png")

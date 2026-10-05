@@ -241,7 +241,7 @@ void TermRenderer::draw_wires(RenderDevice& device, const TermScene& scene)
         const Mat4 mvp = scene.vp3d * wire.model;
         glProgramUniformMatrix4fv(program, 0, 1, GL_FALSE, mvp.m);
         glProgramUniform3f(program, 4, wire.color.x, wire.color.y, wire.color.z);
-        glBindVertexArray(mesh->vao);
+        glBindVertexArray(mesh->vao());
         for (u32 s = 0; s < mesh->submesh_count; s++) {
             const GpuSubmesh& sub = mesh->submeshes[s];
             glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(sub.index_count), GL_UNSIGNED_INT,

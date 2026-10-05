@@ -2,11 +2,14 @@
 
 #include "core/types.h"
 #include "math/vmath.h"
+#include "engine/render/post_process.h"
 #include "render/asset_cache.h"
 #include "render/camera.h"
 #include "render/gpu_mesh.h"
-#include "render/shader.h"
+#include "render/shader_set.h"
 #include "render/sky.h"
+
+#include <optional>
 
 namespace anom {
 
@@ -20,12 +23,9 @@ struct Environment {
     f32 time_of_day = 0.5f;
 };
 
-struct RetroFx {
-    bool enabled = true;
-    f32 quantise_bits = 6.0f;
-    f32 pixel_scale = 3.0f;
-    f32 near_distance = 2.5f;
-    f32 far_distance = 12.0f;
+struct PointLight {
+    Vec3 pos{};
+    Vec3 color{};
 };
 
 struct ScreenFx {
@@ -48,8 +48,9 @@ struct DrawStats {
 class RenderDevice {
 public:
     static constexpr i32 kShadowSize = 2048;
-    static constexpr i32 kBloomMips = 6;
-    static constexpr u32 kPointLights = 4;
+    static constexpr f32 kHazeChromaPixels = 7.0f;
+    static constexpr f32 kHazeShimmerScreen = 0.0025f;
+    static constexpr u32 kMaxPointLights = 8;
     static constexpr u32 kMaxMeshDraws = 2048;
     static constexpr i32 kVideoWidth = 320;
     static constexpr i32 kVideoHeight = 200;
@@ -57,15 +58,13 @@ public:
     bool init(FileWatcher& watcher, Arena& scratch);
     void shutdown();
 
-    ShaderLibrary& shaders() { return shaders_; }
+    ShaderSet& shaders() { return shaders_; }
     AssetCache& assets() { return assets_; }
 
     void set_environment(const Environment& env);
-    void set_retro_fx(const RetroFx& fx) { retro_ = fx; }
-    const RetroFx& retro_fx() const { return retro_; }
+    ghost::engine::PostProcess* post() { return post_ ? &*post_ : nullptr; }
     const SkyLighting& sky_lighting() const { return lighting_; }
-    void set_headlights(Vec3 left, Vec3 right, Vec3 dir, f32 intensity);
-    void set_point_light(u32 index, Vec3 pos, Vec3 color, f32 radius);
+    void set_point_lights(const PointLight* lights, u32 count);
     void set_weather(f32 overcast, f32 wetness);
     void set_snow(f32 cover, f32 fall, f32 wind);
     void set_windshield(f32 wet, f32 wiper_sweep, f32 glass_wet);
@@ -103,6 +102,8 @@ public:
     void draw_rain(f32 intensity, f32 wind, Vec3 cam_vel, f32 time);
     void draw_snow(f32 intensity, f32 wind, f32 time);
     void scene_grab();
+    void begin_viewmodel();
+    void end_viewmodel();
     void post_process(f32 time);
     void blit_texture(f32 x, f32 y, f32 w, f32 h, u32 gl_texture, f32 alpha, f32 time);
     void draw_lit_quad(const Mat4& model, u32 gl_texture, f32 time);
@@ -131,16 +132,20 @@ private:
     };
 
     void quad_init();
+    void set_projection(const Mat4& proj);
+    bool render_clouds();
     void view_setup(const Camera& cam, f32 width, f32 height);
-    void scene_target_ensure(i32 width, i32 height);
-    bool bloom_render();
     void draw_quad();
 
-    ShaderLibrary shaders_;
+    ShaderSet shaders_;
     AssetCache assets_;
 
     Environment env_;
-    RetroFx retro_;
+    std::optional<ghost::engine::PostProcess> post_;
+    ghost::engine::GlTexture cloud_tex_;
+    ghost::engine::GlFramebuffer cloud_fbo_;
+    glm::ivec2 cloud_size_{0};
+    bool video_active_ = false;
     SkyLighting lighting_;
     Vec3 lighting_sun_dir_{0.0f, 0.0f, 0.0f};
     ScreenFx screen_fx_;
@@ -170,6 +175,9 @@ private:
     u32 quad_ebo_ = 0;
 
     Mat4 view_proj_ = mat4_identity();
+    Mat4 view_ = mat4_identity();
+    Mat4 proj_ = mat4_identity();
+    Mat4 viewmodel_proj_ = mat4_identity();
     Vec3 cam_pos_{0.0f, 0.0f, 0.0f};
     Vec2 viewport_{1.0f, 1.0f};
     Frustum frustum_{};
@@ -178,13 +186,8 @@ private:
     Vec3 sky_right_{1.0f, 0.0f, 0.0f};
     Vec3 sky_up_{0.0f, 1.0f, 0.0f};
 
-    Vec3 spot_pos_[2]{};
-    Vec3 spot_dir_{0.0f, 0.0f, -1.0f};
-    f32 spot_intensity_ = 0.0f;
-
-    Vec3 point_pos_[kPointLights]{};
-    Vec3 point_color_[kPointLights]{};
-    f32 point_radius_[kPointLights]{};
+    PointLight point_lights_[kMaxPointLights]{};
+    u32 point_count_ = 0;
 
     f32 weather_overcast_ = 0.0f;
     f32 weather_wetness_ = 0.0f;
@@ -205,19 +208,6 @@ private:
     Vec4 haze_tint_{};
     u32 procedural_slots_[6] = {kNoTexture, kNoTexture, kNoTexture, kNoTexture, kNoTexture, kNoTexture};
 
-    u32 scene_fbo_ = 0;
-    u32 scene_color_ = 0;
-    u32 scene_depth_ = 0;
-    u32 scene_copy_ = 0;
-    i32 scene_w_ = 0;
-    i32 scene_h_ = 0;
-    bool scene_broken_ = false;
-
-    u32 bloom_fbo_ = 0;
-    u32 bloom_tex_ = 0;
-    i32 bloom_w_[kBloomMips]{};
-    i32 bloom_h_[kBloomMips]{};
-    i32 bloom_count_ = 0;
 
     u32 shadow_fbo_ = 0;
     u32 shadow_tex_ = 0;

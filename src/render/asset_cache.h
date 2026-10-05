@@ -2,6 +2,7 @@
 
 #include "core/fixed_string.h"
 #include "core/types.h"
+#include "engine/render/gl_handle.h"
 #include "render/gpu_mesh.h"
 
 #include <string_view>
@@ -33,7 +34,8 @@ private:
     struct TextureEntry {
         FixedString<32> name;
         FixedString<128> path;
-        u32 gl_texture = 0;
+        ghost::engine::GlTexture texture;
+        bool srgb = true;
         AssetCache* owner = nullptr;
         bool used = false;
     };
@@ -52,14 +54,14 @@ private:
 
     bool upload_texture(TextureEntry& entry);
     bool upload_mesh(MeshEntry& entry);
-    void upload_mesh_data(GpuMesh& mesh, const MeshData& data);
+    void upload_mesh_data(GpuMesh& mesh, const MeshData& data, bool flip_v);
 
     TextureEntry textures_[kMaxTextures];
     MeshEntry meshes_[kMaxMeshes];
     FileWatcher* watcher_ = nullptr;
     Arena* scratch_ = nullptr;
     u32 instance_vbo_ = 0;
-    u32 white_texture_ = 0;
+    ghost::engine::GlTexture white_texture_;
     u32 reload_count_ = 0;
 };
 

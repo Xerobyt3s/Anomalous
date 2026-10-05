@@ -5,15 +5,25 @@
 #include "core/arena.h"
 #include "core/log.h"
 #include "platform/filesystem.h"
+#include "engine/assets/asset_path.h"
+#include "engine/render/texture.h"
 #include "platform/gl_loader.h"
 
 #include <cstddef>
+#include <vector>
 
 namespace anom {
 namespace {
 
 constexpr std::string_view kGroundPrefix = "island_";
 constexpr std::string_view kProceduralMaterial = "island_proc";
+
+bool is_data_map(std::string_view name)
+{
+    return name.ends_with("_n") || name.ends_with("_s") || name.ends_with("_g");
+}
+
+static_assert(sizeof(AmshVertex) == sizeof(ghost::engine::Vertex));
 
 } // namespace
 
@@ -23,63 +33,32 @@ void AssetCache::init(FileWatcher& watcher, Arena& scratch)
     scratch_ = &scratch;
 
     const u8 white[4] = {255, 255, 255, 255};
-    glCreateTextures(GL_TEXTURE_2D, 1, &white_texture_);
-    glTextureStorage2D(white_texture_, 1, GL_RGBA8, 1, 1);
-    glTextureSubImage2D(white_texture_, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, white);
+    GLuint id = 0;
+    glCreateTextures(GL_TEXTURE_2D, 1, &id);
+    glTextureStorage2D(id, 1, GL_RGBA8, 1, 1);
+    glTextureSubImage2D(id, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, white);
+    white_texture_ = ghost::engine::GlTexture(id);
 }
 
 void AssetCache::shutdown()
 {
     for (u32 i = 0; i < kMaxTextures; i++) {
-        if (textures_[i].used && textures_[i].gl_texture) {
-            glDeleteTextures(1, &textures_[i].gl_texture);
-        }
         textures_[i] = TextureEntry{};
     }
     for (u32 i = 0; i < kMaxMeshes; i++) {
-        GpuMesh& mesh = meshes_[i].mesh;
-        if (meshes_[i].used && mesh.loaded) {
-            glDeleteVertexArrays(1, &mesh.vao);
-            glDeleteBuffers(1, &mesh.vbo);
-            glDeleteBuffers(1, &mesh.ebo);
-        }
         meshes_[i] = MeshEntry{};
     }
-    if (white_texture_) {
-        glDeleteTextures(1, &white_texture_);
-        white_texture_ = 0;
-    }
+    white_texture_.reset();
 }
 
 bool AssetCache::upload_texture(TextureEntry& entry)
 {
-    ArenaScope scope(*scratch_);
-    const Image8 image = load_image_rgba(*scratch_, *scratch_, entry.path.view());
-    if (!image.valid()) {
+    ghost::engine::GlTexture texture =
+        ghost::engine::loadTexture(ghost::engine::assetPath(entry.path.view().substr(7)), entry.srgb);
+    if (!texture) {
         return false;
     }
-
-    if (entry.gl_texture) {
-        glDeleteTextures(1, &entry.gl_texture);
-    }
-
-    u32 levels = 1;
-    u32 dim = image.width > image.height ? image.width : image.height;
-    while (dim >>= 1) {
-        levels++;
-    }
-
-    glCreateTextures(GL_TEXTURE_2D, 1, &entry.gl_texture);
-    glTextureStorage2D(entry.gl_texture, static_cast<GLsizei>(levels), GL_RGBA8,
-                       static_cast<GLsizei>(image.width), static_cast<GLsizei>(image.height));
-    glTextureSubImage2D(entry.gl_texture, 0, 0, 0, static_cast<GLsizei>(image.width),
-                        static_cast<GLsizei>(image.height), GL_RGBA, GL_UNSIGNED_BYTE,
-                        image.pixels);
-    glGenerateTextureMipmap(entry.gl_texture);
-    glTextureParameteri(entry.gl_texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTextureParameteri(entry.gl_texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTextureParameteri(entry.gl_texture, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTextureParameteri(entry.gl_texture, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    entry.texture = std::move(texture);
     return true;
 }
 
@@ -106,6 +85,7 @@ u32 AssetCache::texture_slot(std::string_view name)
         }
         entry.name.assign(name);
         entry.path.format("assets/textures/%.*s.png", static_cast<int>(name.size()), name.data());
+        entry.srgb = !is_data_map(name);
         entry.owner = this;
         entry.used = true;
         upload_texture(entry);
@@ -121,10 +101,10 @@ u32 AssetCache::texture_slot(std::string_view name)
 
 u32 AssetCache::texture_gl(u32 slot) const
 {
-    if (slot < kMaxTextures && textures_[slot].used && textures_[slot].gl_texture) {
-        return textures_[slot].gl_texture;
+    if (slot < kMaxTextures && textures_[slot].used && textures_[slot].texture) {
+        return textures_[slot].texture.id();
     }
-    return white_texture_;
+    return white_texture_.id();
 }
 
 u32 AssetCache::companion_slot(std::string_view material, std::string_view suffix)
@@ -147,49 +127,31 @@ bool AssetCache::upload_mesh(MeshEntry& entry)
     if (load_mesh(entry.path.view(), *scratch_, data) != MeshParseError::Ok) {
         return false;
     }
-    upload_mesh_data(entry.mesh, data);
+    upload_mesh_data(entry.mesh, data, true);
     return true;
 }
 
-void AssetCache::upload_mesh_data(GpuMesh& mesh, const MeshData& data)
+void AssetCache::upload_mesh_data(GpuMesh& mesh, const MeshData& data, bool flip_v)
 {
-    if (mesh.loaded) {
-        glDeleteVertexArrays(1, &mesh.vao);
-        glDeleteBuffers(1, &mesh.vbo);
-        glDeleteBuffers(1, &mesh.ebo);
+    std::vector<ghost::engine::Vertex> vertices(data.vertices.size());
+    for (size_t i = 0; i < data.vertices.size(); i++) {
+        const AmshVertex& v = data.vertices[i];
+        vertices[i].position = glm::vec3(v.pos[0], v.pos[1], v.pos[2]);
+        vertices[i].normal = glm::vec3(v.normal[0], v.normal[1], v.normal[2]);
+        vertices[i].uv = glm::vec2(v.uv[0], flip_v ? 1.0f - v.uv[1] : v.uv[1]);
     }
+    mesh.gpu.reset();
+    mesh.gpu.emplace(vertices, std::span<const std::uint32_t>(data.indices.data(), data.indices.size()));
+    const GLuint vao = mesh.gpu->vao();
 
-    glCreateBuffers(1, &mesh.vbo);
-    glNamedBufferStorage(mesh.vbo,
-                         static_cast<GLsizeiptr>(data.vertices.size_bytes()),
-                         data.vertices.data(), 0);
-    glCreateBuffers(1, &mesh.ebo);
-    glNamedBufferStorage(mesh.ebo,
-                         static_cast<GLsizeiptr>(data.indices.size_bytes()),
-                         data.indices.data(), 0);
-
-    glCreateVertexArrays(1, &mesh.vao);
-    glVertexArrayVertexBuffer(mesh.vao, 0, mesh.vbo, 0, sizeof(AmshVertex));
-    glVertexArrayElementBuffer(mesh.vao, mesh.ebo);
-    glEnableVertexArrayAttrib(mesh.vao, 0);
-    glVertexArrayAttribFormat(mesh.vao, 0, 3, GL_FLOAT, GL_FALSE, offsetof(AmshVertex, pos));
-    glVertexArrayAttribBinding(mesh.vao, 0, 0);
-    glEnableVertexArrayAttrib(mesh.vao, 1);
-    glVertexArrayAttribFormat(mesh.vao, 1, 3, GL_FLOAT, GL_FALSE, offsetof(AmshVertex, normal));
-    glVertexArrayAttribBinding(mesh.vao, 1, 0);
-    glEnableVertexArrayAttrib(mesh.vao, 2);
-    glVertexArrayAttribFormat(mesh.vao, 2, 2, GL_FLOAT, GL_FALSE, offsetof(AmshVertex, uv));
-    glVertexArrayAttribBinding(mesh.vao, 2, 0);
-
-    if (instance_vbo_) {
-        glVertexArrayVertexBuffer(mesh.vao, 1, instance_vbo_, 0, sizeof(Mat4));
-        glVertexArrayBindingDivisor(mesh.vao, 1, 1);
+    if (instance_vbo_ && vao) {
+        glVertexArrayVertexBuffer(vao, 1, instance_vbo_, 0, sizeof(Mat4));
+        glVertexArrayBindingDivisor(vao, 1, 1);
         for (u32 col = 0; col < 4; col++) {
             const u32 attrib = 3 + col;
-            glEnableVertexArrayAttrib(mesh.vao, attrib);
-            glVertexArrayAttribFormat(mesh.vao, attrib, 4, GL_FLOAT, GL_FALSE,
-                                      col * 4 * sizeof(f32));
-            glVertexArrayAttribBinding(mesh.vao, attrib, 1);
+            glEnableVertexArrayAttrib(vao, attrib);
+            glVertexArrayAttribFormat(vao, attrib, 4, GL_FLOAT, GL_FALSE, col * 4 * sizeof(f32));
+            glVertexArrayAttribBinding(vao, attrib, 1);
         }
     }
 
@@ -232,7 +194,7 @@ const GpuMesh* AssetCache::create_mesh(std::string_view name, const MeshData& da
         return nullptr;
     }
     entry->runtime = true;
-    upload_mesh_data(entry->mesh, data);
+    upload_mesh_data(entry->mesh, data, false);
     return &entry->mesh;
 }
 

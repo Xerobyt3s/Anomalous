@@ -26,6 +26,9 @@ set(ANOMALOUS_TEST_SOURCES
     test_scenes.cpp
     test_gravity.cpp
     test_islands.cpp
+    test_render_core.cpp
+    ghost_test_lightning.cpp
+    ghost_test_draw_order.cpp
 )
 
 add_executable(anomalous_tests ${ANOMALOUS_TEST_SOURCES})
@@ -34,6 +37,7 @@ target_link_libraries(anomalous_tests PRIVATE anomalous_core)
 
 target_include_directories(anomalous_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shim"
 )
 
 set_target_properties(anomalous_tests PROPERTIES

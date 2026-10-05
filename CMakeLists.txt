@@ -17,8 +17,7 @@ if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 endif()
 
-# external/glfw/lib/glfw3.lib is prebuilt /MD; all configurations must match it.
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
 add_library(anomalous_options INTERFACE)
 
@@ -87,6 +86,15 @@ set(ANOMALOUS_CORE_SOURCES
     src/editor/editor_brush.cpp
     src/editor/editor_scene.cpp
     src/editor/gizmo.cpp
+    src/engine/assets/asset_path.cpp
+    src/engine/debug/imgui_layer.cpp
+    src/engine/render/mesh.cpp
+    src/game/fx/draw_order.cpp
+    src/game/fx/lightning.cpp
+    src/engine/render/post_process.cpp
+    src/engine/render/primitives.cpp
+    src/engine/render/shader.cpp
+    src/engine/render/texture.cpp
     src/core/config.cpp
     src/core/log.cpp
     src/core/version.cpp
@@ -127,11 +135,10 @@ set(ANOMALOUS_CORE_SOURCES
     src/render/debug_draw.cpp
     src/render/fontchain.cpp
     src/render/text.cpp
-    src/render/bolt.cpp
     src/render/asset_cache.cpp
     src/render/device.cpp
     src/render/screenshot.cpp
-    src/render/shader.cpp
+    src/render/shader_set.cpp
     src/render/sky.cpp
     src/render/terrain_render.cpp
     src/render/tree.cpp
@@ -176,6 +183,20 @@ set(ANOMALOUS_CORE_HEADERS
     src/editor/editor_brush.h
     src/editor/editor_scene.h
     src/editor/gizmo.h
+    src/engine/assets/asset_path.h
+    src/engine/assets/model.h
+    src/engine/debug/imgui_layer.h
+    src/engine/render/camera.h
+    src/engine/render/gl_handle.h
+    src/engine/render/mesh.h
+    src/game/fx/draw_order.h
+    src/game/fx/lightning.h
+    src/engine/render/post_process.h
+    src/engine/render/primitives.h
+    src/engine/render/shader.h
+    src/engine/render/texture.h
+    src/engine/debug/log.h
+    src/math/glm_bridge.h
     src/core/config.h
     src/core/fixed_string.h
     src/core/handle.h
@@ -224,12 +245,11 @@ set(ANOMALOUS_CORE_HEADERS
     src/render/debug_draw.h
     src/render/fontchain.h
     src/render/text.h
-    src/render/bolt.h
     src/render/asset_cache.h
     src/render/device.h
     src/render/gpu_mesh.h
     src/render/screenshot.h
-    src/render/shader.h
+    src/render/shader_set.h
     src/render/sky.h
     src/render/terrain_render.h
     src/render/tree.h
@@ -264,8 +284,12 @@ target_include_directories(anomalous_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
+target_compile_definitions(anomalous_core PUBLIC
+    GHOST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+)
+
 target_link_libraries(anomalous_core
-    PUBLIC anomalous_options anomalous_headers
+    PUBLIC anomalous_options anomalous_headers anomalous_graphics
     PRIVATE anomalous_external
 )
 

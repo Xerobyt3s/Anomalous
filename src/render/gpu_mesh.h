@@ -2,7 +2,10 @@
 
 #include "assets/amsh.h"
 #include "core/types.h"
+#include "engine/render/mesh.h"
 #include "math/vmath.h"
+
+#include <optional>
 
 namespace anom {
 
@@ -20,13 +23,13 @@ struct GpuSubmesh {
 };
 
 struct GpuMesh {
-    u32 vao = 0;
-    u32 vbo = 0;
-    u32 ebo = 0;
+    std::optional<ghost::engine::Mesh> gpu;
     GpuSubmesh submeshes[kAmshMaxSubmeshes];
     u32 submesh_count = 0;
     Aabb bounds = aabb_empty();
     bool loaded = false;
+
+    u32 vao() const { return gpu ? gpu->vao() : 0u; }
 };
 
 } // namespace anom

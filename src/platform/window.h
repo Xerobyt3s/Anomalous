@@ -37,6 +37,7 @@ public:
     bool cursor_captured() const { return cursor_captured_; }
 
     Input& input() { return input_; }
+    GLFWwindow* handle() const { return handle_; }
     const Input& input() const { return input_; }
 
 private:

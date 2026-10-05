@@ -1,5 +1,6 @@
 #include "test.h"
 
+#include "math/glm_bridge.h"
 #include "math/vmath.h"
 
 using namespace anom;
@@ -180,4 +181,27 @@ TEST(math, quat_integrate_stays_normalized)
         q = quat_integrate(q, omega, 1.0f / 120.0f);
     }
     CHECK_NEAR(dot(q, q), 1.0f, 1e-3);
+}
+
+TEST(glm_bridge, vectors_quats_and_matrices_round_trip_and_agree_on_transforms)
+{
+    const Vec3 v{1.5f, -2.0f, 3.25f};
+    CHECK(from_glm(to_glm(v)).x == v.x && from_glm(to_glm(v)).y == v.y && from_glm(to_glm(v)).z == v.z);
+    const Quat q = quat_from_euler(0.4f, -0.3f, 1.1f);
+    const Quat back = from_glm(to_glm(q));
+    CHECK(back.x == q.x && back.y == q.y && back.z == q.z && back.w == q.w);
+    const Mat4 m = mat4_trs(Vec3{3.0f, -1.0f, 2.0f}, q, Vec3{2.0f, 2.0f, 2.0f});
+    const Vec3 ours = transform_point(m, v);
+    const glm::vec4 theirs = to_glm(m) * glm::vec4(to_glm(v), 1.0f);
+    CHECK_NEAR(ours.x, theirs.x, 1e-4);
+    CHECK_NEAR(ours.y, theirs.y, 1e-4);
+    CHECK_NEAR(ours.z, theirs.z, 1e-4);
+    const glm::vec3 rotated = to_glm(q) * to_glm(v);
+    const Vec3 mine = rotate(q, v);
+    CHECK_NEAR(mine.x, rotated.x, 1e-4);
+    CHECK_NEAR(mine.y, rotated.y, 1e-4);
+    CHECK_NEAR(mine.z, rotated.z, 1e-4);
+    for (int i = 0; i < 16; i++) {
+        CHECK(from_glm(to_glm(m)).m[i] == m.m[i]);
+    }
 }

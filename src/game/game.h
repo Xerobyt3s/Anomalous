@@ -17,7 +17,9 @@
 #include "player/player.h"
 #include "render/camera.h"
 #include "render/device.h"
-#include "render/bolt.h"
+#include "game/fx/lightning.h"
+
+#include <optional>
 #include "render/tree.h"
 #include "terminal/disks.h"
 #include "terminal/term_render.h"
@@ -64,6 +66,7 @@ struct GameToggles {
     bool collision = false;
     bool carsys = false;
     bool tuning = false;
+    bool debug_panels = false;
     bool slow_mo = false;
     bool free_cam = false;
     bool chase_cam = false;
@@ -175,7 +178,7 @@ private:
     Audio audio_;
     CarSysRenderer car_render_;
     TreeRenderer tree_render_;
-    BoltRenderer bolt_;
+    std::optional<ghost::game::Lightning> lightning_;
     DiskStore disks_;
     Terminal terminal_{tapes_};
     TermRenderer term_render_;

@@ -73,13 +73,23 @@ def smoothstep(e0, e1, x):
     return t * t * (3.0 - 2.0 * t)
 
 
+def linear_to_srgb(c):
+    c = np.clip(c, 0.0, 1.0)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(np.maximum(c, 0.0031308), 1.0 / 2.4) - 0.055)
+
+
+def is_data_map(name):
+    stem = os.path.splitext(name)[0]
+    return stem.endswith(("_n", "_s", "_g"))
+
+
 def to_u8(a):
     return (np.clip(a, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
 
 
 def save_rgb(name, rgb):
     path = os.path.join(TEX_DIR, name + ".png")
-    Image.fromarray(to_u8(rgb), "RGB").save(path, optimize=True)
+    Image.fromarray(to_u8(rgb if is_data_map(name) else linear_to_srgb(rgb)), "RGB").save(path, optimize=True)
     print(f"wrote {path}: {rgb.shape[1]}x{rgb.shape[0]}")
 
 
