@@ -14,7 +14,7 @@ constexpr f32 kMaxSpeed = 200.0f;
 
 void Camera::look_at(Vec3 target)
 {
-    const Vec3 d = normalize(target - pos);
+    const Vec3 d = normalize(rotate(conjugate(frame), target - pos));
     yaw = std::atan2(d.x, -d.z);
     pitch = std::asin(f_clamp(d.y, -1.0f, 1.0f));
 }
@@ -22,12 +22,17 @@ void Camera::look_at(Vec3 target)
 Vec3 Camera::forward() const
 {
     const f32 cp = std::cos(pitch);
-    return {cp * std::sin(yaw), std::sin(pitch), -cp * std::cos(yaw)};
+    return rotate(frame, Vec3{cp * std::sin(yaw), std::sin(pitch), -cp * std::cos(yaw)});
 }
 
 Vec3 Camera::right() const
 {
-    return normalize(cross(forward(), Vec3{0.0f, 1.0f, 0.0f}));
+    const Vec3 f = forward();
+    const Vec3 r = normalize(cross(f, rotate(frame, Vec3{0.0f, 1.0f, 0.0f})));
+    if (roll == 0.0f) {
+        return r;
+    }
+    return rotate(quat_from_axis_angle(f, -roll), r);
 }
 
 Vec3 Camera::up() const
@@ -37,7 +42,7 @@ Vec3 Camera::up() const
 
 Mat4 Camera::view() const
 {
-    return mat4_look_at(pos, pos + forward(), Vec3{0.0f, 1.0f, 0.0f});
+    return mat4_look_at(pos, pos + forward(), up());
 }
 
 Mat4 Camera::proj(f32 aspect) const

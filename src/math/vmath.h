@@ -262,6 +262,42 @@ constexpr Vec3 rotate(Quat q, Vec3 v)
     return v + t * q.w + cross(qv, t);
 }
 
+Quat slerp(Quat a, Quat b, f32 t);
+
+inline Vec3 any_perpendicular(Vec3 v)
+{
+    const Vec3 axis = f_abs(v.x) < 0.9f ? Vec3{1.0f, 0.0f, 0.0f} : Vec3{0.0f, 0.0f, 1.0f};
+    return normalize(cross(v, axis));
+}
+
+inline Quat quat_from_to(Vec3 from, Vec3 to, Vec3 flip_axis)
+{
+    const f32 d = dot(from, to);
+    if (d < -0.9999f) {
+        Vec3 axis = flip_axis - from * dot(flip_axis, from);
+        axis = length_sq(axis) > 1e-6f ? normalize(axis) : any_perpendicular(from);
+        return Quat{axis.x, axis.y, axis.z, 0.0f};
+    }
+    const Vec3 c = cross(from, to);
+    return normalize(Quat{c.x, c.y, c.z, 1.0f + d});
+}
+
+inline Quat quat_from_to(Vec3 from, Vec3 to)
+{
+    return quat_from_to(from, to, any_perpendicular(from));
+}
+
+inline Vec3 rotate_toward(Vec3 from, Vec3 to, f32 max_angle)
+{
+    const f32 angle = std::acos(f_clamp(dot(from, to), -1.0f, 1.0f));
+    if (angle <= max_angle || angle < 1e-6f) {
+        return to;
+    }
+    const Quat full = quat_from_to(from, to);
+    const Quat part = slerp(quat_identity(), full, max_angle / angle);
+    return normalize(rotate(part, from));
+}
+
 inline f32 quat_yaw(Quat q)
 {
     return std::atan2(2.0f * (q.w * q.y + q.x * q.z), 1.0f - 2.0f * (q.y * q.y + q.x * q.x));

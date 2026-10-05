@@ -34,7 +34,7 @@ private:
     f32 rand01();
     void spawn_puff(Vec3 pos, Vec3 vel, f32 life, f32 size, bool spark);
     void draw_effects(RenderDevice& device, const CarSys& sys, const Vehicle& veh,
-                      const Mat4& base, f32 dt);
+                      const Mat4& base, Vec3 gravity, f32 dt);
 
     Puff puffs_[kMaxPuffs];
     u32 puff_next_ = 0;

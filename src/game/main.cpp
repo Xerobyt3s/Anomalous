@@ -43,6 +43,12 @@ struct Options {
     bool place = false;
     bool coil = false;
     bool drive = false;
+    bool walk = false;
+    bool have_carat = false;
+    anom::Vec3 carat{};
+    bool have_playerat = false;
+    anom::Vec3 playerat{};
+    f32 playerat_yaw = 0.0f;
     const char* zone = "assets/zones/testzone";
     i64 jump_frame = -1;
     i64 steer_frame = 0;
@@ -96,6 +102,21 @@ Options parse_options(int argc, char** argv)
             options.steer_frame = std::atoll(argv[i] + 8);
         } else if (std::strcmp(argv[i], "--drive") == 0) {
             options.drive = true;
+        } else if (std::strcmp(argv[i], "--walk") == 0) {
+            options.walk = true;
+        } else if (std::strcmp(argv[i], "--carat") == 0 && i + 3 < argc) {
+            options.carat = anom::Vec3{static_cast<f32>(std::atof(argv[i + 1])),
+                                       static_cast<f32>(std::atof(argv[i + 2])),
+                                       static_cast<f32>(std::atof(argv[i + 3])) * anom::kDegToRad};
+            options.have_carat = true;
+            i += 3;
+        } else if (std::strcmp(argv[i], "--playerat") == 0 && i + 4 < argc) {
+            options.playerat = anom::Vec3{static_cast<f32>(std::atof(argv[i + 1])),
+                                          static_cast<f32>(std::atof(argv[i + 2])),
+                                          static_cast<f32>(std::atof(argv[i + 3]))};
+            options.playerat_yaw = static_cast<f32>(std::atof(argv[i + 4])) * anom::kDegToRad;
+            options.have_playerat = true;
+            i += 4;
         } else if (std::strncmp(argv[i], "--jump=", 7) == 0) {
             options.jump_frame = std::atoll(argv[i] + 7);
         } else if (std::strncmp(argv[i], "--zone=", 7) == 0) {
@@ -208,6 +229,14 @@ int main(int argc, char** argv)
     if (options.photo) {
         game.carsys().coax_target = anom::kCoaxTargetCamera;
     }
+    if (options.have_carat) {
+        const f32 ground = game.terrain().heightfield().sample(options.carat.x, options.carat.y);
+        game.vehicle().teleport(game.phys(), anom::Vec3{options.carat.x, ground + 1.0f, options.carat.y},
+                                options.carat.z);
+    }
+    if (options.have_playerat) {
+        game.player().init(options.playerat, options.playerat_yaw);
+    }
     game.toggles().free_cam = options.free_cam;
     game.toggles().chase_cam = options.drive;
     if (options.drive) {
@@ -248,6 +277,9 @@ int main(int argc, char** argv)
     }
     if (options.rain > 0.0f) {
         game.weather().set_mode(WeatherMode::Rain);
+        for (i32 i = 0; i < 1800; i++) {
+            game.weather().tick(0.1f);
+        }
     }
     if (options.snow) {
         game.weather().set_mode(WeatherMode::Snow);
@@ -293,11 +325,8 @@ int main(int argc, char** argv)
                 window.input().set_key(static_cast<int>(anom::Key::D), true);
             }
         }
-        if (options.photo) {
-            window.input().set_mouse_button(1, true);
-            if (frame_index == options.photo_frame) {
-                window.input().set_mouse_button(0, true);
-            }
+        if (options.walk && !game.player().driving()) {
+            window.input().set_key(static_cast<int>(anom::Key::W), true);
         }
         if (options.photo) {
             window.input().set_mouse_button(1, true);

@@ -28,6 +28,7 @@ struct RigidBody {
     Vec3 box_offset;
     f32 sleep_timer;
     b32 asleep;
+    Vec3 gravity;
 };
 
 using BodyHandle = Handle<RigidBody>;

@@ -5,6 +5,7 @@
 layout(location = 1) uniform vec4 u_params;
 layout(location = 2) uniform vec4 u_cam_vel;
 layout(location = 3) uniform vec4 u_cam_fwd;
+layout(location = 7) uniform vec4 u_fall_rot;
 
 out vec2 v_uv;
 out float v_alpha;
@@ -34,7 +35,7 @@ void main()
     float fall_speed = 15.0 + seed.y * 8.0;
     float gust = 1.0 + 0.45 * sin(time * 0.63 + seed2 * 6.28)
                + 0.20 * sin(time * 1.71 + seed.x * 6.28);
-    vec3 fall = vec3(wind * 4.0 * gust, -fall_speed, wind * 1.5 * gust);
+    vec3 fall = quat_rotate(u_fall_rot, vec3(wind * 4.0 * gust, -fall_speed, wind * 1.5 * gust));
     vec3 base = seed * box;
     base += fall * time;
 

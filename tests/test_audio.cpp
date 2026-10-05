@@ -97,7 +97,7 @@ TEST(audio, an_uninitialised_system_is_inert)
     CHECK(!audio.sfx_available(SFX_HOOD));
     CHECK(!audio.tape_play("assets/audio/starter.wav"));
 
-    audio.set_listener(Vec3{}, Vec3{0.0f, 0.0f, -1.0f}, Vec3{});
+    audio.set_listener(Vec3{}, Vec3{0.0f, 0.0f, -1.0f}, Vec3{0.0f, 1.0f, 0.0f}, Vec3{});
     audio.set_car(Vec3{}, Vec3{}, Vec3{}, Vec3{});
     audio.set_occlusion(0.2f, kDt);
     audio.play(SFX_HOOD, 1.0f, 1.0f);

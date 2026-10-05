@@ -32,6 +32,7 @@ public:
     const StaticTri& tri(u32 index) const { return tris_[index]; }
     std::span<const StaticTri> tris() const { return {tris_, tri_count_}; }
     u32 tri_count() const { return tri_count_; }
+    u32 dropped() const { return dropped_; }
     bool built() const { return built_; }
     Aabb bounds() const;
 
@@ -41,6 +42,7 @@ private:
     StaticTri* tris_ = nullptr;
     u32 tri_count_ = 0;
     u32 tri_capacity_ = 0;
+    u32 dropped_ = 0;
     u32* cell_first_ = nullptr;
     u32* cell_tris_ = nullptr;
     u32 cells_x_ = 0;

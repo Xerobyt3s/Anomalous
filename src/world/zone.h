@@ -9,12 +9,16 @@
 namespace anom {
 
 class Arena;
+class GravityField;
+class Heightfield;
 class PhysWorld;
 class Terrain;
 class World;
 
 inline constexpr u32 kZoneMaxPickups = 64;
 inline constexpr u32 kZoneMaxStaticTris = 16384;
+inline constexpr f32 kZoneEscapeMarginXZ = 200.0f;
+inline constexpr f32 kZoneEscapeMarginY = 400.0f;
 
 struct ZoneSpawn {
     Vec3 car_pos;
@@ -47,6 +51,9 @@ bool zone_load(std::string_view zone_dir, Arena& arena, Arena& scratch, World& w
 
 bool zone_reload(std::string_view zone_dir, Arena& arena, Arena& scratch, World& world,
                  PhysWorld& phys, const Terrain& terrain, ZonePickups* out_pickups);
+
+void zone_gravity(const World& world, GravityField& out);
+bool zone_out_of_bounds(const Heightfield& hf, Vec3 p);
 
 bool zone_save(std::string_view zone_dir, Arena& scratch, const World& world,
                const PhysWorld& phys, const Terrain& terrain);

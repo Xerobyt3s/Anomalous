@@ -10,6 +10,11 @@
 #include <cstddef>
 
 namespace anom {
+namespace {
+
+constexpr std::string_view kGroundPrefix = "island_";
+
+} // namespace
 
 void AssetCache::init(FileWatcher& watcher, Arena& scratch)
 {
@@ -190,6 +195,8 @@ bool AssetCache::upload_mesh(MeshEntry& entry)
         mesh.submeshes[i].texture_slot = texture_slot(data.submeshes[i].material);
         mesh.submeshes[i].normal_slot = companion_slot(data.submeshes[i].material, "_n");
         mesh.submeshes[i].surface_slot = companion_slot(data.submeshes[i].material, "_s");
+        mesh.submeshes[i].blend_slot = companion_slot(data.submeshes[i].material, "_g");
+        mesh.submeshes[i].ground = std::string_view(data.submeshes[i].material).starts_with(kGroundPrefix);
     }
     mesh.bounds = data.bounds;
     mesh.loaded = true;

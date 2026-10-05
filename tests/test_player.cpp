@@ -2,6 +2,7 @@
 
 #include "core/arena.h"
 #include "physics/heightfield.h"
+#include "physics/jolt_world.h"
 #include "physics/world.h"
 #include "player/player.h"
 #include "render/camera.h"
@@ -19,6 +20,7 @@ constexpr f32 kDt = 1.0f / 120.0f;
 struct WalkRig {
     Arena arena{megabytes(64)};
     Heightfield hf;
+    JoltWorld jolt;
     PhysWorld world;
     Player player;
 
@@ -33,6 +35,7 @@ struct WalkRig {
         }
         hf.recompute_extents();
         world.init(arena, &hf);
+        world.set_jolt(&jolt);
         player.init(Vec3{0.0f, 0.5f, 0.0f}, 0.0f);
     }
 

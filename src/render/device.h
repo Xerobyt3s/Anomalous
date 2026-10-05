@@ -70,6 +70,8 @@ public:
     void set_snow(f32 cover, f32 fall, f32 wind);
     void set_windshield(f32 wet, f32 wiper_sweep, f32 glass_wet);
     void set_travel_warp(f32 warp, f32 flash) { warp_ = warp; warp_flash_ = flash; }
+    void set_chroma(f32 pixels, f32 seed) { chroma_ = pixels; chroma_seed_ = seed; }
+    void set_fall_rotation(Quat rot) { fall_rot_ = rot; }
     void set_screen_fx(const ScreenFx& fx) { screen_fx_ = fx; }
     void set_time(f32 seconds) { time_seconds_ = seconds; }
 
@@ -186,6 +188,9 @@ private:
     f32 shield_rain_ = 0.0f;
     f32 warp_ = 0.0f;
     f32 warp_flash_ = 0.0f;
+    f32 chroma_ = 0.0f;
+    f32 chroma_seed_ = 0.0f;
+    Quat fall_rot_ = quat_identity();
 
     u32 scene_fbo_ = 0;
     u32 scene_color_ = 0;

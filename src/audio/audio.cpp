@@ -542,7 +542,7 @@ void Audio::shutdown()
     ma_engine_uninit(&be->engine);
 }
 
-void Audio::set_listener(Vec3 pos, Vec3 forward, Vec3 vel)
+void Audio::set_listener(Vec3 pos, Vec3 forward, Vec3 up, Vec3 vel)
 {
     if (!backend_) {
         return;
@@ -550,7 +550,7 @@ void Audio::set_listener(Vec3 pos, Vec3 forward, Vec3 vel)
     ma_engine& engine = backend_->engine;
     ma_engine_listener_set_position(&engine, 0, pos.x, pos.y, pos.z);
     ma_engine_listener_set_direction(&engine, 0, forward.x, forward.y, forward.z);
-    ma_engine_listener_set_world_up(&engine, 0, 0.0f, 1.0f, 0.0f);
+    ma_engine_listener_set_world_up(&engine, 0, up.x, up.y, up.z);
     ma_engine_listener_set_velocity(&engine, 0, vel.x, vel.y, vel.z);
 }
 

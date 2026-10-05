@@ -96,6 +96,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/audio/miniaudio_impl.cpp
     src/audio/tapes.cpp
     src/player/interact.cpp
+    src/player/movement.cpp
     src/player/player.cpp
     src/terminal/disk_image.cpp
     src/terminal/comms.cpp
@@ -117,7 +118,9 @@ set(ANOMALOUS_CORE_SOURCES
     src/terminal/term_render.cpp
     src/terminal/virus.cpp
     src/physics/collide.cpp
+    src/physics/gravity_field.cpp
     src/physics/heightfield.cpp
+    src/physics/jolt_world.cpp
     src/physics/static_grid.cpp
     src/physics/world.cpp
     src/render/camera.cpp
@@ -184,6 +187,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/audio/ma.h
     src/audio/tapes.h
     src/player/interact.h
+    src/player/movement.h
     src/player/player.h
     src/terminal/disk_image.h
     src/terminal/comms.h
@@ -207,7 +211,9 @@ set(ANOMALOUS_CORE_HEADERS
     src/terminal/term_render.h
     src/terminal/virus.h
     src/physics/collide.h
+    src/physics/gravity_field.h
     src/physics/heightfield.h
+    src/physics/jolt_world.h
     src/physics/static_grid.h
     src/physics/world.h
     src/render/camera.h

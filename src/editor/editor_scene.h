@@ -67,6 +67,7 @@ public:
 
     EntityHandle add_trigger(Editor& editor, const Camera& cam, World& world, PhysWorld& phys,
                              const Terrain& terrain);
+    EntityHandle add_gravity(Editor& editor, const Camera& cam, World& world, PhysWorld& phys);
 
 private:
     bool update_car_boxes(Editor& editor, const Input& input, const Camera& cam, PhysWorld& phys,

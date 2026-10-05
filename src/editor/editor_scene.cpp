@@ -1,6 +1,7 @@
 #include "editor/editor_scene.h"
 #include "audio/tapes.h"
 #include "editor/editor.h"
+#include "physics/gravity_field.h"
 #include "physics/heightfield.h"
 #include "physics/world.h"
 #include "platform/filesystem.h"
@@ -20,6 +21,7 @@ namespace {
 
 constexpr f32 kPlaceRange = 500.0f;
 constexpr f32 kTriggerDistance = 8.0f;
+constexpr f32 kGravityDistance = 14.0f;
 
 bool ends_with(std::string_view text, std::string_view suffix)
 {
@@ -107,6 +109,22 @@ EntityHandle EditorScene::add_trigger(Editor& editor, const Camera& cam, World& 
     if (Entity* e = world.entity(handle)) {
         e->mesh_name.assign("trigger");
         e->half = Vec3{1.0f, 1.0f, 1.0f};
+    }
+    editor.select(world, handle);
+    editor.push_create(world, phys, handle);
+    return handle;
+}
+
+EntityHandle EditorScene::add_gravity(Editor& editor, const Camera& cam, World& world,
+                                      PhysWorld& phys)
+{
+    const Vec3 pos = cam.pos + cam.forward() * kGravityDistance;
+    const EntityHandle handle = world.spawn(EntityKind::Gravity, pos, quat_identity(), 3.0f, "", 0);
+    if (Entity* e = world.entity(handle)) {
+        e->mesh_name.assign("gravity");
+        e->half = Vec3{6.0f, 4.0f, 6.0f};
+        e->aux_value = kDefaultGravity;
+        e->aux_data = 90;
     }
     editor.select(world, handle);
     editor.push_create(world, phys, handle);
@@ -276,6 +294,9 @@ void EditorScene::palette_panel(Editor& editor, Ui& ui, const Camera& cam, World
     if (ui.button("add trigger")) {
         add_trigger(editor, cam, world, phys, terrain);
     }
+    if (ui.button("add gravity")) {
+        add_gravity(editor, cam, world, phys);
+    }
     if (place_mesh_ >= 0 || place_item_ >= 0) {
         ui.label("click ground to place, esc stops");
     }
@@ -310,6 +331,8 @@ void EditorScene::outliner_panel(Editor& editor, Ui& ui, World& world, f32 px)
             label.format("%u item %.*s", idx, static_cast<int>(id.size()), id.data());
         } else if (e->kind == EntityKind::Trigger) {
             label.format("%u trig %s", idx, e->mesh_name.c_str());
+        } else if (e->kind == EntityKind::Gravity) {
+            label.format("%u grav %s", idx, e->mesh_name.c_str());
         } else {
             label.format("%u %s", idx, e->mesh_name.c_str());
         }
@@ -330,7 +353,8 @@ void EditorScene::detail_panel(Editor& editor, Ui& ui, World& world, InteractBox
     Entity* sel = world.entity(editor.selection());
     const bool relevant = car_boxes_on_
                        || (sel && (sel->kind == EntityKind::PartPickup
-                                   || sel->kind == EntityKind::Trigger));
+                                   || sel->kind == EntityKind::Trigger
+                                   || sel->kind == EntityKind::Gravity));
 
     ui.panel_begin("tuning", 292.0f, 16.0f, 250.0f);
     if (ui.checkbox("car interact boxes", car_boxes_on_) && !car_boxes_on_) {
@@ -419,6 +443,47 @@ void EditorScene::detail_panel(Editor& editor, Ui& ui, World& world, InteractBox
             editor.mark_dirty();
         }
         if (ui.slider("param", sel->aux_value, 0.0f, 10.0f)) {
+            editor.mark_dirty();
+        }
+    }
+
+    if (sel && sel->kind == EntityKind::Gravity) {
+        if (trigger_sync_ != editor.selection()) {
+            trigger_sync_ = editor.selection();
+            std::snprintf(trigger_name_, sizeof(trigger_name_), "%s", sel->mesh_name.c_str());
+        }
+        ui.text_field("volume name", trigger_name_, sizeof(trigger_name_));
+        if (sel->mesh_name != trigger_name_) {
+            sel->mesh_name.assign(trigger_name_);
+            editor.mark_dirty();
+        }
+        if (ui.slider("half x", sel->half.x, 0.5f, 40.0f)
+            || ui.slider("half y", sel->half.y, 0.5f, 40.0f)
+            || ui.slider("half z", sel->half.z, 0.5f, 40.0f)
+            || ui.slider("falloff", sel->scale, 0.0f, 30.0f)
+            || ui.slider("strength", sel->aux_value, 0.0f, 30.0f)) {
+            editor.mark_dirty();
+        }
+        f32 yaw = 0.0f;
+        f32 pitch = 0.0f;
+        f32 roll = 0.0f;
+        quat_to_euler(sel->rot, yaw, pitch, roll);
+        f32 pitch_deg = pitch * kRadToDeg;
+        f32 roll_deg = roll * kRadToDeg;
+        if (ui.slider("pitch", pitch_deg, -180.0f, 180.0f)
+            || ui.slider("roll", roll_deg, -180.0f, 180.0f)) {
+            sel->rot = quat_from_euler(yaw, pitch_deg * kDegToRad, roll_deg * kDegToRad);
+            editor.mark_dirty();
+        }
+        f32 shape = static_cast<f32>(sel->aux_kind & 0xFu);
+        f32 mode = static_cast<f32>(sel->aux_kind >> 4);
+        if (ui.slider("sphere", shape, 0.0f, 1.0f) || ui.slider("mode dir/curl/point", mode, 0.0f, 2.0f)) {
+            sel->aux_kind = (static_cast<u32>(shape + 0.5f) & 0xFu) | (static_cast<u32>(mode + 0.5f) << 4);
+            editor.mark_dirty();
+        }
+        f32 sector = static_cast<f32>(sel->aux_data ? sel->aux_data : 90u);
+        if (ui.slider("curl sector", sector, 1.0f, 180.0f)) {
+            sel->aux_data = static_cast<u32>(sector + 0.5f);
             editor.mark_dirty();
         }
     }

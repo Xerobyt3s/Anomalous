@@ -635,13 +635,18 @@ void RenderDevice::flush_meshes()
             if (!shadow_pass_) {
                 bind_texture0(assets_.texture_gl(sub.texture_slot));
                 const i32 maps = (sub.normal_slot != kNoTexture ? 1 : 0)
-                               | (sub.surface_slot != kNoTexture ? 2 : 0);
+                               | (sub.surface_slot != kNoTexture ? 2 : 0)
+                               | (sub.blend_slot != kNoTexture ? 4 : 0)
+                               | (sub.ground ? 8 : 0);
                 glProgramUniform1i(program, kMeshMapsLocation, maps);
                 if (maps & 1) {
                     bind_texture(4, assets_.texture_gl(sub.normal_slot));
                 }
                 if (maps & 2) {
                     bind_texture(5, assets_.texture_gl(sub.surface_slot));
+                }
+                if (maps & 4) {
+                    bind_texture(6, assets_.texture_gl(sub.blend_slot));
                 }
             }
             stats_.draw_calls++;
@@ -703,6 +708,7 @@ void RenderDevice::draw_rain(f32 intensity, f32 wind, Vec3 cam_vel, f32 time)
     glProgramUniform4f(program, 1, time, intensity, wind, 0.0f);
     glProgramUniform4f(program, 2, cam_vel.x, cam_vel.y, cam_vel.z, 0.0f);
     glProgramUniform4f(program, 3, sky_fwd_.x, sky_fwd_.y, sky_fwd_.z, 0.0f);
+    glProgramUniform4f(program, 7, fall_rot_.x, fall_rot_.y, fall_rot_.z, fall_rot_.w);
 
     const u32 drops = static_cast<u32>(3400.0f * f_clamp01(intensity));
     glEnable(GL_BLEND);
@@ -730,6 +736,7 @@ void RenderDevice::draw_snow(f32 intensity, f32 wind, f32 time)
     const f32 wind_speed = wind * kSnowWindSpeed;
     use_program(program);
     glProgramUniform4f(program, 1, time, intensity, wind, static_cast<f32>(near_count));
+    glProgramUniform4f(program, 7, fall_rot_.x, fall_rot_.y, fall_rot_.z, fall_rot_.w);
     glProgramUniform4f(program, 2, kSnowWindDir.x * wind_speed, kSnowWindDir.y * wind_speed,
                        0.0f, 0.0f);
 
@@ -835,6 +842,7 @@ void RenderDevice::post_process(f32 time)
     glProgramUniform4f(program, 2, shield_wet_, shield_wiper_, shield_incar_, shield_rain_);
     glProgramUniform1f(program, 3, bloom_ok ? 1.0f : 0.0f);
     glProgramUniform2f(program, 4, warp_, warp_flash_);
+    glProgramUniform2f(program, 5, chroma_, chroma_seed_);
     use_program(program);
     bind_texture0(scene_color_);
     glBindTextureUnit(1, scene_depth_);

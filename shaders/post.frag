@@ -9,6 +9,7 @@ layout(location = 1) uniform float u_time;
 layout(location = 2) uniform vec4 u_shield;
 layout(location = 3) uniform float u_bloom;
 layout(location = 4) uniform vec2 u_warp;
+layout(location = 5) uniform vec2 u_chroma;
 
 layout(binding = 0) uniform sampler2D u_color;
 layout(binding = 1) uniform sampler2D u_depth;
@@ -60,12 +61,29 @@ vec3 tonemapAgx(vec3 color)
 
 vec3 g_fog_transmittance = vec3(1.0);
 vec3 g_fog_inscatter = vec3(0.0);
+float g_px_scale = 1.0;
+
+vec2 chroma_spread(vec2 uv)
+{
+    if (u_chroma.x <= 0.0) {
+        return vec2(0.0);
+    }
+    vec2 d = uv - 0.5;
+    float r = length(d * vec2(u_viewport.x / u_viewport.y, 1.0));
+    if (r < 1e-4) {
+        return vec2(0.0);
+    }
+    float pulse = 0.75 + 0.25 * sin(u_time * 2.0 + u_chroma.y);
+    float px = u_chroma.x * pulse * smoothstep(0.05, 0.6, r) * (u_viewport.y / 1080.0);
+    px = g_px_scale > 1.0 ? floor(px / g_px_scale + 0.5) * g_px_scale : px;
+    return normalize(d) * px / u_viewport.xy;
+}
 
 vec3 fetch(vec2 uv)
 {
     vec3 c;
-    if (u_warp.x > 0.0) {
-        vec2 spread = (uv - 0.5) * (u_warp.x * 0.020);
+    vec2 spread = (uv - 0.5) * (u_warp.x * 0.020) + chroma_spread(uv);
+    if (dot(spread, spread) > 0.0) {
         c = vec3(texture(u_color, uv + spread).r, texture(u_color, uv).g,
                  texture(u_color, uv - spread).b);
     } else {
@@ -108,6 +126,7 @@ void main()
                       : 0.0;
 
     float scale = floor(mix(1.0, max(u_pixel_scale, 1.0), retro) + 0.5);
+    g_px_scale = scale;
     vec2 uv = v_uv;
     if (u_warp.x > 0.0) {
         // Wring the frame in toward the centre and twist it, hardest at the corners, so

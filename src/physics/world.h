@@ -12,6 +12,8 @@ namespace anom {
 
 class Arena;
 class Heightfield;
+class GravityField;
+class JoltWorld;
 
 struct PhysContact {
     u64 key;
@@ -63,7 +65,11 @@ public:
 
     void statics_reserve(Arena& arena, u32 max_tris) { statics_.reserve(arena, max_tris); }
     void add_static_tri(Vec3 a, Vec3 b, Vec3 c) { statics_.add(a, b, c); }
-    void statics_build(Arena& arena) { statics_.build(arena); }
+    void statics_build(Arena& arena)
+    {
+        statics_.build(arena);
+        sync_jolt();
+    }
     void statics_clear() { statics_.clear(); }
     const StaticGrid& statics() const { return statics_; }
     const Heightfield* heightfield() const { return hf_; }
@@ -87,6 +93,17 @@ public:
     const PhysTuning& tuning() const { return tuning_; }
 
     Vec3 gravity() const { return Vec3{0.0f, tuning_.gravity, 0.0f}; }
+    Vec3 gravity_at(Vec3 p) const;
+    Vec3 up_at(Vec3 p) const;
+    void set_gravity_field(const GravityField* field) { field_ = field; }
+    const GravityField* gravity_field() const { return field_; }
+    void set_jolt(JoltWorld* jolt)
+    {
+        jolt_ = jolt;
+        sync_jolt();
+    }
+    JoltWorld* jolt() const { return jolt_; }
+    void sync_jolt();
 
 private:
     void integrate_velocities(f32 dt);
@@ -102,6 +119,8 @@ private:
     Pool<RigidBody> bodies_;
     StaticGrid statics_;
     const Heightfield* hf_ = nullptr;
+    const GravityField* field_ = nullptr;
+    JoltWorld* jolt_ = nullptr;
 
     PhysContact* contacts_ = nullptr;
     PhysContact* previous_ = nullptr;

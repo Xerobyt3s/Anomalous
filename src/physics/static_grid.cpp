@@ -15,12 +15,14 @@ void StaticGrid::reserve(Arena& arena, u32 max_tris)
     tris_ = arena.push_array<StaticTri>(max_tris);
     tri_capacity_ = max_tris;
     tri_count_ = 0;
+    dropped_ = 0;
     built_ = false;
 }
 
 void StaticGrid::add(Vec3 a, Vec3 b, Vec3 c)
 {
     if (!tris_ || tri_count_ >= tri_capacity_ || built_) {
+        dropped_++;
         return;
     }
     tris_[tri_count_++] = StaticTri{a, b, c};
@@ -29,6 +31,7 @@ void StaticGrid::add(Vec3 a, Vec3 b, Vec3 c)
 void StaticGrid::clear()
 {
     tri_count_ = 0;
+    dropped_ = 0;
     built_ = false;
 }
 
@@ -46,6 +49,9 @@ void StaticGrid::tri_cell_range(const StaticTri& tri, i32& x0, i32& x1, i32& z0,
 
 void StaticGrid::build(Arena& arena)
 {
+    if (dropped_ > 0) {
+        log_warn("statics: %u triangles dropped past the budget of %u", dropped_, tri_capacity_);
+    }
     if (!tri_count_) {
         built_ = false;
         return;

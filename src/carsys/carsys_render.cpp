@@ -22,6 +22,8 @@ constexpr f32 kLeverAngleSet = 0.55f;
 
 const Vec3 kOne{1.0f, 1.0f, 1.0f};
 
+constexpr f32 kSmokeBuoyancy = 0.06f;
+
 Mat4 offset_from(const Mat4& base, Vec3 local, Quat rot = quat_identity())
 {
     return base * mat4_trs(local, rot, kOne);
@@ -61,7 +63,7 @@ void CarSysRenderer::spawn_sparks(Vec3 pos, u32 count)
 }
 
 void CarSysRenderer::draw_effects(RenderDevice& device, const CarSys& sys, const Vehicle& veh,
-                                  const Mat4& base, f32 dt)
+                                  const Mat4& base, Vec3 gravity, f32 dt)
 {
     if (sys.fluids.coolant_temp > 105.0f && sys.engine_on) {
         smoke_accum_ += (sys.fluids.coolant_temp - 105.0f) * 0.6f * dt;
@@ -85,7 +87,7 @@ void CarSysRenderer::draw_effects(RenderDevice& device, const CarSys& sys, const
             p.used = false;
             continue;
         }
-        p.vel.y += (p.spark ? -9.8f : 0.6f) * dt;
+        p.vel += gravity * ((p.spark ? 1.0f : -kSmokeBuoyancy) * dt);
         p.pos += p.vel * dt;
 
         const f32 t = 1.0f - p.life / p.max_life;
@@ -291,7 +293,8 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
         device.draw_mesh(assets.mesh("excel_revlight"), offset_from(base, -com));
     }
 
-    draw_effects(device, sys, veh, base, dt);
+    const RigidBody* car = phys.body(veh.body());
+    draw_effects(device, sys, veh, base, car ? phys.gravity_at(car->pos) : phys.gravity(), dt);
 }
 
 } // namespace anom

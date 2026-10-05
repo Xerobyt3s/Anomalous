@@ -11,6 +11,8 @@ struct Camera {
     Vec3 pos{0.0f, 0.0f, 0.0f};
     f32 yaw = 0.0f;
     f32 pitch = 0.0f;
+    Quat frame = quat_identity();
+    f32 roll = 0.0f;
     f32 fov_y = 70.0f * kDegToRad;
     f32 znear = 0.05f;
     f32 zfar = 2000.0f;

@@ -210,7 +210,8 @@ void Cable::sim(const CableSimInput& in, f32 dt)
     if (!sim_init) {
         for (u32 i = 0; i < kCablePoints; i++) {
             const f32 f = static_cast<f32>(i) / static_cast<f32>(kCablePoints - 1);
-            const Vec3 target = in.end ? *in.end : in.root + Vec3{0.0f, -0.3f, 0.0f};
+            const Vec3 hang = in.phys ? in.phys->up_at(in.root) * -1.0f : Vec3{0.0f, -1.0f, 0.0f};
+            const Vec3 target = in.end ? *in.end : in.root + hang * 0.3f;
             p[i] = lerp(in.root, target, f);
             prev[i] = p[i];
         }
@@ -226,7 +227,6 @@ void Cable::sim(const CableSimInput& in, f32 dt)
     }
 
     const f32 seg = let_out / static_cast<f32>(kCablePoints - 1);
-    const f32 grav = 9.8f * dt * dt;
 
     NearBodies near;
     if (in.phys) {
@@ -243,7 +243,7 @@ void Cable::sim(const CableSimInput& in, f32 dt)
         const Vec3 vel = (p[i] - prev[i]) * 0.976f;
         prev[i] = p[i];
         p[i] += vel;
-        p[i].y -= grav;
+        p[i] += (in.phys ? in.phys->gravity_at(p[i]) : Vec3{0.0f, -9.8f, 0.0f}) * (dt * dt);
     }
 
     p[0] = in.root;

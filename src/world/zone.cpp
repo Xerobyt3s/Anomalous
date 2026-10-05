@@ -4,6 +4,7 @@
 #include "core/arena.h"
 #include "core/config.h"
 #include "core/log.h"
+#include "physics/gravity_field.h"
 #include "physics/heightfield.h"
 #include "physics/world.h"
 #include "platform/filesystem.h"
@@ -216,6 +217,43 @@ void spawn_trigger(World& world, const Terrain& terrain, std::string_view line)
     }
 }
 
+void spawn_gravity(World& world, const Terrain& terrain, std::string_view line)
+{
+    Tokens t(line);
+    const std::string_view name = t.next();
+    const f32 x = t.next_f32();
+    const f32 yoff = t.next_f32();
+    const f32 z = t.next_f32();
+    const f32 hx = t.next_f32();
+    const f32 hy = t.next_f32();
+    const f32 hz = t.next_f32();
+    const f32 yaw_deg = t.next_f32();
+    const f32 pitch_deg = t.next_f32();
+    const f32 roll_deg = t.next_f32();
+    if (t.consumed() < 10 || name.empty()) {
+        log_warn("zone: malformed gravity line: %.*s", static_cast<int>(line.size()),
+                 line.data());
+        return;
+    }
+    const f32 falloff = t.next_f32(4.0f);
+    const f32 strength = t.next_f32(kDefaultGravity);
+    const i32 shape = t.next_i32(0);
+    const i32 mode = t.next_i32(0);
+    const f32 sector_deg = t.next_f32(90.0f);
+
+    const Vec3 pos{x, terrain.heightfield().sample(x, z) + yoff, z};
+    const Quat rot = quat_from_euler(yaw_deg * kDegToRad, pitch_deg * kDegToRad,
+                                     roll_deg * kDegToRad);
+    const EntityHandle handle = world.spawn(EntityKind::Gravity, pos, rot, falloff, "", 0);
+    if (Entity* e = world.entity(handle)) {
+        e->mesh_name.assign(name);
+        e->half = Vec3{hx, hy, hz};
+        e->aux_kind = (static_cast<u32>(shape) & 0xFu) | (static_cast<u32>(mode) << 4);
+        e->aux_value = strength;
+        e->aux_data = static_cast<u32>(f_clamp(sector_deg, 1.0f, 180.0f) + 0.5f);
+    }
+}
+
 void spawn_tower(World& world, PhysWorld& phys, Arena& scratch, const Terrain& terrain,
                  std::string_view line, ZoneSpawn* out_spawn)
 {
@@ -281,6 +319,9 @@ u32 spawn_from_config(World& world, PhysWorld& phys, Arena& scratch, const Terra
             count++;
         } else if (entry.key == "entities.trigger") {
             spawn_trigger(world, terrain, entry.value);
+            count++;
+        } else if (entry.key == "entities.gravity") {
+            spawn_gravity(world, terrain, entry.value);
             count++;
         } else if (entry.key == "entities.tower") {
             spawn_tower(world, phys, scratch, terrain, entry.value, out_spawn);
@@ -361,6 +402,26 @@ void write_entities(std::FILE* out, const World& world, const PhysWorld& phys,
                          static_cast<f64>(e->half.y), static_cast<f64>(e->half.z),
                          static_cast<f64>(quat_yaw(e->rot) * kRadToDeg),
                          static_cast<int>(e->aux_kind), static_cast<f64>(e->aux_value));
+            out_written++;
+            continue;
+        }
+
+        if (e->kind == EntityKind::Gravity) {
+            f32 gyaw = 0.0f;
+            f32 gpitch = 0.0f;
+            f32 groll = 0.0f;
+            quat_to_euler(e->rot, gyaw, gpitch, groll);
+            const f32 ground = hf.sample(e->pos.x, e->pos.z);
+            std::fprintf(out,
+                         "gravity = %s %.3f %.3f %.3f %.3f %.3f %.3f %.2f %.2f %.2f %.3f %.3f %d %d %u\n",
+                         e->mesh_name.empty() ? "unnamed" : e->mesh_name.c_str(),
+                         static_cast<f64>(e->pos.x), static_cast<f64>(e->pos.y - ground),
+                         static_cast<f64>(e->pos.z), static_cast<f64>(e->half.x),
+                         static_cast<f64>(e->half.y), static_cast<f64>(e->half.z),
+                         static_cast<f64>(gyaw * kRadToDeg), static_cast<f64>(gpitch * kRadToDeg),
+                         static_cast<f64>(groll * kRadToDeg), static_cast<f64>(e->scale),
+                         static_cast<f64>(e->aux_value), static_cast<int>(e->aux_kind & 0xFu),
+                         static_cast<int>(e->aux_kind >> 4), e->aux_data ? e->aux_data : 90u);
             out_written++;
             continue;
         }
@@ -498,6 +559,49 @@ bool zone_reload(std::string_view zone_dir, Arena& arena, Arena& scratch, World&
 
     log_info("zone: reloaded %s | %u entities", path.c_str(), count);
     return true;
+}
+
+bool zone_out_of_bounds(const Heightfield& hf, Vec3 p)
+{
+    if (!hf.valid()) {
+        return false;
+    }
+    const Aabb box = hf.bounds();
+    return p.x < box.min.x - kZoneEscapeMarginXZ || p.x > box.max.x + kZoneEscapeMarginXZ
+        || p.z < box.min.z - kZoneEscapeMarginXZ || p.z > box.max.z + kZoneEscapeMarginXZ
+        || p.y < hf.min_height() - kZoneEscapeMarginY || p.y > hf.max_height() + kZoneEscapeMarginY
+        || p.x != p.x || p.y != p.y || p.z != p.z;
+}
+
+void zone_gravity(const World& world, GravityField& out)
+{
+    out.clear();
+    const Pool<Entity>& pool = world.entities();
+    for (u32 idx : pool.live_indices()) {
+        const Entity* e = pool.at(idx);
+        if (!e || e->kind != EntityKind::Gravity) {
+            continue;
+        }
+        GravityVolume volume;
+        volume.pos = e->pos;
+        volume.rot = e->rot;
+        volume.half = e->half;
+        volume.falloff = e->scale;
+        volume.strength = e->aux_value;
+        volume.shape = (e->aux_kind & 0xFu) == 1 ? GravityShape::Sphere : GravityShape::Box;
+        const u32 mode = e->aux_kind >> 4;
+        volume.mode = mode == 1 ? GravityMode::Curl
+                    : mode == 2 ? GravityMode::Point
+                                : GravityMode::Directional;
+        volume.sector = static_cast<f32>(e->aux_data ? e->aux_data : 90u) * kDegToRad;
+        out.add(volume);
+    }
+    static u32 warned = 0;
+    if (out.dropped() > warned) {
+        warned = out.dropped();
+        log_warn("zone: %u gravity volumes over the limit of %u were ignored", out.dropped(),
+                 GravityField::kMaxVolumes);
+    }
 }
 
 bool zone_save(std::string_view zone_dir, Arena& scratch, const World& world,

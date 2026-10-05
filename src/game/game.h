@@ -9,6 +9,8 @@
 #include "core/types.h"
 #include "editor/editor.h"
 #include "math/vmath.h"
+#include "physics/gravity_field.h"
+#include "physics/jolt_world.h"
 #include "physics/world.h"
 #include "player/interact.h"
 #include "platform/input_context.h"
@@ -114,6 +116,8 @@ private:
     void update_camera(f32 frame_dt);
     void track_camera_velocity(f32 frame_dt);
     void guard_against_falling();
+    void update_chroma(f32 frame_dt);
+    bool default_gravity_at(Vec3 p) const;
     void update_audio(f32 frame_dt);
     void update_cables(f32 frame_dt);
     void update_terminal(const Input& input, f32 frame_dt);
@@ -147,11 +151,14 @@ private:
     void draw_entities(RenderDevice& device);
     void collect_trees();
     void update_grass_press(TerrainRenderer& terrain_renderer);
+    void draw_grass_patches(RenderDevice& device, TerrainRenderer& terrain_renderer, f32 time);
     void draw_vehicle(RenderDevice& device);
     void draw_viewmodel(RenderDevice& device);
 
     Terrain terrain_;
     World world_;
+    JoltWorld jolt_;
+    GravityField gravity_;
     PhysWorld phys_;
     Vehicle vehicle_;
     Player player_;
@@ -219,6 +226,8 @@ private:
 
     PlayerCommand pending_cmd_;
     bool pending_jump_ = false;
+    bool pending_crawl_ = false;
+    f32 chroma_ = 0.0f;
     bool pending_interact_ = false;
     f64 accumulator_ = 0.0;
     f32 alpha_ = 0.0f;

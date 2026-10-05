@@ -25,6 +25,7 @@ enum class EntityKind : u32 {
     Vehicle,
     PartPickup,
     Trigger,
+    Gravity,
 };
 
 struct Entity {

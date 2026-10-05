@@ -8,7 +8,8 @@
 namespace anom {
 namespace {
 
-constexpr f32 kGravity = 9.81f;
+constexpr f32 kMinGravity = 1.0f;
+constexpr f32 kRecoverLift = 1.2f;
 constexpr f32 kDamperVelClamp = 3.0f;
 constexpr f32 kSlipDenomMin = 2.0f;
 constexpr f32 kSlipAngleDenomMin = 0.8f;
@@ -122,13 +123,18 @@ bool Vehicle::reload_config(PhysWorld& world, Arena& scratch)
 
 void Vehicle::teleport(PhysWorld& world, Vec3 pos, f32 yaw)
 {
+    teleport(world, pos, quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, yaw));
+}
+
+void Vehicle::teleport(PhysWorld& world, Vec3 pos, Quat rot)
+{
     RigidBody* body = world.body(body_);
     if (!body) {
         return;
     }
     body->pos = pos;
     body->prev_pos = pos;
-    body->rot = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, yaw);
+    body->rot = normalize(rot);
     body->prev_rot = body->rot;
     body->vel = Vec3{0.0f, 0.0f, 0.0f};
     body->angular_vel = Vec3{0.0f, 0.0f, 0.0f};
@@ -147,6 +153,22 @@ void Vehicle::teleport(PhysWorld& world, Vec3 pos, f32 yaw)
     steer_deg_ = 0.0f;
     input_ = VehicleInput{};
     drivetrain_init(train_, cfg_);
+}
+
+void Vehicle::recover(PhysWorld& world)
+{
+    const RigidBody* body = world.body(body_);
+    if (!body) {
+        return;
+    }
+    const Vec3 up = world.up_at(body->pos);
+    Vec3 forward = rotate(body->rot, Vec3{0.0f, 0.0f, -1.0f});
+    forward -= up * dot(forward, up);
+    forward = length_sq(forward) > 1e-4f ? normalize(forward) : any_perpendicular(up);
+    const Quat upright = quat_from_to(Vec3{0.0f, 1.0f, 0.0f}, up);
+    const Vec3 facing = rotate(upright, Vec3{0.0f, 0.0f, -1.0f});
+    const f32 turn = std::atan2(dot(cross(facing, forward), up), dot(facing, forward));
+    teleport(world, body->pos + up * kRecoverLift, quat_from_axis_angle(up, turn) * upright);
 }
 
 f32 Vehicle::forward_speed(const PhysWorld& world) const
@@ -247,7 +269,8 @@ void Vehicle::tick(PhysWorld& world, f32 dt)
     const Mat3 rot = quat_to_mat3(body->rot);
     const Vec3 up = rot * Vec3{0.0f, 1.0f, 0.0f};
     const TireParams tp = tire_derive_params(cfg_);
-    const f32 tire_load_clamp = cfg_.mass * kGravity * kTireLoadClampFrac;
+    const f32 g_mag = f_max(length(world.gravity_at(body->pos)), kMinGravity);
+    const f32 tire_load_clamp = cfg_.mass * g_mag * kTireLoadClampFrac;
     const f32 wheel_inertia = f_max(0.5f * cfg_.wheel_mass * cfg_.wheels[0].radius
                                         * cfg_.wheels[0].radius,
                                     0.05f);
@@ -346,7 +369,7 @@ void Vehicle::tick(PhysWorld& world, f32 dt)
         arb_force[WHEEL_RR] = -cfg_.arb_rear * d;
     }
 
-    const f32 nominal_load = cfg_.mass * kGravity * 0.25f;
+    const f32 nominal_load = cfg_.mass * g_mag * 0.25f;
     const f32 rebound_mul = f_max(cfg_.damper_rebound_mul, 0.1f);
 
     for (u32 i = 0; i < kWheelCount; i++) {
@@ -415,7 +438,7 @@ void Vehicle::tick(PhysWorld& world, f32 dt)
 
         Vec3 force_tire = force_pacejka;
         if (patch_speed < cfg_.tire_low_speed) {
-            const f32 patch_mass = f_max(tire_load / kGravity, kStickMinMass);
+            const f32 patch_mass = f_max(tire_load / g_mag, kStickMinMass);
             f32 brake_request = input_.brake * cfg_.brake_torque * wc.brake_share
                               * effects_.brake_mul;
             if (input_.handbrake && !wc.steered) {

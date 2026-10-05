@@ -347,7 +347,10 @@ EntityHandle Editor::pick(const Camera& cam, const World& world, Arena& scratch,
     f32 best_t = 1e30f;
     for (u32 idx = 0; idx < pool.capacity(); idx++) {
         const Entity* e = pool.at(idx);
-        if (!e || (!e->mesh && e->kind != EntityKind::Trigger)) {
+        if (!e || (!e->mesh && e->kind != EntityKind::Trigger && e->kind != EntityKind::Gravity)) {
+            continue;
+        }
+        if (e->kind == EntityKind::Gravity && contains(entity_world_aabb(*e), ray.origin)) {
             continue;
         }
         f32 t = 0.0f;
@@ -411,7 +414,8 @@ void Editor::drive_gizmo(const Input& input, const Camera& cam, World& world, Ph
     }
 
     RigidBody* sel_body = phys.body(sel->body);
-    const bool no_scale = sel_body != nullptr || sel->kind == EntityKind::Trigger;
+    const bool no_scale = sel_body != nullptr || sel->kind == EntityKind::Trigger
+                       || sel->kind == EntityKind::Gravity;
 
     Vec3 gizmo_pos = sel_body ? sel_body->pos : sel->pos;
     const Vec3 prev_pos = gizmo_pos;
@@ -451,7 +455,8 @@ void Editor::drive_gizmo(const Input& input, const Camera& cam, World& world, Ph
             sel->pos = gizmo_pos;
         }
         if (turned) {
-            sel->rot = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, sel_yaw_);
+            sel->rot = normalize(quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, sel_yaw_ - prev_yaw)
+                                 * sel->rot);
         }
     }
     if (moved || turned || sel->scale != prev_scale) {
@@ -595,6 +600,19 @@ void Editor::render(Ui& ui, DebugDraw& debug, TextRenderer& text, const Input& i
     const Pool<Entity>& pool = world.entities();
     for (u32 idx = 0; idx < pool.capacity(); idx++) {
         const Entity* e = pool.at(idx);
+        if (e && e->kind == EntityKind::Gravity) {
+            const bool is_sel = pool.handle_at(idx) == selection_;
+            debug.obb(e->pos, e->rot, e->half, is_sel ? kDdYellow : kDdMagenta);
+            if (is_sel && e->scale > 0.0f) {
+                debug.obb(e->pos, e->rot, e->half + Vec3{e->scale, e->scale, e->scale}, kDdDark);
+            }
+            const Vec3 down = rotate(e->rot, Vec3{0.0f, -1.0f, 0.0f});
+            const f32 reach = f_min(e->half.y, 4.0f);
+            debug.arrow(e->pos, e->pos + down * reach, 0.5f, kDdMagenta);
+            debug.text_3d(e->pos + rotate(e->rot, Vec3{0.0f, e->half.y + 0.3f, 0.0f}), 13.0f,
+                          kDdMagenta, "%s", e->mesh_name.c_str());
+            continue;
+        }
         if (!e || e->kind != EntityKind::Trigger) {
             continue;
         }

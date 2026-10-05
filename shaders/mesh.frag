@@ -2,16 +2,27 @@
 #include "common.glsl"
 #include "frame.glsl"
 #include "shadow.glsl"
+#include "snow_ground.glsl"
 
 in vec3 v_world;
 in vec3 v_normal;
 in vec2 v_uv;
+in vec3 v_up;
 
 layout(location = 10) uniform int u_maps;
 
 layout(binding = 0) uniform sampler2D u_albedo;
 layout(binding = 4) uniform sampler2D u_normal_map;
 layout(binding = 5) uniform sampler2D u_surface_map;
+layout(binding = 6) uniform sampler2D u_blend_map;
+
+const float GROUND_FAR_START = 18.0;
+const float GROUND_FAR_END = 45.0;
+const float GROUND_FAR_LOD = 9.0;
+const float GROUND_ROUGHNESS = 0.88;
+const float WET_DARKEN = 0.28;
+const float WET_ROUGHNESS = 0.22;
+const float SNOW_ROUGHNESS = 0.7;
 
 out vec4 o_color;
 
@@ -90,6 +101,28 @@ void main()
             roughness = surface.r;
             metal = surface.g;
             cavity = surface.b;
+        }
+        if ((u_maps & 4) != 0) {
+            float dist = length(u_cam_pos.xyz - v_world);
+            vec3 far = textureLod(u_albedo, v_uv, GROUND_FAR_LOD).rgb;
+            albedo = mix(albedo, far, smoothstep(GROUND_FAR_START, GROUND_FAR_END, dist) * 0.8);
+            float jitter = (fbm2(v_world.xz * 0.35 + v_world.y * 0.21, 3) - 0.5) * 0.18;
+            float slope = dot(geometric, normalize(v_up));
+            float rockiness = 1.0 - smoothstep(0.60 + jitter, 0.78 + jitter, slope);
+            albedo = mix(albedo, texture(u_blend_map, v_uv * 0.6).rgb, rockiness);
+            roughness = GROUND_ROUGHNESS;
+        }
+        if ((u_maps & 8) != 0) {
+            float wetness = u_shadow_params.z;
+            float snow = snow_coverage_up(v_world, geometric, normalize(v_up), 0.0);
+            if (snow > 0.0) {
+                albedo = mix(albedo, snow_albedo(v_world), snow);
+                roughness = mix(roughness, SNOW_ROUGHNESS, snow);
+                cavity = mix(cavity, 1.0, snow);
+                wetness *= 1.0 - snow;
+            }
+            albedo *= 1.0 - wetness * WET_DARKEN;
+            roughness = mix(roughness, WET_ROUGHNESS, wetness);
         }
         float ndl = max(dot(n, to_sun), 0.0);
         float shadow = shadow_factor(v_world, max(dot(geometric, to_sun), 0.0));

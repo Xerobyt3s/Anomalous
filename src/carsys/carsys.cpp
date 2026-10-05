@@ -251,7 +251,7 @@ void CarSys::tick(Vehicle& veh, PhysWorld& world, f32 dt)
     detect_impacts(veh, *body, dv, dt);
 
     const Vec3 accel_world = dv * (1.0f / dt);
-    const Vec3 apparent = rotate(conjugate(body->rot), Vec3{0.0f, -9.81f, 0.0f} - accel_world);
+    const Vec3 apparent = rotate(conjugate(body->rot), world.gravity_at(body->pos) - accel_world);
     cargo_tick(apparent, dt);
 
     const f32 rpm = drivetrain_rpm(veh.train());

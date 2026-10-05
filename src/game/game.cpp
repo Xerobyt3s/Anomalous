@@ -23,6 +23,13 @@ constexpr f32 kFallGuardMargin = 15.0f;
 constexpr f32 kThrowChargeMax = 0.9f;
 constexpr f32 kPlaceRange = 3.5f;
 constexpr f32 kPlaceNormalY = 0.55f;
+constexpr f32 kChromaBase = 1.5f;
+constexpr u32 kMaxGrassPatches = 16;
+constexpr f32 kPressUprightY = 0.995f;
+constexpr f32 kChromaTurn = 6.0f;
+constexpr f32 kChromaTurnFull = 1.6f;
+constexpr f32 kChromaAttack = 14.0f;
+constexpr f32 kChromaRelease = 3.0f;
 constexpr f32 kEngineAudioLocal[3] = {0.0f, 0.10f, -1.55f};
 constexpr f32 kDashAudioLocal[3] = {0.0f, 0.35f, -0.35f};
 constexpr Vec3 kTowerPortLocal{0.0f, 1.35f, 0.62f};
@@ -64,6 +71,8 @@ bool Game::init(RenderDevice& device, FontChain& fonts, Arena& perm, Arena& scra
 
     world_.init(perm);
     phys_.init(perm, &terrain_.heightfield());
+    phys_.set_gravity_field(&gravity_);
+    phys_.set_jolt(&jolt_);
 
     if (!zone_arena_.reserve(kZoneArenaBytes)) {
         log_error("game: zone arena reserve failed");
@@ -73,6 +82,7 @@ bool Game::init(RenderDevice& device, FontChain& fonts, Arena& perm, Arena& scra
         log_error("game: zone load failed");
         return false;
     }
+    zone_gravity(world_, gravity_);
 
     const f32 tx = spawn_.tower_present ? spawn_.tower_x : 258.0f;
     const f32 tz = spawn_.tower_present ? spawn_.tower_z : 82.0f;
@@ -172,6 +182,7 @@ void Game::sync_pickup_transforms()
 
 void Game::tick(f32 dt, const PlayerCommand& cmd)
 {
+    zone_gravity(world_, gravity_);
     weather_.tick(dt);
     carsys_.rain_level = weather_.rain();
     carsys_.tick(vehicle_, phys_, dt);
@@ -234,8 +245,12 @@ void Game::foot_input(const Input& input, PlayerCommand& cmd, f32 frame_dt)
     cmd.move_x = (input.down(Key::D) ? 1.0f : 0.0f) - (input.down(Key::A) ? 1.0f : 0.0f);
     cmd.move_z = (input.down(Key::W) ? 1.0f : 0.0f) - (input.down(Key::S) ? 1.0f : 0.0f);
     cmd.run = input.down(Key::LeftShift);
+    cmd.crouch = input.down(Key::LeftControl);
     if (input.pressed(Key::Space)) {
         pending_jump_ = true;
+    }
+    if (input.pressed(Key::X)) {
+        pending_crawl_ = true;
     }
 
     if (interact_.cable_drag() >= 0) {
@@ -259,7 +274,7 @@ void Game::foot_input(const Input& input, PlayerCommand& cmd, f32 frame_dt)
     }
     if (input.released(Key::G)) {
         const f32 power = throw_charge_ < 0.12f ? 0.0f : throw_charge_ / kThrowChargeMax;
-        const Vec3 eye = player_.pos() + Vec3{0.0f, 1.38f, 0.0f};
+        const Vec3 eye = player_.pos() + player_.up() * 1.38f;
         interact_.drop(world_, phys_, eye, camera_.forward(), power);
         throw_charge_ = 0.0f;
     }
@@ -275,10 +290,11 @@ void Game::foot_input(const Input& input, PlayerCommand& cmd, f32 frame_dt)
         aim.origin = camera_.pos;
         aim.dir = camera_.forward();
         PhysRayHit hit;
-        place_valid_ = phys_.raycast(aim, kPlaceRange, &hit) && hit.normal.y > kPlaceNormalY;
+        place_valid_ = phys_.raycast(aim, kPlaceRange, &hit)
+                    && dot(hit.normal, player_.up()) > kPlaceNormalY;
         if (place_valid_) {
             const f32 lift = item_cargo_half(interact_.hands().kind).y + 0.015f;
-            place_pos_ = hit.point + Vec3{0.0f, lift, 0.0f};
+            place_pos_ = hit.point + player_.up() * lift;
         }
     } else if (place_active_) {
         if (place_valid_ && interact_.hands().kind != ITEM_NONE) {
@@ -326,7 +342,11 @@ void Game::handle_input(Window& window, const Input& input, f32 frame_dt)
             window.request_close();
         }
         if (input.pressed(Key::R) && !editor_.active()) {
-            reset_car();
+            if (input.down(Key::LeftShift)) {
+                reset_car();
+            } else {
+                vehicle_.recover(phys_);
+            }
         }
         if (input.pressed(Key::F1)) {
             toggles_.telemetry = !toggles_.telemetry;
@@ -373,6 +393,7 @@ void Game::handle_input(Window& window, const Input& input, f32 frame_dt)
         vehicle_.set_input(VehicleInput{});
         pending_jump_ = false;
         pending_interact_ = false;
+        pending_crawl_ = false;
         pending_cmd_ = cmd;
         return;
     }
@@ -382,6 +403,7 @@ void Game::handle_input(Window& window, const Input& input, f32 frame_dt)
         vehicle_.set_input(VehicleInput{});
         pending_jump_ = false;
         pending_interact_ = false;
+        pending_crawl_ = false;
         pending_cmd_ = cmd;
         return;
     }
@@ -439,21 +461,47 @@ void Game::handle_input(Window& window, const Input& input, f32 frame_dt)
     pending_cmd_ = cmd;
 }
 
+bool Game::default_gravity_at(Vec3 p) const
+{
+    return gravity_.sample(p).presence < 0.01f;
+}
+
 void Game::guard_against_falling()
 {
     const f32 floor = terrain_.heightfield().min_height() - kFallGuardMargin;
     const RigidBody* car = phys_.body(vehicle_.body());
-    if (car && (car->pos.y < floor || !body_state_valid(*car))) {
+    const Heightfield& hf = terrain_.heightfield();
+    if (car && ((car->pos.y < floor && default_gravity_at(car->pos)) || !body_state_valid(*car)
+                || zone_out_of_bounds(hf, car->pos))) {
         reset_car();
     }
-    if (player_.state() == PlayerState::OnFoot && player_.pos().y < floor) {
+    if (player_.state() == PlayerState::OnFoot
+        && ((player_.pos().y < floor && default_gravity_at(player_.pos()))
+            || zone_out_of_bounds(hf, player_.pos()))) {
         reset_player();
+    }
+}
+
+void Game::update_chroma(f32 frame_dt)
+{
+    const f32 turn = f_clamp01(player_.up_turn_rate() / kChromaTurnFull);
+    const f32 target = kChromaBase * player_.field_presence() + kChromaTurn * turn;
+    const f32 rate = target > chroma_ ? kChromaAttack : kChromaRelease;
+    chroma_ = f_approach_exp(chroma_, target, rate, frame_dt);
+    if (toggles_.free_cam || editor_.active()) {
+        chroma_ = 0.0f;
     }
 }
 
 void Game::update_camera(f32 frame_dt)
 {
     if (toggles_.free_cam || editor_.active()) {
+        if (!(camera_.frame == quat_identity()) || camera_.roll != 0.0f) {
+            const Vec3 forward = camera_.forward();
+            camera_.frame = quat_identity();
+            camera_.roll = 0.0f;
+            camera_.look_at(camera_.pos + forward);
+        }
         return;
     }
     player_.camera(phys_, &vehicle_, alpha_, frame_dt, toggles_.chase_cam, camera_);
@@ -486,8 +534,10 @@ void Game::advance(f32 frame_dt)
         PlayerCommand cmd = pending_cmd_;
         cmd.jump = pending_jump_;
         cmd.interact = pending_interact_;
+        cmd.crawl = pending_crawl_;
         pending_jump_ = false;
         pending_interact_ = false;
+        pending_crawl_ = false;
         tick(kFixedDt, cmd);
         accumulator_ -= kFixedDt;
     }
@@ -495,6 +545,7 @@ void Game::advance(f32 frame_dt)
     guard_against_falling();
     alpha_ = static_cast<f32>(accumulator_ / kFixedDt);
     update_camera(frame_dt);
+    update_chroma(frame_dt);
     track_camera_velocity(frame_dt);
     update_cables(frame_dt);
 }
@@ -522,7 +573,7 @@ void Game::update_audio(f32 frame_dt)
                                                    kEngineAudioLocal[2]});
     const Vec3 dash_pos = body_point(*body, Vec3{kDashAudioLocal[0], kDashAudioLocal[1],
                                                  kDashAudioLocal[2]});
-    audio_.set_listener(camera_.pos, camera_.forward(), player_.vel());
+    audio_.set_listener(camera_.pos, camera_.forward(), camera_.up(), player_.vel());
     audio_.set_car(engine_pos, body->pos, dash_pos, body->vel);
     audio_.set_occlusion(player_.driving() ? 0.55f : 1.0f, frame_dt);
 
@@ -783,6 +834,7 @@ void Game::bind_entity_meshes(RenderDevice& device)
     for (u32 idx : pool.live_indices()) {
         Entity* e = pool.at(idx);
         if (!e || e->mesh || e->mesh_name.empty() || e->kind == EntityKind::Trigger
+            || e->kind == EntityKind::Gravity
             || e->kind == EntityKind::Tree) {
             continue;
         }
@@ -815,6 +867,30 @@ void Game::collect_trees()
     }
 }
 
+void Game::draw_grass_patches(RenderDevice& device, TerrainRenderer& terrain_renderer, f32 time)
+{
+    ScrubPatch patches[kMaxGrassPatches];
+    u32 count = 0;
+    const Pool<Entity>& pool = world_.entities();
+    for (u32 idx : pool.live_indices()) {
+        const Entity* e = pool.at(idx);
+        if (!e || count >= kMaxGrassPatches || e->mesh_name.empty()
+            || (e->kind != EntityKind::Building && e->kind != EntityKind::StaticMesh)) {
+            continue;
+        }
+        const u32 texture = terrain_renderer.patch_texture(*scratch_, e->mesh_name.view());
+        if (!texture) {
+            continue;
+        }
+        ScrubPatch& p = patches[count++];
+        p.pos = e->pos;
+        p.rot = e->rot;
+        p.scale = e->scale;
+        p.texture = texture;
+    }
+    terrain_renderer.draw_scrub_patches(device, camera_.pos, time, patches, count);
+}
+
 void Game::update_grass_press(TerrainRenderer& terrain_renderer)
 {
     terrain_renderer.clear_press_volumes();
@@ -823,6 +899,7 @@ void Game::update_grass_press(TerrainRenderer& terrain_renderer)
         const Vec3 com = vehicle_.config().com_offset;
         const Vec3 centre = body->pos + rotate(body->rot, kCarPressLocal - com);
         terrain_renderer.add_press_volume(centre, kCarPressHalf, body->rot);
+        terrain_renderer.add_patch_press(centre, kCarPressHalf, body->rot);
     }
 
     const Pool<Entity>& pool = world_.entities();
@@ -835,6 +912,9 @@ void Game::update_grass_press(TerrainRenderer& terrain_renderer)
             continue;
         }
         const Aabb& b = e->mesh->bounds;
+        if (rotate(e->rot, Vec3{0.0f, 1.0f, 0.0f}).y < kPressUprightY) {
+            continue;
+        }
         const Vec3 local_centre = (b.min + b.max) * 0.5f * e->scale;
         const Vec3 half = (b.max - b.min) * 0.5f * e->scale + kBuildingPressMargin;
         terrain_renderer.add_press_volume(e->pos + rotate(e->rot, local_centre), half, e->rot);
@@ -960,7 +1040,7 @@ void Game::draw_viewmodel(RenderDevice& device)
         scale *= 0.75f;
     }
 
-    const Quat rot = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, -camera_.yaw);
+    const Quat rot = camera_.frame * quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, -camera_.yaw);
     const Vec3 pos = hands_item_pos() - rotate(rot, item_mesh_center(held.kind)) * scale;
     const Mat4 base = mat4_trs(pos, rot, Vec3{scale, scale, scale});
     device.draw_mesh(assets.mesh(item_mesh(held.kind)), base);
@@ -1153,6 +1233,7 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
         device.begin_frame(camera_, static_cast<i32>(viewport.x), static_cast<i32>(viewport.y));
         device.end_frame();
         device.set_travel_warp(warp, flash);
+        device.set_chroma(chroma_, 0.0f);
         device.post_process(time);
         device.blit_texture(0.0f, 0.0f, viewport.x, viewport.y, screen_texture, 1.0f, time);
         debug.text_2d(text, viewport.x * 0.5f - 80.0f, viewport.y - 10.0f, 14.0f, kDdGray,
@@ -1183,6 +1264,7 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
     terrain_renderer.draw(device);
     update_grass_press(terrain_renderer);
     terrain_renderer.draw_scrub(device, camera_.pos, time);
+    draw_grass_patches(device, terrain_renderer, time);
 
     draw_entities(device);
     tree_render_.draw(device);
@@ -1195,6 +1277,8 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
     carsys_.cables[CABLE_BUS].render(device);
     device.flush_meshes();
 
+    device.set_fall_rotation(quat_from_to(Vec3{0.0f, -1.0f, 0.0f}, phys_.up_at(camera_.pos) * -1.0f,
+                                          Vec3{1.0f, 0.0f, 0.0f}));
     device.draw_rain(weather_.rain(), weather_.wind(), cam_vel_, time);
     device.draw_snow(weather_.snow(), weather_.wind(), time);
     car_render_.draw_glass(device, carsys_, vehicle_, phys_, alpha_, time);
@@ -1207,6 +1291,7 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
 
     device.end_frame();
     device.set_travel_warp(warp, flash);
+    device.set_chroma(chroma_, 0.0f);
     device.post_process(time);
 
     if (term_anim_ > 0.80f && terminal_.powered()) {
@@ -1272,7 +1357,7 @@ bool Game::terminal_transform(Vec3& out_pos, Quat& out_rot) const
     }
     if (interact_.hands().kind == ITEM_COMPUTER) {
         out_pos = hands_item_pos();
-        out_rot = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, -camera_.yaw);
+        out_rot = camera_.frame * quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, -camera_.yaw);
         return true;
     }
     if (const Entity* loose = find_pickup(ITEM_COMPUTER)) {
@@ -1506,6 +1591,7 @@ bool Game::load_zone(std::string_view dir)
         log_error("travel: zone load failed for %.*s", static_cast<int>(dir.size()), dir.data());
         return false;
     }
+    zone_gravity(world_, gravity_);
     zone_dir_.assign(dir);
 
     const f32 tx = spawn_.tower_present ? spawn_.tower_x : 0.0f;

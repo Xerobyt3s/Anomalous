@@ -36,7 +36,7 @@ public:
 
     bool ok() const { return backend_ != nullptr; }
 
-    void set_listener(Vec3 pos, Vec3 forward, Vec3 vel);
+    void set_listener(Vec3 pos, Vec3 forward, Vec3 up, Vec3 vel);
     void set_car(Vec3 engine_pos, Vec3 center_pos, Vec3 dash_pos, Vec3 vel);
     void set_occlusion(f32 factor, f32 dt);
     f32 occlusion() const;

@@ -59,8 +59,23 @@ class MeshBuilder:
         self.quad((x0, y1, z1), (x1, y1, z1), (x1, y1, z0), (x0, y1, z0), (0, 1, 0), uv_scale)
         self.quad((x0, y0, z0), (x1, y0, z0), (x1, y0, z1), (x0, y0, z1), (0, -1, 0), uv_scale)
 
+    def merge_materials(self):
+        order = []
+        groups = {}
+        for first, count, material in self.submeshes:
+            if material not in groups:
+                groups[material] = []
+                order.append(material)
+            groups[material].extend(self.indices[first:first + count])
+        self.indices = []
+        self.submeshes = []
+        for material in order:
+            self.submeshes.append((len(self.indices), len(groups[material]), material))
+            self.indices.extend(groups[material])
+
     def write(self, path):
         self.end_material()
+        self.merge_materials()
         with open(path, "wb") as f:
             f.write(struct.pack("<5I", AMSH_MAGIC, AMSH_VERSION,
                                 len(self.vertices), len(self.indices), len(self.submeshes)))
@@ -1061,6 +1076,703 @@ def make_relay_tower():
     c.write(os.path.join(MESH_DIR, "relay_tower_col.amsh"))
 
 
+def hash2(ix, iz, seed):
+    n = (ix * 374761393 + iz * 668265263 + seed * 1442695041) & 0xFFFFFFFF
+    n = ((n ^ (n >> 13)) * 1274126177) & 0xFFFFFFFF
+    return ((n ^ (n >> 16)) & 0xFFFF) / 65535.0
+
+
+def value_noise(x, z, seed):
+    ix, iz = math.floor(x), math.floor(z)
+    fx, fz = x - ix, z - iz
+    sx, sz = fx * fx * (3.0 - 2.0 * fx), fz * fz * (3.0 - 2.0 * fz)
+    a = hash2(ix, iz, seed)
+    b = hash2(ix + 1, iz, seed)
+    c = hash2(ix, iz + 1, seed)
+    d = hash2(ix + 1, iz + 1, seed)
+    near = a + (b - a) * sx
+    far = c + (d - c) * sx
+    return near + (far - near) * sz
+
+
+def fbm(x, z, seed, octaves=3):
+    total, amp, freq, norm = 0.0, 1.0, 1.0, 0.0
+    for o in range(octaves):
+        total += amp * value_noise(x * freq, z * freq, seed + o * 17)
+        norm += amp
+        amp *= 0.5
+        freq *= 2.0
+    return total / norm
+
+
+def flat_tri(b, pa, pb, pc, outward, uv_scale=0.3):
+    n = normalize(v_cross(v_sub(pb, pa), v_sub(pc, pa)))
+    if v_dot(n, outward) < 0.0:
+        pb, pc = pc, pb
+        n = v_scale(n, -1.0)
+    ax = max(range(3), key=lambda k: abs(n[k]))
+    u_axis, v_axis = {0: (2, 1), 1: (0, 2), 2: (0, 1)}[ax]
+    ids = [b.vertex(p, n, (p[u_axis] * uv_scale, p[v_axis] * uv_scale)) for p in (pa, pb, pc)]
+    b.triangle(*ids)
+
+
+GROUND = "island_grass"
+TURF = "island_turf"
+STONE = "island_rock"
+GRASS_EXTENT = 24.0
+GRASS_RES = 192
+GRASS_HEIGHT_MIN = -8.0
+GRASS_HEIGHT_MAX = 8.0
+
+
+def write_grass_height(name, height_fn, inside_fn):
+    import numpy as np
+    from PIL import Image
+    data = np.zeros((GRASS_RES, GRASS_RES), dtype=np.uint16)
+    step = 2.0 * GRASS_EXTENT / GRASS_RES
+    span = GRASS_HEIGHT_MAX - GRASS_HEIGHT_MIN
+    for j in range(GRASS_RES):
+        z = -GRASS_EXTENT + (j + 0.5) * step
+        for i in range(GRASS_RES):
+            x = -GRASS_EXTENT + (i + 0.5) * step
+            if not inside_fn(x, z):
+                continue
+            t = (height_fn(x, z) - GRASS_HEIGHT_MIN) / span
+            data[j, i] = max(1, min(65535, int(t * 65535.0 + 0.5)))
+    path = os.path.join(MESH_DIR, "..", "textures", f"{name}_grass_h.png")
+    Image.fromarray(data).save(path)
+    print(f"wrote {path}")
+
+
+def rock_blob(b, centre, size, seed, material=STONE):
+    rng = random.Random(seed)
+    base = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
+    faces = [(0, 2, 4), (4, 2, 1), (1, 2, 5), (5, 2, 0),
+             (4, 3, 0), (1, 3, 4), (5, 3, 1), (0, 3, 5)]
+    points = [tuple(c * (0.75 + rng.random() * 0.5) for c in v) for v in base]
+    mids = {}
+
+    def midpoint(i, j):
+        key = (min(i, j), max(i, j))
+        if key not in mids:
+            m = normalize(tuple((points[i][k] + points[j][k]) * 0.5 for k in range(3)))
+            jitter = 0.78 + rng.random() * 0.45
+            points.append(tuple(c * jitter for c in m))
+            mids[key] = len(points) - 1
+        return mids[key]
+
+    tris = []
+    for a, bb, c in faces:
+        ab, bc, ca = midpoint(a, bb), midpoint(bb, c), midpoint(c, a)
+        tris.extend([(a, ab, ca), (ab, bb, bc), (ca, bc, c), (ab, bc, ca)])
+    b.begin_material(material)
+    for a, bb, c in tris:
+        pa, pb, pc = (tuple(centre[k] + points[i][k] * size[k] for k in range(3)) for i in (a, bb, c))
+        mid = v_scale(v_add(v_add(pa, pb), pc), 1.0 / 3.0)
+        flat_tri(b, pa, pb, pc, v_sub(mid, centre))
+
+
+class Profile:
+    def __init__(self, points):
+        self.points = points
+        self.lengths = [0.0]
+        for i in range(1, len(points)):
+            self.lengths.append(self.lengths[-1] + math.dist(points[i - 1], points[i]))
+        self.total = self.lengths[-1]
+
+    def at(self, s):
+        s = max(0.0, min(self.total, s))
+        for i in range(1, len(self.points)):
+            if s <= self.lengths[i] or i == len(self.points) - 1:
+                seg = self.lengths[i] - self.lengths[i - 1]
+                t = 0.0 if seg < 1e-9 else (s - self.lengths[i - 1]) / seg
+                x0, y0 = self.points[i - 1]
+                x1, y1 = self.points[i]
+                n = normalize((-(y1 - y0), x1 - x0, 0.0))
+                return (x0 + (x1 - x0) * t, y0 + (y1 - y0) * t), (n[0], n[1])
+        return self.points[-1], (0.0, 1.0)
+
+    def point3(self, s, z, lift):
+        (x, y), (nx, ny) = self.at(s)
+        return (x + nx * lift, y + ny * lift, z)
+
+    def normal3(self, s):
+        _, (nx, ny) = self.at(s)
+        return (nx, ny, 0.0)
+
+    def offset(self, d):
+        out = []
+        for i, p in enumerate(self.points):
+            _, (nx, ny) = self.at(self.lengths[i])
+            out.append((p[0] + nx * d, p[1] + ny * d))
+        return out
+
+
+def solid_body(b, profile, width, back, floor, surface_material, with_uv, surface=True):
+    hz = width * 0.5
+    pts = profile
+    if surface:
+        b.begin_material(surface_material)
+        prof = Profile(pts)
+        for idx in range(len(pts) - 1):
+            x0, y0 = pts[idx]
+            x1, y1 = pts[idx + 1]
+            s0, s1 = prof.lengths[idx], prof.lengths[idx + 1]
+            n = normalize((-(y1 - y0), x1 - x0, 0.0))
+            p = [(x0, y0, -hz), (x1, y1, -hz), (x1, y1, hz), (x0, y0, hz)]
+            uv = [(s0 * 0.25, -hz * 0.25), (s1 * 0.25, -hz * 0.25),
+                  (s1 * 0.25, hz * 0.25), (s0 * 0.25, hz * 0.25)]
+            ids = [b.vertex(p[k], n, uv[k] if with_uv else (0.0, 0.0)) for k in range(4)]
+            b.triangle(ids[0], ids[2], ids[1])
+            b.triangle(ids[0], ids[3], ids[2])
+
+    b.begin_material(STONE)
+    xe, ye = pts[-1]
+    outline = list(pts) + [(xe + back, ye), (xe + back, floor), (pts[0][0], floor)]
+    if back <= 0.0:
+        outline = list(pts) + [(xe, floor), (pts[0][0], floor)]
+    flat, tris = ear_clip(outline)
+    for side in (-1.0, 1.0):
+        z = side * hz
+        ids = [b.vertex((x, y, z), (0.0, 0.0, side), (x * 0.3, y * 0.3)) for x, y in flat]
+        for i0, i1, i2 in tris:
+            if side > 0:
+                b.triangle(ids[i0], ids[i1], ids[i2])
+            else:
+                b.triangle(ids[i0], ids[i2], ids[i1])
+    end_x = xe + max(back, 0.0)
+    b.quad((end_x, floor, hz), (end_x, floor, -hz), (end_x, ye, -hz), (end_x, ye, hz), (1.0, 0.0, 0.0), 0.3)
+    if back > 0.0:
+        b.quad((xe, ye, hz), (end_x, ye, hz), (end_x, ye, -hz), (xe, ye, -hz), (0.0, 1.0, 0.0), 0.3)
+
+
+def debris_cover(b, profile, width, seed, cell=1.5, grass=0.62):
+    rng = random.Random(seed)
+    prof = Profile(profile)
+    ns = max(2, int(round(prof.total / cell)))
+    nz = max(2, int(round(width / cell)))
+    hz = width * 0.5
+    corners = {}
+    for i in range(ns + 1):
+        for j in range(nz + 1):
+            s = prof.total * i / ns
+            z = -hz + width * j / nz
+            if 0 < i < ns:
+                s += (rng.random() - 0.5) * prof.total / ns * 0.7
+            if 0 < j < nz:
+                z += (rng.random() - 0.5) * width / nz * 0.7
+            corners[(i, j)] = (s, z)
+
+    def crack(c0, c1, key):
+        h = hash2(key[0] * 7 + key[2], key[1] * 13 + key[3], seed)
+        h2 = hash2(key[1] * 5 + key[3], key[0] * 11 + key[2], seed + 1)
+        ds, dz = c1[0] - c0[0], c1[1] - c0[1]
+        length = math.hypot(ds, dz)
+        ns_, nz_ = -dz / max(length, 1e-6), ds / max(length, 1e-6)
+        t = 0.35 + h2 * 0.3
+        off = (h - 0.5) * length * 0.35
+        return (c0[0] + ds * t + ns_ * off, c0[1] + dz * t + nz_ * off)
+
+    def edge_key(p0, p1):
+        return (p0 + p1) if p0 <= p1 else (p1 + p0)
+
+    plates = {GROUND: [], STONE: []}
+    for i in range(ns):
+        for j in range(nz):
+            ids = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)]
+            poly = []
+            for k in range(4):
+                c0 = corners[ids[k]]
+                c1 = corners[ids[(k + 1) % 4]]
+                poly.append(c0)
+                key = edge_key(ids[k], ids[(k + 1) % 4])
+                poly.append(crack(c0, c1, key))
+            cs = sum(q[0] for q in poly) / len(poly)
+            cz = sum(q[1] for q in poly) / len(poly)
+            gap = 0.06 + rng.random() * 0.12
+            shrunk = []
+            for s_, z_ in poly:
+                ds, dz = s_ - cs, z_ - cz
+                d = math.hypot(ds, dz)
+                k = max(0.0, d - gap) / d if d > 1e-6 else 0.0
+                shrunk.append((cs + ds * k, cz + dz * k))
+            turf = rng.random() < grass
+            base = (0.02 if turf else -0.04) + rng.random() * 0.10
+            ts = (rng.random() - 0.5) * 0.12
+            tz = (rng.random() - 0.5) * 0.12
+            tops = [prof.point3(s_, z_, base + ts * (s_ - cs) + tz * (z_ - cz)) for s_, z_ in shrunk]
+            depth = (0.45 if turf else 0.3) + rng.random() * 0.3
+            flare = 1.0 + rng.random() * 0.06
+            bottoms = []
+            for t, (s_, z_) in zip(tops, shrunk):
+                n = prof.normal3(s_)
+                bs, bz = cs + (s_ - cs) * flare, cz + (z_ - cz) * flare
+                bp = prof.point3(bs, bz, base - depth)
+                bottoms.append(bp)
+            plates[GROUND if turf else STONE].append((tops, bottoms, prof.normal3(cs)))
+    for material, items in plates.items():
+        b.begin_material(material)
+        for tops, _, n in items:
+            centre = v_scale(tops[0], 0.0)
+            for t in tops:
+                centre = v_add(centre, v_scale(t, 1.0 / len(tops)))
+            for k in range(len(tops)):
+                flat_tri(b, centre, tops[k], tops[(k + 1) % len(tops)], n, 0.25)
+    b.begin_material(STONE)
+    for material, items in plates.items():
+        for tops, bottoms, n in items:
+            centre = v_scale(tops[0], 0.0)
+            for t in tops:
+                centre = v_add(centre, v_scale(t, 1.0 / len(tops)))
+            for k in range(len(tops)):
+                m = (k + 1) % len(tops)
+                out = v_sub(v_scale(v_add(tops[k], tops[m]), 0.5), centre)
+                flat_tri(b, tops[k], tops[m], bottoms[m], out, 0.3)
+                flat_tri(b, tops[k], bottoms[m], bottoms[k], out, 0.3)
+    pebbles = int(prof.total * width * 0.35)
+    for k in range(pebbles):
+        s_ = rng.random() * prof.total
+        z_ = (rng.random() - 0.5) * width
+        size = 0.08 + rng.random() ** 2 * 0.22
+        c = prof.point3(s_, z_, size * 0.15)
+        rock_blob(b, c, (size * (0.8 + rng.random() * 0.6), size * 0.6, size * (0.8 + rng.random() * 0.6)),
+                  seed * 1000 + k)
+    return prof
+
+
+def debris_edges(b, prof, width, seed, count, start=0.0):
+    rng = random.Random(seed + 101)
+    hz = width * 0.5
+    for k in range(count):
+        s = start + rng.random() * (prof.total - start)
+        side = -1.0 if k % 2 == 0 else 1.0
+        size = 0.35 + rng.random() ** 1.8 * 1.3
+        z = side * (hz + size * (rng.random() * 0.5 - 0.3))
+        c = prof.point3(s, z, size * 0.05)
+        rock_blob(b, c, (size * (0.9 + rng.random() * 0.5), size * (0.55 + rng.random() * 0.4),
+                         size * (0.9 + rng.random() * 0.5)), seed * 31 + k)
+
+
+CURL_RADIUS = 10.0
+CURL_WIDTH = 24.0
+CURL_BACK = 3.0
+CURL_APRON = 4.0
+CURL_SEGMENTS = 28
+CURL_FLOOR = -1.5
+
+
+def curl_profile():
+    pts = [(-CURL_APRON, -0.25), (-CURL_APRON * 0.5, -0.05)]
+    for s in range(CURL_SEGMENTS + 1):
+        t = s / CURL_SEGMENTS * math.pi * 0.5
+        pts.append((CURL_RADIUS * math.sin(t), CURL_RADIUS - CURL_RADIUS * math.cos(t)))
+    return pts
+
+
+def append_transformed(dst, src, origin, tx, ny, tz):
+    src.end_material()
+    for first, count, material in src.submeshes:
+        dst.begin_material(material)
+        remap = {}
+        for idx in src.indices[first:first + count]:
+            if idx not in remap:
+                pos, normal, uv = src.vertices[idx]
+                world = v_add(origin, v_add(v_add(v_scale(tx, pos[0]), v_scale(ny, pos[1])),
+                                             v_scale(tz, pos[2])))
+                n = normalize(v_add(v_add(v_scale(tx, normal[0]), v_scale(ny, normal[1])),
+                                    v_scale(tz, normal[2])))
+                remap[idx] = dst.vertex(world, n, uv)
+        tri = src.indices[first:first + count]
+        for k in range(0, len(tri), 3):
+            dst.triangle(remap[tri[k]], remap[tri[k + 1]], remap[tri[k + 2]])
+
+
+def chunk_mesh(seed, rx, rz):
+    rng = random.Random(seed)
+    shape = IslandShape(seed, rx, rz, 0.22)
+    b = MeshBuilder()
+    b.begin_material(TURF)
+    rim = island_top(b, shape, 4, 18, True)
+    b.begin_material(STONE)
+    thick = 0.35 + rng.random() * 0.35
+    bottom = []
+    for idx, p in enumerate(rim):
+        jag = (hash2(idx, 7, seed) - 0.5) * 0.5
+        inset = 0.86 + hash2(idx, 11, seed) * 0.1
+        bottom.append((p[0] * inset, -thick + jag, p[2] * inset))
+    count = len(rim)
+    for i in range(count):
+        j = (i + 1) % count
+        mid = v_scale(v_add(rim[i], rim[j]), 0.5)
+        outward = (mid[0], 0.0, mid[2])
+        flat_tri(b, rim[i], rim[j], bottom[j], outward)
+        flat_tri(b, rim[i], bottom[j], bottom[i], outward)
+    depth = (rx + rz) * (0.35 + rng.random() * 0.35)
+    tip = ((rng.random() - 0.5) * rx * 0.4, -thick - depth, (rng.random() - 0.5) * rz * 0.4)
+    hanging_root(b, bottom, depth, seed, tip)
+    return b
+
+
+def chunk_trail(b, profile, width, seed, spacing=2.6, keep=0.78, start=0.0):
+    rng = random.Random(seed)
+    prof = Profile(profile)
+    hz = width * 0.5
+    s = start + spacing * 0.5
+    placed = 0
+    while s < prof.total:
+        z = -hz + spacing * 0.5 * rng.random()
+        while z < hz:
+            if rng.random() < keep:
+                rx = 0.9 + rng.random() * 1.3
+                rz = 0.9 + rng.random() * 1.3
+                cs = min(max(s + (rng.random() - 0.5) * spacing * 0.5, 0.0), prof.total)
+                cz = max(-hz + 0.5, min(hz - 0.5, z + (rng.random() - 0.5) * spacing * 0.5))
+                lift = -0.05 + rng.random() * 0.12
+                origin = prof.point3(cs, cz, lift)
+                ny = prof.normal3(cs)
+                tx = normalize((ny[1], -ny[0], 0.0))
+                tz = (0.0, 0.0, 1.0)
+                turn = rng.random() * math.tau
+                c, sn = math.cos(turn), math.sin(turn)
+                rtx = v_add(v_scale(tx, c), v_scale(tz, sn))
+                rtz = v_sub(v_scale(tz, c), v_scale(tx, sn))
+                append_transformed(b, chunk_mesh(seed * 977 + placed, rx, rz), origin, rtx, ny, rtz)
+                placed += 1
+            z += spacing * (0.8 + rng.random() * 0.4)
+        s += spacing * (0.8 + rng.random() * 0.4)
+    return placed
+
+
+def make_curl():
+    profile = curl_profile()
+    b = MeshBuilder()
+    placed = chunk_trail(b, profile, CURL_WIDTH, 11, start=CURL_APRON * 0.5)
+    b.write(os.path.join(MESH_DIR, "curl.amsh"))
+    print(f"curl: {placed} chunks")
+
+    c = MeshBuilder()
+    coarse = profile[::2]
+    if coarse[-1] != profile[-1]:
+        coarse.append(profile[-1])
+    solid_body(c, coarse, CURL_WIDTH, CURL_BACK, CURL_FLOOR, STONE, False)
+    c.write(os.path.join(MESH_DIR, "curl_col.amsh"))
+
+
+BENDS = {
+    "bend_a_b": dict(radius=10.0, angle=42.0, width=12.0, seed=37),
+}
+
+
+def bend_profile(radius, angle):
+    pts = [(-3.0, -0.25), (-1.5, -0.05)]
+    steps = max(4, int(angle / 4.0))
+    a = math.radians(angle)
+    for s in range(steps + 1):
+        t = a * s / steps
+        pts.append((radius * math.sin(t), radius - radius * math.cos(t)))
+    return pts
+
+
+def make_bend(name, radius, angle, width, seed):
+    profile = bend_profile(radius, angle)
+    b = MeshBuilder()
+    placed = chunk_trail(b, profile, width, seed, spacing=2.4, start=1.0)
+    b.write(os.path.join(MESH_DIR, f"{name}.amsh"))
+    print(f"{name}: {placed} chunks")
+
+    c = MeshBuilder()
+    solid_body(c, profile, width, 0.0, CURL_FLOOR, STONE, False)
+    c.write(os.path.join(MESH_DIR, f"{name}_col.amsh"))
+
+
+def make_bends():
+    for name, params in BENDS.items():
+        make_bend(name, **params)
+
+
+RAMP_WIDTH = 10.0
+RAMP_ANGLE = 22.0
+RAMP_RADIUS = 9.0
+RAMP_LENGTH = 14.0
+
+
+def ramp_profile():
+    pts = [(-3.0, -0.25), (-1.5, -0.05)]
+    a = math.radians(RAMP_ANGLE)
+    steps = 10
+    for s in range(steps + 1):
+        t = a * s / steps
+        pts.append((RAMP_RADIUS * math.sin(t), RAMP_RADIUS - RAMP_RADIUS * math.cos(t)))
+    x0, y0 = pts[-1]
+    pts.append((x0 + math.cos(a) * RAMP_LENGTH, y0 + math.sin(a) * RAMP_LENGTH))
+    return pts
+
+
+def make_ramp():
+    profile = ramp_profile()
+    b = MeshBuilder()
+    placed = chunk_trail(b, profile, RAMP_WIDTH, 23, spacing=2.4, start=1.0)
+    b.write(os.path.join(MESH_DIR, "ramp.amsh"))
+    print(f"ramp: {placed} chunks")
+
+    c = MeshBuilder()
+    solid_body(c, profile, RAMP_WIDTH, 0.0, CURL_FLOOR, STONE, False)
+    c.write(os.path.join(MESH_DIR, "ramp_col.amsh"))
+
+
+SLAB_LENGTH = 30.0
+SLAB_WIDTH = 24.0
+SLAB_THICK = 3.0
+SLAB_ROOT = 7.0
+
+
+def slab_height(x, z):
+    h = (fbm(x * 0.12 + 40.0, z * 0.12 + 40.0, 7) - 0.5) * 0.5
+    edge = min(SLAB_LENGTH * 0.5 - abs(x), SLAB_WIDTH * 0.5 - abs(z))
+    if edge < 1.2:
+        h -= (1.2 - edge) * 0.22
+    return h
+
+
+def slab_rim(cell):
+    nx = int(round(SLAB_LENGTH / cell))
+    nz = int(round(SLAB_WIDTH / cell))
+    hx, hz = SLAB_LENGTH * 0.5, SLAB_WIDTH * 0.5
+    rim = []
+    for i in range(nx):
+        rim.append((-hx + i * cell, -hz))
+    for k in range(nz):
+        rim.append((hx, -hz + k * cell))
+    for i in range(nx):
+        rim.append((hx - i * cell, hz))
+    for k in range(nz):
+        rim.append((-hx, hz - k * cell))
+    return rim
+
+
+def slab_top(b, cell, with_uv):
+    nx = int(round(SLAB_LENGTH / cell))
+    nz = int(round(SLAB_WIDTH / cell))
+    hx, hz = SLAB_LENGTH * 0.5, SLAB_WIDTH * 0.5
+    ids = {}
+    for k in range(nz + 1):
+        for i in range(nx + 1):
+            x = -hx + i * cell
+            z = -hz + k * cell
+            y = slab_height(x, z)
+            e = 0.25
+            n = normalize((slab_height(x - e, z) - slab_height(x + e, z), 2.0 * e,
+                           slab_height(x, z - e) - slab_height(x, z + e)))
+            ids[(i, k)] = b.vertex((x, y, z), n, (x * 0.25, z * 0.25) if with_uv else (0.0, 0.0))
+    for k in range(nz):
+        for i in range(nx):
+            a, c = ids[(i, k + 1)], ids[(i + 1, k + 1)]
+            d, e = ids[(i + 1, k)], ids[(i, k)]
+            b.triangle(a, c, d)
+            b.triangle(a, d, e)
+
+
+def hanging_root(b, rim_bottom, depth, seed, tip):
+    count = len(rim_bottom)
+    rings = [rim_bottom]
+    steps = 5
+    for k in range(1, steps):
+        f = (1.0 - k / steps) ** 0.8
+        ring = []
+        for idx, p in enumerate(rim_bottom):
+            jag = (hash2(idx, k, seed) - 0.5) * 1.2
+            d = depth * (k / steps) ** 1.3
+            ring.append((p[0] * f + jag * 0.4, p[1] - d + jag, p[2] * f + jag * 0.4))
+        rings.append(ring)
+    b.begin_material(STONE)
+    for k in range(len(rings)):
+        ring = rings[k]
+        for i in range(count):
+            j = (i + 1) % count
+            if k + 1 < len(rings):
+                nxt = rings[k + 1]
+                mid = v_scale(v_add(ring[i], nxt[j]), 0.5)
+                outward = v_sub(mid, (0.0, mid[1] + 3.0, 0.0))
+                flat_tri(b, ring[i], ring[j], nxt[j], outward)
+                flat_tri(b, ring[i], nxt[j], nxt[i], outward)
+            else:
+                mid = v_scale(v_add(ring[i], tip), 0.5)
+                outward = v_sub(mid, (0.0, mid[1] + 3.0, 0.0))
+                flat_tri(b, ring[i], ring[j], tip, outward)
+
+
+def make_slab():
+    b = MeshBuilder()
+    b.begin_material(GROUND)
+    slab_top(b, 1.0, True)
+
+    b.begin_material(STONE)
+    rim = slab_rim(1.0)
+    centre = (0.0, -SLAB_THICK * 0.5, 0.0)
+    bottom = []
+    for idx, (x, z) in enumerate(rim):
+        jag = (fbm(x * 0.4, z * 0.4, 21) - 0.5) * 1.4
+        inset = 0.94 + hash2(idx, 3, 5) * 0.06
+        bottom.append((x * inset, -SLAB_THICK + jag, z * inset))
+    count = len(rim)
+    for i in range(count):
+        j = (i + 1) % count
+        t0 = (rim[i][0], slab_height(*rim[i]), rim[i][1])
+        t1 = (rim[j][0], slab_height(*rim[j]), rim[j][1])
+        outward = v_sub(v_scale(v_add(t0, t1), 0.5), centre)
+        outward = (outward[0], 0.0, outward[2])
+        flat_tri(b, t0, t1, bottom[j], outward)
+        flat_tri(b, t0, bottom[j], bottom[i], outward)
+    hanging_root(b, bottom, SLAB_ROOT, 9, (0.6, -SLAB_THICK - SLAB_ROOT, -0.4))
+    b.write(os.path.join(MESH_DIR, "slab.amsh"))
+
+    c = MeshBuilder()
+    c.begin_material(STONE)
+    slab_top(c, 2.0, False)
+    coarse = slab_rim(2.0)
+    count = len(coarse)
+    base = [(x, -SLAB_THICK, z) for x, z in coarse]
+    for i in range(count):
+        j = (i + 1) % count
+        t0 = (coarse[i][0], slab_height(*coarse[i]), coarse[i][1])
+        t1 = (coarse[j][0], slab_height(*coarse[j]), coarse[j][1])
+        outward = (t0[0] + t1[0], 0.0, t0[2] + t1[2])
+        flat_tri(c, t0, t1, base[j], outward)
+        flat_tri(c, t0, base[j], base[i], outward)
+        flat_tri(c, (0.0, -SLAB_THICK, 0.0), base[i], base[j], (0.0, -1.0, 0.0))
+    c.write(os.path.join(MESH_DIR, "slab_col.amsh"))
+
+    hx, hz = SLAB_LENGTH * 0.5 - 0.4, SLAB_WIDTH * 0.5 - 0.4
+    write_grass_height("slab", slab_height, lambda x, z: abs(x) < hx and abs(z) < hz)
+
+
+ISLANDS = {
+    "island_a": dict(seed=3, rx=13.0, rz=10.0, thick=2.5, root=9.0),
+    "island_b": dict(seed=8, rx=9.0, rz=8.0, thick=2.0, root=7.0),
+    "island_c": dict(seed=14, rx=16.0, rz=12.0, thick=3.0, root=12.0),
+}
+
+
+class IslandShape:
+    def __init__(self, seed, rx, rz, amp=1.0):
+        self.seed = seed
+        self.rx = rx
+        self.rz = rz
+        self.amp = amp
+
+    def radius(self, phi):
+        n = fbm(math.cos(phi) * 1.4 + self.seed * 3.1, math.sin(phi) * 1.4 + self.seed, self.seed, 3)
+        return 0.72 + 0.56 * n
+
+    def rim_point(self, phi, f):
+        r = self.radius(phi) * f
+        return (math.cos(phi) * self.rx * r, math.sin(phi) * self.rz * r)
+
+    def rho(self, x, z):
+        phi = math.atan2(z / self.rz, x / self.rx)
+        r = self.radius(phi)
+        return math.hypot(x / self.rx, z / self.rz) / max(r, 1e-6)
+
+    def height(self, x, z):
+        rho = min(self.rho(x, z), 1.0)
+        h = (fbm(x * 0.09 + self.seed * 7.0, z * 0.09, self.seed + 3) - 0.5) * 1.3
+        h += 0.5 * (1.0 - rho * rho)
+        if rho > 0.82:
+            h -= (rho - 0.82) / 0.18 * 0.55
+        return h * self.amp
+
+
+def island_top(b, shape, rings, segments, with_uv):
+    centre = b.vertex((0.0, shape.height(0.0, 0.0), 0.0), (0.0, 1.0, 0.0), (0.0, 0.0))
+    ring_ids = []
+    for k in range(1, rings + 1):
+        f = k / rings
+        ids = []
+        for m in range(segments):
+            phi = m / segments * math.tau
+            x, z = shape.rim_point(phi, f)
+            y = shape.height(x, z)
+            e = 0.3
+            n = normalize((shape.height(x - e, z) - shape.height(x + e, z), 2.0 * e,
+                           shape.height(x, z - e) - shape.height(x, z + e)))
+            ids.append(b.vertex((x, y, z), n, (x * 0.25, z * 0.25) if with_uv else (0.0, 0.0)))
+        ring_ids.append(ids)
+
+    def up_tri(i0, i1, i2):
+        pa, pb, pc = b.vertices[i0][0], b.vertices[i1][0], b.vertices[i2][0]
+        if v_cross(v_sub(pb, pa), v_sub(pc, pa))[1] >= 0.0:
+            b.triangle(i0, i1, i2)
+        else:
+            b.triangle(i0, i2, i1)
+
+    for m in range(segments):
+        n = (m + 1) % segments
+        up_tri(centre, ring_ids[0][m], ring_ids[0][n])
+    for k in range(rings - 1):
+        inner, outer = ring_ids[k], ring_ids[k + 1]
+        for m in range(segments):
+            n = (m + 1) % segments
+            up_tri(inner[m], outer[m], outer[n])
+            up_tri(inner[m], outer[n], inner[n])
+    return [b.vertices[i][0] for i in ring_ids[-1]]
+
+
+def make_island(name, seed, rx, rz, thick, root):
+    shape = IslandShape(seed, rx, rz)
+    b = MeshBuilder()
+    b.begin_material(GROUND)
+    rim = island_top(b, shape, 14, 64, True)
+    b.begin_material(STONE)
+    bottom = []
+    for idx, p in enumerate(rim):
+        jag = (hash2(idx, 7, seed) - 0.5) * 1.6
+        inset = 0.9 + hash2(idx, 11, seed) * 0.08
+        bottom.append((p[0] * inset, -thick + jag, p[2] * inset))
+    count = len(rim)
+    for i in range(count):
+        j = (i + 1) % count
+        mid = v_scale(v_add(rim[i], rim[j]), 0.5)
+        outward = (mid[0], 0.0, mid[2])
+        flat_tri(b, rim[i], rim[j], bottom[j], outward)
+        flat_tri(b, rim[i], bottom[j], bottom[i], outward)
+    rng = random.Random(seed)
+    tip = ((rng.random() - 0.5) * rx * 0.3, -thick - root, (rng.random() - 0.5) * rz * 0.3)
+    hanging_root(b, bottom, root, seed, tip)
+    for k in range(4 + seed % 3):
+        phi = rng.random() * math.tau
+        x, z = shape.rim_point(phi, 0.25 + rng.random() * 0.45)
+        size = 0.7 + rng.random() * 1.3
+        rock_blob(b, (x, -thick - root * (0.35 + rng.random() * 0.4), z),
+                  (size, size * 1.5, size), seed * 50 + k)
+    for k in range(3 + seed % 4):
+        phi = rng.random() * math.tau
+        x, z = shape.rim_point(phi, 0.97)
+        size = 0.5 + rng.random() * 0.9
+        rock_blob(b, (x, shape.height(x, z) - size * 0.4, z), (size, size * 0.7, size), seed * 70 + k)
+    b.write(os.path.join(MESH_DIR, f"{name}.amsh"))
+
+    c = MeshBuilder()
+    c.begin_material(STONE)
+    crim = island_top(c, shape, 5, 24, False)
+    cbase = [(p[0] * 0.92, -thick, p[2] * 0.92) for p in crim]
+    count = len(crim)
+    for i in range(count):
+        j = (i + 1) % count
+        mid = v_scale(v_add(crim[i], crim[j]), 0.5)
+        outward = (mid[0], 0.0, mid[2])
+        flat_tri(c, crim[i], crim[j], cbase[j], outward)
+        flat_tri(c, crim[i], cbase[j], cbase[i], outward)
+        flat_tri(c, cbase[i], cbase[j], tip, v_sub(v_scale(v_add(cbase[i], cbase[j]), 0.5), (0.0, -thick + 3.0, 0.0)))
+    c.write(os.path.join(MESH_DIR, f"{name}_col.amsh"))
+
+    write_grass_height(name, shape.height, lambda x, z: shape.rho(x, z) < 0.93)
+
+
+def make_islands():
+    for name, params in ISLANDS.items():
+        make_island(name, **params)
+
+
 TELESCOPE_SCALE = 24.0 / 70.0
 TELESCOPE_ELEVATION_DEG = 28.0
 
@@ -1480,6 +2192,11 @@ GENERATORS = {
     "telescope": make_telescope,
     "telescope_textures": lambda: __import__("make_dish_textures").main(),
     "relay_tower": make_relay_tower,
+    "slab": make_slab,
+    "curl": make_curl,
+    "ramp": make_ramp,
+    "islands": make_islands,
+    "bends": make_bends,
 }
 
 

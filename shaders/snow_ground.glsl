@@ -15,16 +15,21 @@ const float SNOW_SASTRUGI_FADE_START = 25.0;
 const float SNOW_SASTRUGI_FADE_END = 60.0;
 const vec3 SNOW_SHADOW_TINT = vec3(0.90, 0.95, 1.02);
 
-float snow_coverage(vec3 world, vec3 n, float road)
+float snow_coverage_up(vec3 world, vec3 n, vec3 up, float road)
 {
     if (u_snow_cover <= 0.0) {
         return 0.0;
     }
-    float flat_ground = smoothstep(0.45, 0.80, n.y);
-    float patches = clamp(fbm2(world.xz * 0.35, 3) + 0.5, 0.0, 1.0);
+    float flat_ground = smoothstep(0.45, 0.80, dot(n, up));
+    float patches = clamp(fbm2(world.xz * 0.35 + world.y * 0.27, 3) + 0.5, 0.0, 1.0);
     float cover = u_snow_cover * mix(1.0, 0.5, road);
     float need = 1.0 - cover;
     return smoothstep(need, need + 0.15, flat_ground * (0.70 + 0.30 * patches));
+}
+
+float snow_coverage(vec3 world, vec3 n, float road)
+{
+    return snow_coverage_up(world, n, vec3(0.0, 1.0, 0.0), road);
 }
 
 vec3 snow_albedo(vec3 world)

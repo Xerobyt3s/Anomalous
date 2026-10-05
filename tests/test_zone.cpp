@@ -2,6 +2,7 @@
 
 #include "carsys/items.h"
 #include "core/arena.h"
+#include "physics/gravity_field.h"
 #include "physics/heightfield.h"
 #include "physics/world.h"
 #include "platform/filesystem.h"
@@ -280,4 +281,72 @@ TEST(vmath, euler_yaw_matches_quat_yaw)
     CHECK_NEAR(yaw, quat_yaw(q), 1e-5);
     CHECK_NEAR(pitch, 0.0f, 1e-5);
     CHECK_NEAR(roll, 0.0f, 1e-5);
+}
+
+TEST(zone_save, gravity_volumes_round_trip_with_their_shape_mode_and_sector)
+{
+    const FixedString<256> dir = temp_zone("save_gravity");
+    CHECK(write_text(cfg_path(dir).view(), "[entities]\n"));
+
+    Bench bench;
+    struct Spec {
+        Vec3 pos;
+        Quat rot;
+        Vec3 half;
+        f32 falloff;
+        f32 strength;
+        u32 shape;
+        u32 mode;
+        u32 sector;
+    };
+    const Spec specs[] = {
+        {Vec3{4.0f, 6.0f, -3.0f}, quat_from_euler(0.4f, 0.0f, 90.0f * kDegToRad), Vec3{6.0f, 2.0f, 5.0f}, 2.0f, 9.81f, 0, 0, 90},
+        {Vec3{-8.0f, 12.0f, 2.0f}, quat_from_euler(-1.1f, 0.0f, 22.0f * kDegToRad), Vec3{11.0f, 11.0f, 6.0f}, 1.0f, 12.0f, 0, 1, 42},
+        {Vec3{20.0f, 30.0f, 10.0f}, quat_from_euler(0.2f, 0.3f, 2.9f), Vec3{7.0f, 0.0f, 0.0f}, 3.0f, 4.0f, 1, 2, 90},
+    };
+    for (const Spec& spec : specs) {
+        const EntityHandle h = bench.world.spawn(EntityKind::Gravity, spec.pos, spec.rot, spec.falloff, "", 0);
+        Entity* e = bench.world.entity(h);
+        CHECK(e != nullptr);
+        e->mesh_name.assign("vol");
+        e->half = spec.half;
+        e->aux_value = spec.strength;
+        e->aux_kind = spec.shape | (spec.mode << 4);
+        e->aux_data = spec.sector;
+    }
+    GravityField before;
+    zone_gravity(bench.world, before);
+    CHECK(!bench.save_and_read(dir).empty());
+
+    World reloaded;
+    reloaded.init(bench.arena);
+    CHECK(zone_reload(dir.view(), bench.arena, bench.arena, reloaded, bench.phys, bench.terrain, nullptr));
+    GravityField after;
+    zone_gravity(reloaded, after);
+    CHECK(after.count() == before.count());
+
+    for (i32 x = -20; x <= 30; x += 3) {
+        for (i32 y = 0; y <= 40; y += 4) {
+            for (i32 z = -10; z <= 15; z += 5) {
+                const Vec3 p{static_cast<f32>(x), static_cast<f32>(y), static_cast<f32>(z)};
+                const GravitySample a = before.sample(p);
+                const GravitySample b = after.sample(p);
+                CHECK(length(a.gravity - b.gravity) < 0.05f);
+                CHECK(f_abs(a.presence - b.presence) < 0.02f);
+            }
+        }
+    }
+}
+
+TEST(zone_bounds, far_outside_the_map_or_not_a_number_is_out_of_bounds)
+{
+    Bench bench;
+    const Heightfield& hf = bench.terrain.heightfield();
+    CHECK(!zone_out_of_bounds(hf, Vec3{0.0f, 5.0f, 0.0f}));
+    CHECK(!zone_out_of_bounds(hf, Vec3{150.0f, 300.0f, -150.0f}));
+    CHECK(zone_out_of_bounds(hf, Vec3{900.0f, 0.0f, 0.0f}));
+    CHECK(zone_out_of_bounds(hf, Vec3{0.0f, 900.0f, 0.0f}));
+    CHECK(zone_out_of_bounds(hf, Vec3{0.0f, -900.0f, 0.0f}));
+    const f32 nan = std::sqrt(-1.0f);
+    CHECK(zone_out_of_bounds(hf, Vec3{nan, 0.0f, 0.0f}));
 }

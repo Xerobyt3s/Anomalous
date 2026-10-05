@@ -4,6 +4,7 @@
 
 layout(location = 1) uniform vec4 u_params;
 layout(location = 2) uniform vec4 u_wind_vel;
+layout(location = 7) uniform vec4 u_fall_rot;
 
 out vec2 v_local;
 out float v_alpha;
@@ -58,7 +59,7 @@ void main()
     vec3 offset = (h * 2.0 - 1.0) * box;
 
     float fall = mix(FALL_MIN, FALL_MAX, h2.x);
-    vec3 velocity = vec3(wind.x, -fall, wind.y);
+    vec3 velocity = quat_rotate(u_fall_rot, vec3(wind.x, -fall, wind.y));
 
     vec3 centre = u_cam_pos.xyz;
     vec3 drifted = offset + velocity * time;

@@ -8,6 +8,10 @@ layout(location = 3) uniform vec4 u_press[16];
 layout(location = 19) uniform int u_press_count;
 layout(location = 20) uniform vec4 u_lod;
 layout(location = 21) uniform int u_lod_level;
+layout(location = 22) uniform mat4 u_model;
+layout(location = 26) uniform vec3 u_cam_local;
+layout(location = 27) uniform int u_patch;
+layout(location = 28) uniform ivec4 u_rect;
 
 layout(binding = 3) uniform sampler2D u_roadmask;
 layout(binding = 4) uniform sampler2D u_height;
@@ -63,11 +67,22 @@ void main()
     int clump_index = gl_InstanceID / SLOTS;
     int slot = gl_InstanceID % SLOTS;
     vec2 centre_cell = floor(u_cam.xy / clump_spacing);
-    vec2 cell = centre_cell + vec2(float(clump_index % clump_grid - clump_grid / 2),
-                                   float(clump_index / clump_grid - clump_grid / 2));
+    vec2 cell = u_rect.z > 0
+                    ? centre_cell + vec2(float(u_rect.x + clump_index % u_rect.z),
+                                         float(u_rect.y + clump_index / u_rect.z))
+                    : centre_cell + vec2(float(clump_index % clump_grid - clump_grid / 2),
+                                         float(clump_index / clump_grid - clump_grid / 2));
     vec2 seed_cell = cell + level_seed;
 
     vec2 clump_centre = (cell + 0.15 + 0.70 * hash22(seed_cell * 1.371 + 4.1)) * clump_spacing;
+    if (u_patch != 0) {
+        vec2 patch_uv = (clump_centre - u_field.xy) * u_field.zw;
+        if (any(lessThan(patch_uv, vec2(0.0))) || any(greaterThan(patch_uv, vec2(1.0)))
+            || textureLod(u_height, patch_uv, 0.0).r < -7.5) {
+            collapse();
+            return;
+        }
+    }
     float ring_distance = length(clump_centre - u_cam.xy);
     float ring = smoothstep(u_lod.z, u_lod.w, ring_distance);
     float ring_keep = u_lod_level == 0 ? 1.0 - ring : ring;
@@ -138,7 +153,7 @@ void main()
     float t = float(level) / float(SEGMENTS);
     v_along = t;
 
-    float dist = length(root - u_cam_pos.xyz);
+    float dist = length(root - u_cam_local);
     float fade = 1.0 - smoothstep(u_cam.w * 0.72, u_cam.w, dist);
     height *= mix(0.55, 1.0, fade);
     height *= 1.0 - SNOW_FLATTEN * u_snow_cover;
@@ -154,11 +169,11 @@ void main()
 
     float keep = pow(1.0 / inflation, 0.75) * fade;
     vec2 to_edge = min(uv, 1.0 - uv) / u_field.zw;
-    keep *= smoothstep(0.0, 70.0, min(to_edge.x, to_edge.y));
+    keep *= u_patch != 0 ? 1.0 : smoothstep(0.0, 70.0, min(to_edge.x, to_edge.y));
     keep *= ring_keep;
     keep *= step(road, 0.30);
     keep *= step(0.72, terrain_normal.y);
-    keep *= 1.0 - smoothstep(24.0, 32.0, ground);
+    keep *= u_patch != 0 ? step(-7.5, ground) : 1.0 - smoothstep(24.0, 32.0, ground);
     if (fract(phase * 0.7071 + 0.37) > keep) {
         collapse();
         return;
@@ -204,9 +219,10 @@ void main()
     vec3 tangent = normalize(vec3(0.0, height, 0.0)
                              + lean_direction * (height * (2.0 * lean * t + 3.0 * curl * t * t))
                              + wind_direction * (2.0 * height * wind_bend * t));
-    v_blade_normal = normalize(cross(tangent, sideways));
-    v_terrain_normal = terrain_normal;
-    v_world = position;
+    mat3 basis = mat3(u_model);
+    v_blade_normal = normalize(basis * cross(tangent, sideways));
+    v_terrain_normal = normalize(basis * terrain_normal);
+    v_world = (u_model * vec4(position, 1.0)).xyz;
 
-    gl_Position = u_view_proj * vec4(position, 1.0);
+    gl_Position = u_view_proj * vec4(v_world, 1.0);
 }

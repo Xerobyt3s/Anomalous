@@ -157,6 +157,7 @@ typedef void (GL_APIENTRY *GlDebugCallback)(GLenum source, GLenum type, GLuint i
     GLFN(void, glProgramUniform1f, (GLuint program, GLint location, GLfloat v0)) \
     GLFN(void, glProgramUniform2f, (GLuint program, GLint location, GLfloat v0, GLfloat v1)) \
     GLFN(void, glProgramUniform4fv, (GLuint program, GLint location, GLsizei count, const GLfloat* value)) \
+    GLFN(void, glProgramUniform4i, (GLuint program, GLint location, GLint v0, GLint v1, GLint v2, GLint v3)) \
     GLFN(void, glProgramUniform1i, (GLuint program, GLint location, GLint v0)) \
     GLFN(void, glGenerateTextureMipmap, (GLuint texture)) \
     GLFN(void, glProgramUniform3f, (GLuint program, GLint location, GLfloat v0, GLfloat v1, GLfloat v2)) \

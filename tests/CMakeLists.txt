@@ -24,6 +24,7 @@ set(ANOMALOUS_TEST_SOURCES
     test_shell.cpp
     test_terminal.cpp
     test_scenes.cpp
+    test_gravity.cpp
 )
 
 add_executable(anomalous_tests ${ANOMALOUS_TEST_SOURCES})

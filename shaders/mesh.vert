@@ -10,6 +10,7 @@ layout(location = 3) in mat4 a_model;
 out vec3 v_world;
 out vec3 v_normal;
 out vec2 v_uv;
+out vec3 v_up;
 
 void main()
 {
@@ -17,5 +18,6 @@ void main()
     v_world = world.xyz;
     v_normal = mat3(a_model) * a_normal;
     v_uv = a_uv;
+    v_up = mat3(a_model) * vec3(0.0, 1.0, 0.0);
     gl_Position = u_view_proj * world;
 }

@@ -2,7 +2,9 @@
 #include "core/arena.h"
 #include "core/log.h"
 #include "physics/collide.h"
+#include "physics/gravity_field.h"
 #include "physics/heightfield.h"
+#include "physics/jolt_world.h"
 
 #include <algorithm>
 
@@ -11,6 +13,7 @@ namespace {
 
 constexpr u32 kMaxPairs = 4096;
 constexpr f32 kBroadCell = 2.0f;
+constexpr f32 kGravityWakeSq = 0.05f;
 
 u64 static_key(u32 slot, u32 sphere, u32 feature)
 {
@@ -47,6 +50,23 @@ void PhysWorld::init(Arena& arena, const Heightfield* hf)
     pair_b_ = arena.push_array<u32>(kMaxPairs);
     contact_count_ = 0;
     previous_count_ = 0;
+    sync_jolt();
+}
+
+void PhysWorld::sync_jolt()
+{
+    if (!jolt_) {
+        return;
+    }
+    jolt_->reset();
+    if (hf_ && hf_->valid()) {
+        jolt_->set_terrain(*hf_);
+    }
+    const std::span<const StaticTri> tris = statics_.tris();
+    if (!tris.empty()) {
+        jolt_->add_static_mesh(std::span<const Vec3>(&tris[0].a, tris.size() * 3));
+    }
+    jolt_->optimize();
 }
 
 BodyHandle PhysWorld::body_create_box(Vec3 pos, Quat rot, Vec3 half_extents, f32 mass)
@@ -103,13 +123,27 @@ void PhysWorld::body_destroy(BodyHandle handle)
     bodies_.free(handle);
 }
 
+Vec3 PhysWorld::gravity_at(Vec3 p) const
+{
+    return field_ ? field_->gravity_at(p) : gravity();
+}
+
+Vec3 PhysWorld::up_at(Vec3 p) const
+{
+    return field_ ? field_->up_at(p) : Vec3{0.0f, 1.0f, 0.0f};
+}
+
 void PhysWorld::integrate_velocities(f32 dt)
 {
-    const Vec3 g = gravity();
     for (const u32 slot : bodies_.live_indices()) {
         RigidBody& body = *bodies_.at(slot);
         body.prev_pos = body.pos;
         body.prev_rot = body.rot;
+        const Vec3 g = gravity_at(body.pos);
+        if (body.asleep && length_sq(g - body.gravity) > kGravityWakeSq) {
+            body_wake(body);
+        }
+        body.gravity = g;
         if (body.asleep) {
             body.force_accum = Vec3{0.0f, 0.0f, 0.0f};
             body.torque_accum = Vec3{0.0f, 0.0f, 0.0f};

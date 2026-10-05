@@ -89,6 +89,8 @@ public:
     void tick(PhysWorld& world, f32 dt);
     void reset_contacts();
     void teleport(PhysWorld& world, Vec3 pos, f32 yaw);
+    void teleport(PhysWorld& world, Vec3 pos, Quat rot);
+    void recover(PhysWorld& world);
 
     f32 forward_speed(const PhysWorld& world) const;
 
