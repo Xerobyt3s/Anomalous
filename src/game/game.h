@@ -25,6 +25,7 @@
 #include "ui/ui.h"
 #include "vehicle/vehicle.h"
 #include "world/entity.h"
+#include "world/islands/island_field.h"
 #include "world/terrain.h"
 #include "world/weather.h"
 #include "world/zone.h"
@@ -151,6 +152,10 @@ private:
     void draw_entities(RenderDevice& device);
     void collect_trees();
     void update_grass_press(TerrainRenderer& terrain_renderer);
+    void rebuild_islands();
+    void watch_islands(f32 frame_dt);
+    void sync_island_gpu(RenderDevice& device, TerrainRenderer& terrain_renderer);
+    void draw_debris(RenderDevice& device, f32 time);
     void draw_grass_patches(RenderDevice& device, TerrainRenderer& terrain_renderer, f32 time);
     void draw_vehicle(RenderDevice& device);
     void draw_viewmodel(RenderDevice& device);
@@ -235,6 +240,15 @@ private:
     f64 next_cfg_poll_ = 0.0;
     Arena* perm_ = nullptr;
     Arena zone_arena_;
+    Arena islands_arena_;
+    IslandField islands_;
+    u64 islands_signature_ = 0;
+    u32 islands_statics_ = 0;
+    f32 islands_settle_ = 0.0f;
+    u32 islands_uploaded_ = 0;
+    bool islands_patches_dirty_ = true;
+    std::vector<const GpuMesh*> island_meshes_;
+    const GpuMesh* debris_meshes_[IslandField::kRockVariants + IslandField::kTurfVariants] = {};
     Arena* scratch_ = nullptr;
 };
 

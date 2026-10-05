@@ -13,7 +13,11 @@
 #include "vehicle/vehicle.h"
 #include "world/entity.h"
 #include "world/terrain.h"
+#include "world/islands/island_field.h"
 #include "world/zone.h"
+
+#include <cmath>
+#include <vector>
 
 using namespace anom;
 
@@ -621,11 +625,13 @@ namespace {
 struct GravityZoneRig {
     Arena perm{megabytes(256)};
     Arena scratch{megabytes(64)};
+    Arena statics{megabytes(48)};
     World world;
     Terrain terrain;
     PhysWorld phys;
     ZoneSpawn spawn;
     GravityField field;
+    IslandField islands;
 
     bool load()
     {
@@ -634,17 +640,31 @@ struct GravityZoneRig {
         if (!zone_load(kZoneDir, perm, scratch, world, phys, terrain, spawn, nullptr)) {
             return false;
         }
+        islands_rebuild(islands, world, terrain, phys, statics, scratch);
         zone_gravity(world, field);
+        islands.fill_gravity(field);
         phys.set_gravity_field(&field);
         return true;
     }
 
-    const Entity* find(std::string_view mesh) const
+    const BuiltIsland* island(std::string_view name) const
     {
-        for (u32 idx : world.entities().live_indices()) {
-            const Entity* e = world.entities().at(idx);
-            if (e && e->mesh_name == mesh) {
-                return e;
+        for (const BuiltIsland& i : islands.islands()) {
+            if (i.name == name) {
+                return &i;
+            }
+        }
+        return nullptr;
+    }
+
+    const BuiltLink* link(std::string_view from, std::string_view to) const
+    {
+        for (const BuiltLink& l : islands.links()) {
+            const bool from_match = islands.islands()[l.from].name == from;
+            const bool to_match = to == "ground" ? l.to == kLinkGround
+                                                 : (l.to >= 0 && islands.islands()[static_cast<u32>(l.to)].name == to);
+            if (from_match && to_match) {
+                return &l;
             }
         }
         return nullptr;
@@ -659,146 +679,132 @@ struct GravityZoneRig {
         car_run(phys, veh, VehicleInput{}, 120);
         return true;
     }
+
+    bool place_car_before_ground_link(Vehicle& veh, const BuiltLink& l, f32 run_up)
+    {
+        const Vec3 a = l.path.points[0];
+        const Vec3 b = l.path.points[1];
+        Vec3 dir{b.x - a.x, 0.0f, b.z - a.z};
+        dir = normalize(dir);
+        return place_car(veh, a - dir * run_up, dir);
+    }
+};
+
+struct RouteDriver {
+    std::vector<Vec3> points;
+    u32 progress = 0;
+
+    void follow(const BuiltLink& l)
+    {
+        for (u32 i = 0; i < l.path.count; i++) {
+            points.push_back(l.path.points[i]);
+        }
+    }
+
+    VehicleInput input(const RigidBody& body, f32 throttle)
+    {
+        while (progress + 1 < points.size() && distance_sq(body.pos, points[progress]) > distance_sq(body.pos, points[progress + 1])) {
+            progress++;
+        }
+        u32 target = progress;
+        while (target + 1 < points.size() && length(points[target] - body.pos) < kRouteLookahead) {
+            target++;
+        }
+        const Vec3 d = points[target] - body.pos;
+        const f32 ahead = dot(d, rotate(body.rot, Vec3{0.0f, 0.0f, -1.0f}));
+        const f32 side = dot(d, rotate(body.rot, Vec3{1.0f, 0.0f, 0.0f}));
+        VehicleInput in;
+        const f32 speed = dot(body.vel, rotate(body.rot, Vec3{0.0f, 0.0f, -1.0f}));
+        in.throttle = speed < kRouteMaxSpeed ? throttle : 0.0f;
+        in.brake = speed > kRouteMaxSpeed + 1.5f ? 0.3f : 0.0f;
+        in.steer = f_clamp(std::atan2(side, f_max(ahead, 0.1f)) * kRouteSteerGain, -1.0f, 1.0f);
+        return in;
+    }
+
+    static constexpr f32 kRouteLookahead = 7.0f;
+    static constexpr f32 kRouteSteerGain = 2.5f;
+    static constexpr f32 kRouteMaxSpeed = 11.0f;
+};
+
+struct IslandTrack {
+    const BuiltIsland* island = nullptr;
+    f32 best = -1.0f;
+
+    void sample(const RigidBody& body)
+    {
+        if (!island) {
+            return;
+        }
+        const Vec3 local = rotate(conjugate(island->rot), body.pos - island->pos);
+        const f32 reach = island->params.radius * 0.7f;
+        if (f_abs(local.x) < reach && f_abs(local.z) < reach && local.y > -0.5f && local.y < 3.0f) {
+            best = f_max(best, dot(rotate(body.rot, Vec3{0.0f, 1.0f, 0.0f}),
+                                   rotate(island->rot, Vec3{0.0f, 1.0f, 0.0f})));
+        }
+    }
 };
 
 } // namespace
 
-TEST(scene_gravity, the_car_drives_up_the_curl_and_onto_the_wall)
-{
-    Arena perm(megabytes(256));
-    Arena scratch(megabytes(64));
-    World world;
-    Terrain terrain;
-    PhysWorld phys;
-    ZoneSpawn spawn;
-    GravityField field;
-
-    world.init(perm);
-    phys.init(perm, &terrain.heightfield());
-    CHECK(zone_load(kZoneDir, perm, scratch, world, phys, terrain, spawn, nullptr));
-    zone_gravity(world, field);
-    phys.set_gravity_field(&field);
-    CHECK(field.count() >= 2);
-
-    const Entity* curl = nullptr;
-    for (u32 idx : world.entities().live_indices()) {
-        const Entity* e = world.entities().at(idx);
-        if (e && e->mesh_name == "curl") {
-            curl = e;
-            break;
-        }
-    }
-    CHECK(curl != nullptr);
-    if (!curl) {
-        return;
-    }
-
-    const Vec3 dir = rotate(curl->rot, Vec3{1.0f, 0.0f, 0.0f});
-    const Vec3 start = curl->pos + dir * -40.0f;
-    const Vec3 ground{start.x, terrain.heightfield().sample(start.x, start.z) + 1.0f, start.z};
-    Vehicle veh;
-    CHECK(veh.init(phys, scratch, kCarCfg, ground, std::atan2(-dir.x, -dir.z)));
-    car_run(phys, veh, VehicleInput{}, 120);
-
-    VehicleInput drive;
-    drive.throttle = 1.0f;
-    f32 best_height = -1e9f;
-    f32 wall_alignment = 0.0f;
-    bool stayed_valid = true;
-    for (u32 i = 0; i < 900; i++) {
-        car_run(phys, veh, drive, 1);
-        const RigidBody& body = *phys.body(veh.body());
-        stayed_valid = stayed_valid && body_state_valid(body);
-        const f32 height = body.pos.y - curl->pos.y;
-        if (height > best_height) {
-            best_height = height;
-        }
-        if (height > 15.0f && height < 30.0f) {
-            wall_alignment = f_max(wall_alignment, dot(rotate(body.rot, Vec3{0.0f, 1.0f, 0.0f}), dir * -1.0f));
-        }
-    }
-    CHECK(stayed_valid);
-    CHECK(best_height > 20.0f);
-    CHECK(wall_alignment > 0.85f);
-}
-
-TEST(scene_gravity, the_car_goes_round_the_top_curl_and_drives_on_the_ceiling)
+TEST(scene_gravity, the_car_climbs_a_sideways_island_and_drives_onto_an_upside_down_one)
 {
     GravityZoneRig rig;
     CHECK(rig.load());
-    const Entity* curl = rig.find("curl");
-    CHECK(curl != nullptr);
-    if (!curl) {
+    const BuiltLink* start = rig.link("isle_g", "ground");
+    const BuiltLink* next = rig.link("isle_g", "isle_c");
+    CHECK(start != nullptr && next != nullptr);
+    if (!start || !next) {
         return;
     }
-    const Vec3 dir = rotate(curl->rot, Vec3{1.0f, 0.0f, 0.0f});
     Vehicle veh;
-    CHECK(rig.place_car(veh, curl->pos + dir * -40.0f, dir));
-
-    VehicleInput drive;
-    drive.throttle = 1.0f;
-    f32 ceiling_alignment = -1.0f;
-    for (u32 i = 0; i < 1500; i++) {
-        car_run(rig.phys, veh, drive, 1);
+    CHECK(rig.place_car_before_ground_link(veh, *start, 40.0f));
+    RouteDriver route;
+    route.follow(*start);
+    route.follow(*next);
+    route.points.push_back(rig.island("isle_c")->pos);
+    IslandTrack wall{rig.island("isle_g")};
+    IslandTrack ceiling{rig.island("isle_c")};
+    bool valid = true;
+    for (u32 i = 0; i < 2400; i++) {
         const RigidBody& body = *rig.phys.body(veh.body());
-        if (body.pos.y - curl->pos.y > 46.0f) {
-            ceiling_alignment = f_max(ceiling_alignment,
-                                      dot(rotate(body.rot, Vec3{0.0f, 1.0f, 0.0f}), Vec3{0.0f, -1.0f, 0.0f}));
+        car_run(rig.phys, veh, route.input(body, 0.8f), 1);
+        valid = valid && body_state_valid(body);
+        wall.sample(body);
+        ceiling.sample(body);
+    }
+    CHECK(valid);
+    CHECK(wall.best > 0.85f);
+    CHECK(ceiling.best > 0.85f);
+}
+
+TEST(scene_gravity, the_ground_link_carries_the_car_onto_the_tilted_island_and_on_to_the_next)
+{
+    for (f32 throttle : {0.75f, 1.0f}) {
+        GravityZoneRig rig;
+        CHECK(rig.load());
+        const BuiltLink* start = rig.link("isle_a", "ground");
+        const BuiltLink* next = rig.link("isle_a", "isle_b");
+        CHECK(start != nullptr && next != nullptr);
+        if (!start || !next) {
+            return;
         }
-    }
-    CHECK(ceiling_alignment > 0.85f);
-}
-
-namespace {
-
-f32 drive_ramp_to_island(f32 throttle, std::string_view target = "island_a")
-{
-    GravityZoneRig rig;
-    if (!rig.load()) {
-        return -2.0f;
-    }
-    const Entity* ramp = rig.find("ramp");
-    const Entity* island = rig.find(target);
-    if (!ramp || !island) {
-        return -2.0f;
-    }
-    const Vec3 dir = rotate(ramp->rot, Vec3{1.0f, 0.0f, 0.0f});
-    Vehicle veh;
-    if (!rig.place_car(veh, ramp->pos + dir * -25.0f, dir)) {
-        return -2.0f;
-    }
-    VehicleInput drive;
-    drive.throttle = throttle;
-    const Vec3 island_up = rotate(island->rot, Vec3{0.0f, 1.0f, 0.0f});
-    f32 best = -1.0f;
-    for (u32 i = 0; i < 1500; i++) {
-        car_run(rig.phys, veh, drive, 1);
-        const RigidBody& body = *rig.phys.body(veh.body());
-        const Vec3 local = rotate(conjugate(island->rot), body.pos - island->pos);
-        if (f_abs(local.x) < 7.0f && f_abs(local.z) < 6.0f && local.y > 0.0f && local.y < 3.0f) {
-            best = f_max(best, dot(rotate(body.rot, Vec3{0.0f, 1.0f, 0.0f}), island_up));
+        Vehicle veh;
+        CHECK(rig.place_car_before_ground_link(veh, *start, 12.0f));
+        RouteDriver route;
+        route.follow(*start);
+        route.follow(*next);
+        route.points.push_back(rig.island("isle_b")->pos);
+        IslandTrack a{rig.island("isle_a")};
+        IslandTrack b{rig.island("isle_b")};
+        for (u32 i = 0; i < 1800; i++) {
+            const RigidBody& body = *rig.phys.body(veh.body());
+            car_run(rig.phys, veh, route.input(body, throttle), 1);
+            a.sample(body);
+            b.sample(body);
         }
+        CHECK(a.best > 0.95f);
+        CHECK(b.best > 0.9f);
     }
-    return best;
-}
-
-} // namespace
-
-TEST(scene_gravity, the_debris_ramp_carries_the_car_onto_the_tilted_island)
-{
-    CHECK(drive_ramp_to_island(0.7f) > 0.95f);
-}
-
-TEST(scene_gravity, flooring_it_up_the_ramp_still_lands_on_the_island)
-{
-    const f32 best = drive_ramp_to_island(1.0f);
-    CHECK(best > 0.95f);
-}
-
-TEST(scene_gravity, the_bend_carries_the_car_from_island_a_onto_island_b)
-{
-    CHECK(drive_ramp_to_island(0.8f, "island_b") > 0.9f);
-    CHECK(drive_ramp_to_island(1.0f, "island_b") > 0.9f);
 }
 
 TEST(scene_gravity, recovering_rights_the_car_to_the_local_gravity)
@@ -829,23 +835,86 @@ TEST(scene_gravity, recovering_rights_the_car_to_the_local_gravity)
 TEST(scene_gravity, gravity_drives_are_bit_identical_across_repeats)
 {
     u64 checksums[2] = {kFnvOffset, kFnvOffset};
+    u64 fields[2] = {0, 0};
     for (u32 pass = 0; pass < 2; pass++) {
         GravityZoneRig rig;
         CHECK(rig.load());
-        const Entity* ramp = rig.find("ramp");
-        CHECK(ramp != nullptr);
-        if (!ramp) {
+        fields[pass] = rig.islands.checksum();
+        const BuiltLink* start = rig.link("isle_a", "ground");
+        CHECK(start != nullptr);
+        if (!start) {
             return;
         }
-        const Vec3 dir = rotate(ramp->rot, Vec3{1.0f, 0.0f, 0.0f});
         Vehicle veh;
-        CHECK(rig.place_car(veh, ramp->pos + dir * -25.0f, dir));
+        CHECK(rig.place_car_before_ground_link(veh, *start, 12.0f));
         VehicleInput drive;
         drive.throttle = 1.0f;
         car_run(rig.phys, veh, drive, 700);
         checksum_bodies(checksums[pass], rig.phys);
     }
+    CHECK(fields[0] == fields[1]);
     CHECK(checksums[0] == checksums[1]);
+}
+
+TEST(scene_gravity, link_paths_turn_smoothly_and_meet_their_ends_flush)
+{
+    GravityZoneRig rig;
+    CHECK(rig.load());
+    CHECK(rig.islands.links().size() >= 8);
+    for (const BuiltLink& l : rig.islands.links()) {
+        const GravityPath& p = l.path;
+        for (u32 i = 0; i + 1 < p.count; i++) {
+            CHECK(dot(p.ups[i], p.ups[i + 1]) > std::cos(10.0f * kDegToRad));
+        }
+        const BuiltIsland& from = rig.islands.islands()[l.from];
+        const Vec3 from_up = rotate(from.rot, Vec3{0.0f, 1.0f, 0.0f});
+        const Vec3 end_up = p.ups[p.count - 1];
+        const Vec3 start_up = p.ups[0];
+        if (l.to == kLinkGround) {
+            CHECK(dot(start_up, Vec3{0.0f, 1.0f, 0.0f}) > 0.98f);
+            CHECK(dot(end_up, from_up) > 0.98f);
+        } else {
+            const BuiltIsland& to = rig.islands.islands()[static_cast<u32>(l.to)];
+            CHECK(dot(start_up, from_up) > 0.98f);
+            CHECK(dot(end_up, rotate(to.rot, Vec3{0.0f, 1.0f, 0.0f})) > 0.98f);
+        }
+        const GravitySample mid = rig.field.sample(p.points[p.count / 2] + p.ups[p.count / 2] * 1.0f);
+        CHECK(dot(mid.up, p.ups[p.count / 2]) > 0.98f);
+    }
+}
+
+TEST(scene_gravity, the_island_field_builds_inside_its_budget)
+{
+    GravityZoneRig rig;
+    CHECK(rig.load());
+    CHECK(rig.islands.islands().size() >= 6);
+    CHECK(rig.islands.debris().size() > 400);
+    CHECK(rig.islands.haze_count() >= 1);
+    CHECK(rig.phys.statics().dropped() == 0);
+    CHECK(rig.islands.build_ms() < 1500.0);
+    CHECK(rig.islands.rejected().empty());
+}
+
+TEST(scene_gravity, solid_debris_stops_a_ray_where_the_rock_is)
+{
+    GravityZoneRig rig;
+    CHECK(rig.load());
+    u32 tested = 0;
+    for (const DebrisInstance& d : rig.islands.debris()) {
+        if (!d.solid || d.kind != DebrisKind::Rock || d.scale < 0.4f
+            || d.pos.y < rig.terrain.heightfield().sample(d.pos.x, d.pos.z) + 0.5f) {
+            continue;
+        }
+        const f32 drop = d.scale * 1.4f + 0.3f;
+        PhysRayHit hit{};
+        Ray ray;
+        ray.origin = d.pos + Vec3{0.0f, drop, 0.0f};
+        ray.dir = Vec3{0.0f, -1.0f, 0.0f};
+        CHECK(rig.phys.raycast(ray, drop + 2.0f, &hit));
+        CHECK(hit.t < drop);
+        tested++;
+    }
+    CHECK(tested > 10);
 }
 
 TEST(scene_walk, walking_and_running_over_the_zone_stay_grounded_and_stop_cleanly)
@@ -882,3 +951,111 @@ TEST(scene_walk, walking_and_running_over_the_zone_stay_grounded_and_stop_cleanl
         CHECK(distance(released, p.pos()) < 0.9f);
     }
 }
+
+TEST(scene_walk, walking_the_links_reaches_a_sideways_island_and_an_upside_down_one)
+{
+    GravityZoneRig rig;
+    CHECK(rig.load());
+    JoltWorld jolt;
+    rig.phys.set_jolt(&jolt);
+    const char* routes[2][2] = {{"isle_a", "isle_b"}, {"isle_g", "isle_c"}};
+    for (u32 r = 0; r < 2; r++) {
+        const BuiltLink* start = rig.link(routes[r][0], "ground");
+        const BuiltLink* next = rig.link(routes[r][0], routes[r][1]);
+        const BuiltIsland* goal = rig.island(routes[r][1]);
+        CHECK(start != nullptr && next != nullptr && goal != nullptr);
+        if (!start || !next || !goal) {
+            return;
+        }
+        const Vec3 goal_up = rotate(goal->rot, Vec3{0.0f, 1.0f, 0.0f});
+        RouteDriver route;
+        route.follow(*start);
+        route.follow(*next);
+        route.points.push_back(goal->pos + goal_up * 1.0f);
+        Player p;
+        const Vec3 foot = start->path.points[0];
+        p.init(Vec3{foot.x, rig.terrain.heightfield().sample(foot.x, foot.z) + 0.3f, foot.z}, 0.0f);
+        u32 air = 0;
+        for (u32 i = 0; i < 4800; i++) {
+            const Vec3 to = route.points[route.progress + 1 < route.points.size() ? route.progress + 1 : route.progress] - p.pos();
+            const Vec3 forward = frame_forward(p.movement().state().frame, p.yaw());
+            const Vec3 right = frame_right(p.movement().state().frame, p.yaw());
+            PlayerCommand cmd;
+            if (distance(p.pos(), route.points.back()) > 2.0f) {
+                const Vec3 planar = to - p.up() * dot(to, p.up());
+                const Vec3 dir = length_sq(planar) > 1e-6f ? normalize(planar) : forward;
+                cmd.move_z = dot(dir, forward);
+                cmd.move_x = dot(dir, right);
+                cmd.run = true;
+            }
+            while (route.progress + 1 < route.points.size()
+                   && distance_sq(p.pos(), route.points[route.progress]) > distance_sq(p.pos(), route.points[route.progress + 1])) {
+                route.progress++;
+            }
+            rig.phys.tick(kDt);
+            p.tick(rig.phys, nullptr, cmd, kDt);
+            air += p.grounded() ? 0 : 1;
+        }
+        CHECK(p.grounded());
+        CHECK(dot(p.up(), goal_up) > 0.97f);
+        CHECK(distance(p.pos(), route.points.back()) < 4.0f);
+        CHECK(air < 60);
+    }
+}
+
+TEST(scene_gravity, every_link_bends_gently_and_turns_gravity_slowly)
+{
+    GravityZoneRig rig;
+    CHECK(rig.load());
+    for (const BuiltLink& l : rig.islands.links()) {
+        const GravityPath& p = l.path;
+        f32 tight = 1e9f;
+        f32 rate = 0.0f;
+        f32 total = 0.0f;
+        for (u32 i = 0; i + 1 < p.count; i++) {
+            const f32 seg = length(p.points[i + 1] - p.points[i]);
+            total += seg;
+            rate = f_max(rate, std::acos(f_clamp(dot(p.ups[i], p.ups[i + 1]), -1.0f, 1.0f)) * kRadToDeg / seg);
+            if (i > 0) {
+                const Vec3 a = normalize(p.points[i] - p.points[i - 1]);
+                const Vec3 b = normalize(p.points[i + 1] - p.points[i]);
+                const f32 bend = std::acos(f_clamp(dot(a, b), -1.0f, 1.0f));
+                if (bend > 1e-4f) {
+                    tight = f_min(tight, seg / bend);
+                }
+            }
+        }
+        CHECK(tight > 8.5f);
+        CHECK(rate < 6.5f);
+        CHECK(total < 4.0f * length(p.points[p.count - 1] - p.points[0]) + 20.0f);
+    }
+}
+
+
+
+TEST(scene_gravity, no_link_or_low_rock_sits_on_the_road)
+{
+    GravityZoneRig rig;
+    CHECK(rig.load());
+    const Heightfield& hf = rig.terrain.heightfield();
+    for (const BuiltLink& l : rig.islands.links()) {
+        const GravityPath& p = l.path;
+        for (u32 i = 0; i + 1 < p.count; i++) {
+            const Vec3 at = p.points[i];
+            if (at.y - hf.sample(at.x, at.z) > 14.0f) {
+                continue;
+            }
+            const Vec3 side = normalize(cross(p.points[i + 1] - at, p.ups[i])) * (l.width * 0.5f);
+            for (f32 k : {-1.0f, 0.0f, 1.0f}) {
+                const Vec3 q = at + side * k;
+                CHECK(rig.terrain.road_amount(q.x, q.z) <= 0.25f);
+            }
+        }
+    }
+    for (const DebrisInstance& d : rig.islands.debris()) {
+        if (d.solid) {
+            CHECK(rig.terrain.road_amount(d.pos.x, d.pos.z) <= 0.25f);
+        }
+    }
+}
+

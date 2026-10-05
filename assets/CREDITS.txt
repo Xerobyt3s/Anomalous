@@ -1,2 +1,4 @@
 textures/meadow_ground.png: ambientCG "Grass004" (https://ambientcg.com/view?id=Grass004), CC0 1.0, 1K colour map, converted to PNG. Tiled under the grass by shaders/terrain.frag.
 textures/island_grass.png: derived from textures/meadow_ground.png (ambientCG "Grass004", CC0 1.0), resized to 512 and stored as graded linear albedo for meshes.
+textures/island_rock.png (+_n, _s): ambientCG "Rock051" (https://ambientcg.com/view?id=Rock051), CC0 1.0, 1K, linearised and graded by tools/fetch_island_textures.py.
+textures/island_soil.png (+_n, _s): ambientCG "Ground048" (https://ambientcg.com/view?id=Ground048), CC0 1.0, 1K, linearised and graded by tools/fetch_island_textures.py.

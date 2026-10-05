@@ -31,6 +31,21 @@ struct GravityVolume {
     f32 sector = kHalfPi;
 };
 
+inline constexpr u32 kGravityPathSamples = 48;
+
+struct GravityPath {
+    Vec3 points[kGravityPathSamples]{};
+    Vec3 ups[kGravityPathSamples]{};
+    u32 count = 0;
+    f32 half_width = 4.0f;
+    f32 height = 4.0f;
+    f32 below = 1.0f;
+    f32 falloff = 2.0f;
+    f32 strength = kDefaultGravity;
+    Vec3 centre{};
+    f32 reach = 0.0f;
+};
+
 struct GravitySample {
     Vec3 gravity;
     Vec3 up;
@@ -40,16 +55,21 @@ struct GravitySample {
 class GravityField {
 public:
     static constexpr u32 kMaxVolumes = 32;
+    static constexpr u32 kMaxPaths = 32;
 
     void clear()
     {
         count_ = 0;
         dropped_ = 0;
+        path_count_ = 0;
     }
     u32 dropped() const { return dropped_; }
     bool add(const GravityVolume& volume);
     u32 count() const { return count_; }
     const GravityVolume& volume(u32 i) const { return volumes_[i]; }
+    bool add_path(const GravityPath& path);
+    u32 path_count() const { return path_count_; }
+    const GravityPath& path(u32 i) const { return paths_[i]; }
 
     GravitySample sample(Vec3 p) const;
     Vec3 gravity_at(Vec3 p) const { return sample(p).gravity; }
@@ -57,11 +77,14 @@ public:
 
     static f32 weight(const GravityVolume& volume, Vec3 p);
     static Vec3 down(const GravityVolume& volume, Vec3 p);
+    static f32 path_weight(const GravityPath& path, Vec3 p, Vec3& out_up);
 
 private:
     GravityVolume volumes_[kMaxVolumes];
     u32 count_ = 0;
     u32 dropped_ = 0;
+    GravityPath paths_[kMaxPaths];
+    u32 path_count_ = 0;
 };
 
 } // namespace anom

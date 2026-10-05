@@ -1,4 +1,5 @@
 #include "game/game.h"
+#include "assets/mesh_data.h"
 #include "carsys/items.h"
 #include "core/arena.h"
 #include "core/config.h"
@@ -25,11 +26,18 @@ constexpr f32 kPlaceRange = 3.5f;
 constexpr f32 kPlaceNormalY = 0.55f;
 constexpr f32 kChromaBase = 1.5f;
 constexpr u32 kMaxGrassPatches = 16;
+constexpr u64 kIslandsArenaBytes = 48ull * 1024ull * 1024ull;
+constexpr f32 kIslandsSettle = 0.3f;
 constexpr f32 kPressUprightY = 0.995f;
 constexpr f32 kChromaTurn = 6.0f;
 constexpr f32 kChromaTurnFull = 1.6f;
 constexpr f32 kChromaAttack = 14.0f;
 constexpr f32 kChromaRelease = 3.0f;
+constexpr f32 kChromaHaze = 1.6f;
+constexpr f32 kHazeDensity = 0.0055f;
+constexpr f32 kHazeChroma = 1.0f;
+constexpr f32 kHazeShimmer = 1.0f;
+constexpr Vec3 kHazeTint{0.42f, 0.44f, 0.72f};
 constexpr f32 kEngineAudioLocal[3] = {0.0f, 0.10f, -1.55f};
 constexpr f32 kDashAudioLocal[3] = {0.0f, 0.35f, -0.35f};
 constexpr Vec3 kTowerPortLocal{0.0f, 1.35f, 0.62f};
@@ -74,6 +82,10 @@ bool Game::init(RenderDevice& device, FontChain& fonts, Arena& perm, Arena& scra
     phys_.set_gravity_field(&gravity_);
     phys_.set_jolt(&jolt_);
 
+    if (!islands_arena_.reserve(kIslandsArenaBytes)) {
+        log_error("game: islands arena reserve failed");
+        return false;
+    }
     if (!zone_arena_.reserve(kZoneArenaBytes)) {
         log_error("game: zone arena reserve failed");
         return false;
@@ -83,6 +95,7 @@ bool Game::init(RenderDevice& device, FontChain& fonts, Arena& perm, Arena& scra
         return false;
     }
     zone_gravity(world_, gravity_);
+    rebuild_islands();
 
     const f32 tx = spawn_.tower_present ? spawn_.tower_x : 258.0f;
     const f32 tz = spawn_.tower_present ? spawn_.tower_z : 82.0f;
@@ -183,6 +196,7 @@ void Game::sync_pickup_transforms()
 void Game::tick(f32 dt, const PlayerCommand& cmd)
 {
     zone_gravity(world_, gravity_);
+    islands_.fill_gravity(gravity_);
     weather_.tick(dt);
     carsys_.rain_level = weather_.rain();
     carsys_.tick(vehicle_, phys_, dt);
@@ -485,7 +499,13 @@ void Game::guard_against_falling()
 void Game::update_chroma(f32 frame_dt)
 {
     const f32 turn = f_clamp01(player_.up_turn_rate() / kChromaTurnFull);
-    const f32 target = kChromaBase * player_.field_presence() + kChromaTurn * turn;
+    f32 inside = 0.0f;
+    for (u32 i = 0; i < islands_.haze_count(); i++) {
+        const HazeSphere& h = islands_.haze()[i];
+        const f32 depth = 1.0f - length(camera_.pos - h.centre) / f_max(h.radius, 1.0f);
+        inside = f_max(inside, f_clamp01(depth * 2.5f));
+    }
+    const f32 target = kChromaBase * player_.field_presence() + kChromaTurn * turn + kChromaHaze * inside;
     const f32 rate = target > chroma_ ? kChromaAttack : kChromaRelease;
     chroma_ = f_approach_exp(chroma_, target, rate, frame_dt);
     if (toggles_.free_cam || editor_.active()) {
@@ -522,6 +542,7 @@ void Game::track_camera_velocity(f32 frame_dt)
 
 void Game::advance(f32 frame_dt)
 {
+    watch_islands(frame_dt);
     if (editor_.active()) {
         accumulator_ = 0.0;
         alpha_ = 0.0f;
@@ -834,8 +855,8 @@ void Game::bind_entity_meshes(RenderDevice& device)
     for (u32 idx : pool.live_indices()) {
         Entity* e = pool.at(idx);
         if (!e || e->mesh || e->mesh_name.empty() || e->kind == EntityKind::Trigger
-            || e->kind == EntityKind::Gravity
-            || e->kind == EntityKind::Tree) {
+            || e->kind == EntityKind::Gravity || e->kind == EntityKind::Island
+            || e->kind == EntityKind::IslandLink || e->kind == EntityKind::Tree) {
             continue;
         }
         e->mesh = device.assets().mesh(e->mesh_name.view());
@@ -875,10 +896,17 @@ void Game::draw_grass_patches(RenderDevice& device, TerrainRenderer& terrain_ren
     for (u32 idx : pool.live_indices()) {
         const Entity* e = pool.at(idx);
         if (!e || count >= kMaxGrassPatches || e->mesh_name.empty()
-            || (e->kind != EntityKind::Building && e->kind != EntityKind::StaticMesh)) {
+            || (e->kind != EntityKind::Building && e->kind != EntityKind::StaticMesh
+                && e->kind != EntityKind::Island)) {
             continue;
         }
-        const u32 texture = terrain_renderer.patch_texture(*scratch_, e->mesh_name.view());
+        FixedString<48> patch_name;
+        if (e->kind == EntityKind::Island) {
+            patch_name.format("isl_%s", e->mesh_name.c_str());
+        } else {
+            patch_name.assign(e->mesh_name.view());
+        }
+        const u32 texture = terrain_renderer.patch_texture(*scratch_, patch_name.view());
         if (!texture) {
             continue;
         }
@@ -889,6 +917,121 @@ void Game::draw_grass_patches(RenderDevice& device, TerrainRenderer& terrain_ren
         p.texture = texture;
     }
     terrain_renderer.draw_scrub_patches(device, camera_.pos, time, patches, count);
+}
+
+void Game::rebuild_islands()
+{
+    const u32 craters_before = terrain_.crater_signature();
+    islands_arena_.reset();
+    islands_rebuild(islands_, world_, terrain_, phys_, islands_arena_, *scratch_);
+    islands_signature_ = IslandField::signature(world_);
+    islands_statics_ = phys_.statics().tri_count();
+    islands_settle_ = 0.0f;
+    if (terrain_.crater_signature() != craters_before) {
+        terrain_dirty_ = true;
+    }
+    islands_patches_dirty_ = true;
+    zone_gravity(world_, gravity_);
+    islands_.fill_gravity(gravity_);
+    if (!islands_.rejected().empty()) {
+        FixedString<128> message;
+        message.format("rejected %s", islands_.rejected()[0].c_str());
+        for (size_t i = 1; i < islands_.rejected().size() && i < 3; i++) {
+            message.format("%s, %s", FixedString<128>(message).c_str(), islands_.rejected()[i].c_str());
+        }
+        editor_.status(message.view());
+    }
+}
+
+void Game::watch_islands(f32 frame_dt)
+{
+    const bool statics_lost = phys_.statics().tri_count() != islands_statics_;
+    if (IslandField::signature(world_) == islands_signature_ && !statics_lost) {
+        islands_settle_ = 0.0f;
+        return;
+    }
+    islands_settle_ += frame_dt;
+    if (statics_lost || islands_settle_ >= kIslandsSettle) {
+        rebuild_islands();
+    }
+}
+
+void Game::sync_island_gpu(RenderDevice& device, TerrainRenderer& terrain_renderer)
+{
+    const std::vector<BuiltIsland>& built = islands_.islands();
+    if (islands_uploaded_ != islands_.generation()) {
+        island_meshes_.assign(built.size(), nullptr);
+        for (size_t i = 0; i < built.size(); i++) {
+            const BuiltIsland& island = built[i];
+            AmshSubmesh sub{};
+            sub.first_index = 0;
+            sub.index_count = static_cast<u32>(island.mesh.indices.size());
+            std::snprintf(sub.material, sizeof(sub.material), "%.*s", static_cast<int>(kIslandMaterial.size()),
+                          kIslandMaterial.data());
+            MeshData data;
+            data.vertices = std::span<const AmshVertex>(island.mesh.vertices);
+            data.indices = std::span<const u32>(island.mesh.indices);
+            data.submeshes = std::span<const AmshSubmesh>(&sub, 1);
+            data.bounds = island.mesh.bounds;
+            FixedString<48> name;
+            name.format("isl_%s", island.name.c_str());
+            island_meshes_[i] = device.assets().create_mesh(name.view(), data);
+        }
+        if (!debris_meshes_[0]) {
+            for (u32 v = 0; v < IslandField::kRockVariants + IslandField::kTurfVariants; v++) {
+                const bool rock = v < IslandField::kRockVariants;
+                const BakedMesh& mesh = rock ? islands_.rock_variant(v)
+                                             : islands_.turf_variant(v - IslandField::kRockVariants);
+                AmshSubmesh sub{};
+                sub.index_count = static_cast<u32>(mesh.indices.size());
+                std::snprintf(sub.material, sizeof(sub.material), "%.*s", static_cast<int>(kIslandMaterial.size()),
+                              kIslandMaterial.data());
+                MeshData data;
+                data.vertices = std::span<const AmshVertex>(mesh.vertices);
+                data.indices = std::span<const u32>(mesh.indices);
+                data.submeshes = std::span<const AmshSubmesh>(&sub, 1);
+                data.bounds = mesh.bounds;
+                FixedString<32> name;
+                name.format("debris_%s_%u", rock ? "rock" : "turf", rock ? v : v - IslandField::kRockVariants);
+                debris_meshes_[v] = device.assets().create_mesh(name.view(), data);
+            }
+        }
+        islands_uploaded_ = islands_.generation();
+        islands_patches_dirty_ = true;
+    }
+    Pool<Entity>& pool = world_.entities();
+    for (u32 idx : pool.live_indices()) {
+        Entity* e = pool.at(idx);
+        if (!e || e->kind != EntityKind::Island) {
+            continue;
+        }
+        e->mesh = nullptr;
+        for (size_t i = 0; i < built.size() && i < island_meshes_.size(); i++) {
+            if (built[i].name == e->mesh_name.view()) {
+                e->mesh = island_meshes_[i];
+            }
+        }
+    }
+    if (islands_patches_dirty_) {
+        for (const BuiltIsland& island : built) {
+            FixedString<48> name;
+            name.format("isl_%s", island.name.c_str());
+            terrain_renderer.register_patch_heights(name.view(), island.grass.data(), IslandField::kGrassRes,
+                                                    IslandField::kGrassRes);
+        }
+        islands_patches_dirty_ = false;
+    }
+}
+
+void Game::draw_debris(RenderDevice& device, f32 time)
+{
+    if (!debris_meshes_[0]) {
+        return;
+    }
+    for (const DebrisInstance& d : islands_.debris()) {
+        const u32 slot = d.kind == DebrisKind::Rock ? d.variant : IslandField::kRockVariants + d.variant;
+        device.draw_mesh(debris_meshes_[slot], IslandField::debris_transform(d, time));
+    }
 }
 
 void Game::update_grass_press(TerrainRenderer& terrain_renderer)
@@ -1217,9 +1360,18 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
             log_error("travel: terrain rebuild failed");
         }
         terrain_dirty_ = false;
+        islands_patches_dirty_ = true;
     }
+    sync_island_gpu(device, terrain_renderer);
 
     device.set_screen_fx(screen_fx_);
+    Vec4 haze[IslandField::kMaxHaze];
+    for (u32 i = 0; i < islands_.haze_count(); i++) {
+        const HazeSphere& h = islands_.haze()[i];
+        haze[i] = Vec4{h.centre.x, h.centre.y, h.centre.z, h.radius};
+    }
+    device.set_haze(haze, islands_.haze_count(), kHazeDensity, kHazeChroma, kHazeShimmer, kHazeTint,
+                    IslandField::kHazeMargin);
     f32 warp = 0.0f;
     f32 flash = 0.0f;
     travel_warp(warp, flash);
@@ -1252,6 +1404,7 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
     if (device.shadow_begin(camera_.pos)) {
         terrain_renderer.draw(device);
         draw_entities(device);
+        draw_debris(device, time);
         tree_render_.draw(device);
         draw_vehicle(device);
         car_render_.draw(device, carsys_, vehicle_, phys_, alpha_, 0.0f, 0);
@@ -1267,6 +1420,7 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
     draw_grass_patches(device, terrain_renderer, time);
 
     draw_entities(device);
+    draw_debris(device, time);
     tree_render_.draw(device);
     draw_vehicle(device);
     draw_viewmodel(device);
@@ -1592,6 +1746,7 @@ bool Game::load_zone(std::string_view dir)
         return false;
     }
     zone_gravity(world_, gravity_);
+    rebuild_islands();
     zone_dir_.assign(dir);
 
     const f32 tx = spawn_.tower_present ? spawn_.tower_x : 0.0f;

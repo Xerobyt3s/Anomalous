@@ -62,10 +62,63 @@ vec3 tonemapAgx(vec3 color)
 vec3 g_fog_transmittance = vec3(1.0);
 vec3 g_fog_inscatter = vec3(0.0);
 float g_px_scale = 1.0;
+float g_haze = 0.0;
+
+const float HAZE_SKY_DISTANCE = 600.0;
+const float HAZE_CHROMA_PIXELS = 7.0;
+const float HAZE_SHIMMER_UV = 0.0025;
+const float HAZE_FADE_SPAN = 0.75;
+const float HAZE_INSIDE = 0.4;
+
+float haze_optical_depth(vec3 ro, vec3 rd, float dist)
+{
+    float depth = 0.0;
+    for (int i = 0; i < u_haze_count; i++) {
+        vec3 c = u_haze[i].xyz;
+        float r = u_haze[i].w;
+        vec3 oc = ro - c;
+        float core = max(r - u_haze_tint.w, 0.0);
+        float outside = mix(HAZE_INSIDE, 1.0, smoothstep(core, core + u_haze_tint.w * HAZE_FADE_SPAN, length(oc)));
+        if (outside <= 0.0) {
+            continue;
+        }
+        float b = dot(oc, rd);
+        float h = b * b - (dot(oc, oc) - r * r);
+        if (h <= 0.0) {
+            continue;
+        }
+        h = sqrt(h);
+        float t0 = max(-b - h, 0.0);
+        float t1 = min(-b + h, dist);
+        if (t1 <= t0) {
+            continue;
+        }
+        float closest = length(oc + rd * clamp(-b, t0, t1)) / r;
+        depth += (t1 - t0) * (1.0 - closest * closest * 0.7) * outside;
+    }
+    return depth * u_haze_density;
+}
+
+void apply_haze(vec3 dir, float dist)
+{
+    if (u_haze_count <= 0) {
+        return;
+    }
+    float depth = haze_optical_depth(u_cam_pos.xyz, dir, dist);
+    if (depth <= 0.0) {
+        return;
+    }
+    float transmittance = exp(-depth);
+    float lum = dot(u_fog_color_density.rgb, vec3(0.3, 0.55, 0.15));
+    vec3 lit = u_haze_tint.rgb * (lum * 1.15 + dot(u_sun_color_ambient.rgb, vec3(0.3, 0.55, 0.15)) * 0.02);
+    g_fog_inscatter = g_fog_inscatter * transmittance + lit * (1.0 - transmittance);
+    g_fog_transmittance *= transmittance;
+    g_haze = 1.0 - transmittance;
+}
 
 vec2 chroma_spread(vec2 uv)
 {
-    if (u_chroma.x <= 0.0) {
+    if (u_chroma.x <= 0.0 && g_haze <= 0.0) {
         return vec2(0.0);
     }
     vec2 d = uv - 0.5;
@@ -74,7 +127,8 @@ vec2 chroma_spread(vec2 uv)
         return vec2(0.0);
     }
     float pulse = 0.75 + 0.25 * sin(u_time * 2.0 + u_chroma.y);
-    float px = u_chroma.x * pulse * smoothstep(0.05, 0.6, r) * (u_viewport.y / 1080.0);
+    float px = (u_chroma.x + u_haze_chroma * HAZE_CHROMA_PIXELS * g_haze) * pulse * smoothstep(0.05, 0.6, r)
+             * (u_viewport.y / 1080.0);
     px = g_px_scale > 1.0 ? floor(px / g_px_scale + 0.5) * g_px_scale : px;
     return normalize(d) * px / u_viewport.xy;
 }
@@ -119,6 +173,10 @@ void main()
         float dist = length(to_frag);
         g_fog_inscatter = aerialPerspective(worldAltitude(u_cam_pos.xyz), to_frag / max(dist, 1e-4),
                                             sun_toward(), dist * 0.001, g_fog_transmittance);
+        apply_haze(to_frag / max(dist, 1e-4), dist);
+    } else {
+        vec3 sky_dir = normalize(world_from_depth(v_uv, 0.999) - u_cam_pos.xyz);
+        apply_haze(sky_dir, HAZE_SKY_DISTANCE);
     }
 
     float retro = u_pixel_scale > 1.0 || u_quantise_bits > 0.0
@@ -138,6 +196,11 @@ void main()
         float cs = cos(turn);
         d = vec2(d.x * cs - d.y * sn, d.x * sn + d.y * cs);
         uv = 0.5 + d * (1.0 - u_warp.x * (0.30 + 1.20 * r * r));
+    }
+    if (g_haze > 0.0 && u_haze_shimmer > 0.0) {
+        vec2 wobble = vec2(sin(v_uv.y * 47.0 + u_time * 1.7 + sin(v_uv.x * 13.0 + u_time * 0.6) * 2.0),
+                           cos(v_uv.x * 41.0 - u_time * 1.3 + sin(v_uv.y * 11.0 - u_time * 0.5) * 2.0));
+        uv += wobble * (HAZE_SHIMMER_UV * u_haze_shimmer * g_haze);
     }
     if (scale > 1.0) {
         vec2 grid = max(u_viewport.xy / scale, vec2(1.0));

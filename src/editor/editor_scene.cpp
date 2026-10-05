@@ -12,6 +12,8 @@
 #include "terminal/disks.h"
 #include "ui/ui.h"
 #include "vehicle/vehicle.h"
+#include "world/islands/island_field.h"
+#include "world/islands/sdf_noise.h"
 #include "world/terrain.h"
 
 #include <cstdio>
@@ -22,6 +24,33 @@ namespace {
 constexpr f32 kPlaceRange = 500.0f;
 constexpr f32 kTriggerDistance = 8.0f;
 constexpr f32 kGravityDistance = 14.0f;
+constexpr f32 kIslandDistance = 40.0f;
+constexpr f32 kIslandLift = 14.0f;
+constexpr f32 kIslandRadius = 10.0f;
+constexpr f32 kIslandDepth = 8.0f;
+constexpr u32 kIslandNameTries = 1000;
+
+bool island_named(const World& world, std::string_view name)
+{
+    for (u32 idx : world.entities().live_indices()) {
+        const Entity* e = world.entities().at(idx);
+        if (e && e->kind == EntityKind::Island && e->mesh_name == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool link_exists(const World& world, std::string_view spec)
+{
+    for (u32 idx : world.entities().live_indices()) {
+        const Entity* e = world.entities().at(idx);
+        if (e && e->kind == EntityKind::IslandLink && e->mesh_name == spec) {
+            return true;
+        }
+    }
+    return false;
+}
 
 bool ends_with(std::string_view text, std::string_view suffix)
 {
@@ -129,6 +158,149 @@ EntityHandle EditorScene::add_gravity(Editor& editor, const Camera& cam, World& 
     editor.select(world, handle);
     editor.push_create(world, phys, handle);
     return handle;
+}
+
+EntityHandle EditorScene::add_island(Editor& editor, const Camera& cam, World& world,
+                                     PhysWorld& phys, const Terrain& terrain)
+{
+    FixedString<32> name;
+    for (u32 i = 1; i < kIslandNameTries; i++) {
+        name.format("isle_%u", i);
+        if (!island_named(world, name.view())) {
+            break;
+        }
+    }
+    Vec3 flat = cam.forward();
+    flat.y = 0.0f;
+    flat = length_sq(flat) > 1e-6f ? normalize(flat) : Vec3{0.0f, 0.0f, -1.0f};
+    Vec3 pos = cam.pos + flat * kIslandDistance;
+    pos.y = terrain.heightfield().sample(pos.x, pos.z) + kIslandLift;
+    const EntityHandle handle = world.spawn(EntityKind::Island, pos, quat_identity(), 1.0f, name.view(), 0);
+    if (Entity* e = world.entity(handle)) {
+        e->half = Vec3{kIslandRadius, 0.0f, 0.0f};
+        e->aux_value = kIslandDepth;
+        e->aux_data = seed_from_name(name.view(), 0u) % 1000u;
+    }
+    editor.select(world, handle);
+    editor.push_create(world, phys, handle);
+    return handle;
+}
+
+EntityHandle EditorScene::add_link(Editor& editor, World& world, PhysWorld& phys,
+                                   std::string_view from, std::string_view to)
+{
+    FixedString<64> spec;
+    spec.format("%.*s>%.*s", static_cast<int>(from.size()), from.data(), static_cast<int>(to.size()),
+                to.data());
+    if (from == to || (to != "ground" && !island_named(world, to))) {
+        editor.status("no island named that");
+        return EntityHandle{};
+    }
+    if (link_exists(world, spec.view())) {
+        editor.status("already linked");
+        return EntityHandle{};
+    }
+    const EntityHandle handle = world.spawn(EntityKind::IslandLink, Vec3{}, quat_identity(), 1.0f, spec.view(), 0);
+    if (Entity* e = world.entity(handle)) {
+        e->aux_value = kLinkDefaultWidth;
+    }
+    editor.select(world, handle);
+    editor.push_create(world, phys, handle);
+    return handle;
+}
+
+void EditorScene::island_panel(Editor& editor, Ui& ui, World& world, PhysWorld& phys, Entity& sel)
+{
+    if (trigger_sync_ != editor.selection()) {
+        trigger_sync_ = editor.selection();
+        std::snprintf(trigger_name_, sizeof(trigger_name_), "%s", sel.mesh_name.c_str());
+    }
+    ui.text_field("island name", trigger_name_, sizeof(trigger_name_));
+    const std::string_view typed{trigger_name_};
+    if (sel.mesh_name != typed && !typed.empty() && typed.find('>') == std::string_view::npos
+        && typed != "ground" && !island_named(world, typed)) {
+        FixedString<32> old_name;
+        old_name.assign(sel.mesh_name.view());
+        for (u32 idx : world.entities().live_indices()) {
+            Entity* l = world.entities().at(idx);
+            if (!l || l->kind != EntityKind::IslandLink) {
+                continue;
+            }
+            const std::string_view spec = l->mesh_name.view();
+            const size_t split = spec.find('>');
+            if (split == std::string_view::npos) {
+                continue;
+            }
+            const std::string_view a = spec.substr(0, split);
+            const std::string_view b = spec.substr(split + 1);
+            if (a != old_name.view() && b != old_name.view()) {
+                continue;
+            }
+            FixedString<64> renamed;
+            const std::string_view na = a == old_name.view() ? typed : a;
+            const std::string_view nb = b == old_name.view() ? typed : b;
+            renamed.format("%.*s>%.*s", static_cast<int>(na.size()), na.data(), static_cast<int>(nb.size()),
+                           nb.data());
+            l->mesh_name.assign(renamed.view());
+        }
+        sel.mesh_name.assign(typed);
+        editor.mark_dirty();
+    }
+    f32 yaw = 0.0f;
+    f32 pitch = 0.0f;
+    f32 roll = 0.0f;
+    quat_to_euler(sel.rot, yaw, pitch, roll);
+    f32 pitch_deg = pitch * kRadToDeg;
+    f32 roll_deg = roll * kRadToDeg;
+    if (ui.slider("pitch", pitch_deg, -180.0f, 180.0f) || ui.slider("roll", roll_deg, -180.0f, 180.0f)) {
+        sel.rot = quat_from_euler(yaw, pitch_deg * kDegToRad, roll_deg * kDegToRad);
+        editor.mark_dirty();
+    }
+    if (ui.slider("radius", sel.half.x, 3.0f, kIslandMaxRadius) || ui.slider("depth", sel.aux_value, 2.0f, 30.0f)) {
+        editor.mark_dirty();
+    }
+    f32 seed = static_cast<f32>(sel.aux_data);
+    if (ui.slider("seed", seed, 0.0f, 999.0f)) {
+        sel.aux_data = static_cast<u32>(seed + 0.5f);
+        editor.mark_dirty();
+    }
+    f32 style = static_cast<f32>(sel.aux_kind & 0xFFu);
+    bool crater = ((sel.aux_kind >> 8) & 1u) != 0;
+    const bool style_changed = ui.slider("style", style, 0.0f, 1.0f);
+    const bool crater_changed = ui.checkbox("crater below", crater);
+    if (style_changed || crater_changed) {
+        sel.aux_kind = (static_cast<u32>(style + 0.5f) & 0xFFu) | ((crater ? 1u : 0u) << 8);
+        editor.mark_dirty();
+    }
+    if (ui.button("link to ground")) {
+        add_link(editor, world, phys, sel.mesh_name.view(), "ground");
+        return;
+    }
+    ui.text_field("link target", link_target_, sizeof(link_target_));
+    if (ui.button("add link")) {
+        FixedString<32> from;
+        from.assign(sel.mesh_name.view());
+        add_link(editor, world, phys, from.view(), std::string_view{link_target_});
+    }
+}
+
+void EditorScene::link_panel(Editor& editor, Ui& ui, Entity& sel)
+{
+    ui.label("link: %s", sel.mesh_name.c_str());
+    if (ui.slider("width", sel.aux_value, 3.0f, 16.0f)) {
+        editor.mark_dirty();
+    }
+    const std::string_view spec = sel.mesh_name.view();
+    if (spec.size() > 7 && spec.substr(spec.size() - 7) == ">ground") {
+        bool pinned = (sel.aux_kind & 1u) != 0;
+        if (ui.checkbox("pin ground point", pinned)) {
+            sel.aux_kind = pinned ? 1u : 0u;
+            editor.mark_dirty();
+        }
+        if (pinned) {
+            ui.label("move the gizmo to place it");
+        }
+    }
 }
 
 bool EditorScene::update_car_boxes(Editor& editor, const Input& input, const Camera& cam,
@@ -297,6 +469,9 @@ void EditorScene::palette_panel(Editor& editor, Ui& ui, const Camera& cam, World
     if (ui.button("add gravity")) {
         add_gravity(editor, cam, world, phys);
     }
+    if (ui.button("add island")) {
+        add_island(editor, cam, world, phys, terrain);
+    }
     if (place_mesh_ >= 0 || place_item_ >= 0) {
         ui.label("click ground to place, esc stops");
     }
@@ -333,6 +508,10 @@ void EditorScene::outliner_panel(Editor& editor, Ui& ui, World& world, f32 px)
             label.format("%u trig %s", idx, e->mesh_name.c_str());
         } else if (e->kind == EntityKind::Gravity) {
             label.format("%u grav %s", idx, e->mesh_name.c_str());
+        } else if (e->kind == EntityKind::Island) {
+            label.format("%u isle %s", idx, e->mesh_name.c_str());
+        } else if (e->kind == EntityKind::IslandLink) {
+            label.format("%u link %s", idx, e->mesh_name.c_str());
         } else {
             label.format("%u %s", idx, e->mesh_name.c_str());
         }
@@ -347,14 +526,16 @@ void EditorScene::outliner_panel(Editor& editor, Ui& ui, World& world, f32 px)
     ui.panel_end();
 }
 
-void EditorScene::detail_panel(Editor& editor, Ui& ui, World& world, InteractBoxes* boxes,
-                               const TapeLibrary* tapes)
+void EditorScene::detail_panel(Editor& editor, Ui& ui, World& world, PhysWorld& phys,
+                               InteractBoxes* boxes, const TapeLibrary* tapes)
 {
     Entity* sel = world.entity(editor.selection());
     const bool relevant = car_boxes_on_
                        || (sel && (sel->kind == EntityKind::PartPickup
                                    || sel->kind == EntityKind::Trigger
-                                   || sel->kind == EntityKind::Gravity));
+                                   || sel->kind == EntityKind::Gravity
+                                   || sel->kind == EntityKind::Island
+                                   || sel->kind == EntityKind::IslandLink));
 
     ui.panel_begin("tuning", 292.0f, 16.0f, 250.0f);
     if (ui.checkbox("car interact boxes", car_boxes_on_) && !car_boxes_on_) {
@@ -488,6 +669,12 @@ void EditorScene::detail_panel(Editor& editor, Ui& ui, World& world, InteractBox
         }
     }
 
+    if (sel && sel->kind == EntityKind::Island) {
+        island_panel(editor, ui, world, phys, *sel);
+    } else if (sel && sel->kind == EntityKind::IslandLink) {
+        link_panel(editor, ui, *sel);
+    }
+
     if (!relevant && !sel) {
         ui.label("nothing selected");
     }
@@ -532,7 +719,7 @@ void EditorScene::render(Editor& editor, Ui& ui, DebugDraw& debug, const Camera&
     const f32 px = viewport.x - kScenePanelWidth - 16.0f;
     palette_panel(editor, ui, cam, world, phys, terrain, px);
     outliner_panel(editor, ui, world, px);
-    detail_panel(editor, ui, world, boxes, tapes);
+    detail_panel(editor, ui, world, phys, boxes, tapes);
 }
 
 } // namespace anom

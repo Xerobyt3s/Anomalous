@@ -4,6 +4,9 @@
 #include "core/config.h"
 #include "core/fixed_string.h"
 #include "core/log.h"
+#include "world/islands/island_field.h"
+
+#include <cmath>
 
 namespace anom {
 
@@ -34,6 +37,12 @@ bool Terrain::load(Arena& arena, Arena& scratch, std::string_view zone_dir, cons
         }
     }
     hf_.recompute_extents();
+    const u64 count = static_cast<u64>(raw.width) * raw.height;
+    base_heights_ = arena.push_array<f32>(count);
+    for (u64 i = 0; i < count; i++) {
+        base_heights_[i] = hf_.heights()[i];
+    }
+    crater_signature_ = 0;
 
     path.format("%.*s/%.*s", static_cast<int>(zone_dir.size()), zone_dir.data(),
                 static_cast<int>(roadmask_name.size()), roadmask_name.data());
@@ -52,6 +61,47 @@ bool Terrain::load(Arena& arena, Arena& scratch, std::string_view zone_dir, cons
              static_cast<f64>(hf_.span_x()), static_cast<f64>(hf_.span_z()),
              static_cast<f64>(hf_.min_height()), static_cast<f64>(hf_.max_height()));
     return true;
+}
+
+void Terrain::stamp_craters(const CraterStamp* craters, u32 count)
+{
+    u32 signature = 2166136261u;
+    for (u32 i = 0; i < count; i++) {
+        const u8* bytes = reinterpret_cast<const u8*>(&craters[i]);
+        for (u32 b = 0; b < sizeof(CraterStamp); b++) {
+            signature = (signature ^ bytes[b]) * 16777619u;
+        }
+    }
+    if (!base_heights_ || !hf_.valid() || signature == crater_signature_) {
+        return;
+    }
+    crater_signature_ = signature;
+    const f32 cell = hf_.cell_size();
+    const Vec3 origin = hf_.origin();
+    for (u32 iz = 0; iz < hf_.size_z(); iz++) {
+        for (u32 ix = 0; ix < hf_.size_x(); ix++) {
+            const f32 x = origin.x + static_cast<f32>(ix) * cell;
+            const f32 z = origin.z + static_cast<f32>(iz) * cell;
+            f32 h = base_heights_[static_cast<u64>(iz) * hf_.size_x() + ix];
+            for (u32 c = 0; c < count; c++) {
+                const CraterStamp& s = craters[c];
+                const f32 dx = x - s.x;
+                const f32 dz = z - s.z;
+                const f32 angle = std::atan2(dz, dx);
+                const f32 wobble = 1.0f + 0.12f * std::sin(angle * 3.0f + s.radius)
+                                 + 0.07f * std::sin(angle * 7.0f - s.depth * 2.0f);
+                const f32 rho = std::sqrt(dx * dx + dz * dz) / (s.radius * wobble);
+                if (rho > 1.8f) {
+                    continue;
+                }
+                const f32 bowl = std::pow(f_max(1.0f - rho * rho, 0.0f), 1.3f);
+                const f32 rim = std::exp(-((rho - 1.0f) / 0.22f) * ((rho - 1.0f) / 0.22f));
+                h += -s.depth * bowl + s.depth * 0.22f * rim;
+            }
+            hf_.set_height(ix, iz, h);
+        }
+    }
+    hf_.recompute_extents();
 }
 
 f32 Terrain::road_amount(f32 x, f32 z) const

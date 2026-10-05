@@ -10,11 +10,12 @@ namespace anom {
 
 class Arena;
 class FileWatcher;
+struct MeshData;
 
 class AssetCache {
 public:
     static constexpr u32 kMaxTextures = 64;
-    static constexpr u32 kMaxMeshes = 64;
+    static constexpr u32 kMaxMeshes = 128;
 
     void init(FileWatcher& watcher, Arena& scratch);
     void set_instance_buffer(u32 vbo) { instance_vbo_ = vbo; }
@@ -24,6 +25,7 @@ public:
     u32 texture_gl(u32 slot) const;
     u32 companion_slot(std::string_view material, std::string_view suffix);
     const GpuMesh* mesh(std::string_view name);
+    const GpuMesh* create_mesh(std::string_view name, const MeshData& data);
 
     u32 reload_count() const { return reload_count_; }
 
@@ -42,6 +44,7 @@ private:
         GpuMesh mesh;
         AssetCache* owner = nullptr;
         bool used = false;
+        bool runtime = false;
     };
 
     static void on_texture_changed(void* user, std::string_view path);
@@ -49,6 +52,7 @@ private:
 
     bool upload_texture(TextureEntry& entry);
     bool upload_mesh(MeshEntry& entry);
+    void upload_mesh_data(GpuMesh& mesh, const MeshData& data);
 
     TextureEntry textures_[kMaxTextures];
     MeshEntry meshes_[kMaxMeshes];

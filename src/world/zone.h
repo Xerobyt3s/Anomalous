@@ -16,7 +16,7 @@ class Terrain;
 class World;
 
 inline constexpr u32 kZoneMaxPickups = 64;
-inline constexpr u32 kZoneMaxStaticTris = 16384;
+inline constexpr u32 kZoneMaxStaticTris = 131072;
 inline constexpr f32 kZoneEscapeMarginXZ = 200.0f;
 inline constexpr f32 kZoneEscapeMarginY = 400.0f;
 
@@ -54,6 +54,7 @@ bool zone_reload(std::string_view zone_dir, Arena& arena, Arena& scratch, World&
 
 void zone_gravity(const World& world, GravityField& out);
 bool zone_out_of_bounds(const Heightfield& hf, Vec3 p);
+void zone_add_entity_collision(const World& world, PhysWorld& phys, Arena& scratch);
 
 bool zone_save(std::string_view zone_dir, Arena& scratch, const World& world,
                const PhysWorld& phys, const Terrain& terrain);

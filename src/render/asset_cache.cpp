@@ -13,6 +13,7 @@ namespace anom {
 namespace {
 
 constexpr std::string_view kGroundPrefix = "island_";
+constexpr std::string_view kProceduralMaterial = "island_proc";
 
 } // namespace
 
@@ -146,8 +147,12 @@ bool AssetCache::upload_mesh(MeshEntry& entry)
     if (load_mesh(entry.path.view(), *scratch_, data) != MeshParseError::Ok) {
         return false;
     }
+    upload_mesh_data(entry.mesh, data);
+    return true;
+}
 
-    GpuMesh& mesh = entry.mesh;
+void AssetCache::upload_mesh_data(GpuMesh& mesh, const MeshData& data)
+{
     if (mesh.loaded) {
         glDeleteVertexArrays(1, &mesh.vao);
         glDeleteBuffers(1, &mesh.vbo);
@@ -192,20 +197,51 @@ bool AssetCache::upload_mesh(MeshEntry& entry)
     for (u32 i = 0; i < mesh.submesh_count; i++) {
         mesh.submeshes[i].first_index = data.submeshes[i].first_index;
         mesh.submeshes[i].index_count = data.submeshes[i].index_count;
-        mesh.submeshes[i].texture_slot = texture_slot(data.submeshes[i].material);
+        const bool procedural = std::string_view(data.submeshes[i].material) == kProceduralMaterial;
+        mesh.submeshes[i].texture_slot = procedural ? kMaxTextures : texture_slot(data.submeshes[i].material);
         mesh.submeshes[i].normal_slot = companion_slot(data.submeshes[i].material, "_n");
         mesh.submeshes[i].surface_slot = companion_slot(data.submeshes[i].material, "_s");
         mesh.submeshes[i].blend_slot = companion_slot(data.submeshes[i].material, "_g");
         mesh.submeshes[i].ground = std::string_view(data.submeshes[i].material).starts_with(kGroundPrefix);
+        mesh.submeshes[i].procedural = procedural;
     }
     mesh.bounds = data.bounds;
     mesh.loaded = true;
-    return true;
+}
+
+const GpuMesh* AssetCache::create_mesh(std::string_view name, const MeshData& data)
+{
+    MeshEntry* entry = nullptr;
+    for (u32 i = 0; i < kMaxMeshes && !entry; i++) {
+        if (meshes_[i].used && meshes_[i].name == name) {
+            entry = &meshes_[i];
+        }
+    }
+    for (u32 i = 0; i < kMaxMeshes && !entry; i++) {
+        if (!meshes_[i].used) {
+            entry = &meshes_[i];
+            entry->name.assign(name);
+            entry->path.assign("");
+            entry->owner = this;
+            entry->used = true;
+        }
+    }
+    if (!entry) {
+        log_error("assets: mesh cache exhausted at %u, cannot create %.*s", kMaxMeshes,
+                  static_cast<int>(name.size()), name.data());
+        return nullptr;
+    }
+    entry->runtime = true;
+    upload_mesh_data(entry->mesh, data);
+    return &entry->mesh;
 }
 
 void AssetCache::on_mesh_changed(void* user, std::string_view)
 {
     auto* entry = static_cast<MeshEntry*>(user);
+    if (entry->runtime) {
+        return;
+    }
     if (entry->owner->upload_mesh(*entry)) {
         entry->owner->reload_count_++;
         log_info("assets: mesh reloaded %s", entry->name.c_str());

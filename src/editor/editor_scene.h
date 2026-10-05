@@ -68,6 +68,10 @@ public:
     EntityHandle add_trigger(Editor& editor, const Camera& cam, World& world, PhysWorld& phys,
                              const Terrain& terrain);
     EntityHandle add_gravity(Editor& editor, const Camera& cam, World& world, PhysWorld& phys);
+    EntityHandle add_island(Editor& editor, const Camera& cam, World& world, PhysWorld& phys,
+                            const Terrain& terrain);
+    EntityHandle add_link(Editor& editor, World& world, PhysWorld& phys, std::string_view from,
+                          std::string_view to);
 
 private:
     bool update_car_boxes(Editor& editor, const Input& input, const Camera& cam, PhysWorld& phys,
@@ -75,8 +79,10 @@ private:
     void palette_panel(Editor& editor, Ui& ui, const Camera& cam, World& world,
                        PhysWorld& phys, const Terrain& terrain, f32 px);
     void outliner_panel(Editor& editor, Ui& ui, World& world, f32 px);
-    void detail_panel(Editor& editor, Ui& ui, World& world, InteractBoxes* boxes,
+    void detail_panel(Editor& editor, Ui& ui, World& world, PhysWorld& phys, InteractBoxes* boxes,
                       const TapeLibrary* tapes);
+    void island_panel(Editor& editor, Ui& ui, World& world, PhysWorld& phys, Entity& sel);
+    void link_panel(Editor& editor, Ui& ui, Entity& sel);
 
     bool update_placement(Editor& editor, const Input& input, const Camera& cam, World& world,
                           PhysWorld& phys, Vec2 viewport, bool over_panel);
@@ -99,6 +105,7 @@ private:
     i32 tape_scroll_ = 0;
     EntityHandle trigger_sync_;
     char trigger_name_[32] = {};
+    char link_target_[32] = {};
 };
 
 } // namespace anom

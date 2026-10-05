@@ -46,6 +46,7 @@ public:
     void draw(RenderDevice& device);
     void draw_scrub(RenderDevice& device, Vec3 cam_pos, f32 time);
     u32 patch_texture(Arena& scratch, std::string_view mesh_name);
+    u32 register_patch_heights(std::string_view name, const f32* heights, u32 width, u32 height);
     void draw_scrub_patches(RenderDevice& device, Vec3 cam_pos, f32 time, const ScrubPatch* patches,
                             u32 count);
 

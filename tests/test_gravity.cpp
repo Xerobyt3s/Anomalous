@@ -593,6 +593,24 @@ TEST(hardening, the_gravity_field_stays_sane_under_random_volumes)
             v.sector = rnd() * kPi;
             field.add(v);
         }
+        const u32 paths = static_cast<u32>(rnd() * 4.0f);
+        for (u32 k = 0; k < paths; k++) {
+            GravityPath path;
+            path.count = 2 + static_cast<u32>(rnd() * 46.0f);
+            const Vec3 origin{(rnd() - 0.5f) * 60.0f, rnd() * 40.0f, (rnd() - 0.5f) * 60.0f};
+            const bool collapsed = rnd() < 0.15f;
+            for (u32 i = 0; i < path.count; i++) {
+                const f32 t = static_cast<f32>(i);
+                path.points[i] = collapsed ? origin : origin + Vec3{t * (rnd() * 2.0f), t * (rnd() - 0.5f), t * (rnd() - 0.5f) * 2.0f};
+                path.ups[i] = normalize(Vec3{rnd() - 0.5f, rnd() - 0.5f, rnd() - 0.5f} + Vec3{0.0f, 1e-3f, 0.0f});
+            }
+            path.half_width = rnd() * 6.0f;
+            path.height = rnd() * 5.0f;
+            path.below = rnd() * 2.0f;
+            path.falloff = rnd() < 0.2f ? 0.0f : rnd() * 4.0f;
+            path.strength = rnd() * 20.0f;
+            field.add_path(path);
+        }
         for (u32 i = 0; i < 500; i++) {
             const Vec3 p{(rnd() - 0.5f) * 90.0f, rnd() * 60.0f - 10.0f, (rnd() - 0.5f) * 90.0f};
             const GravitySample s = field.sample(p);
@@ -624,5 +642,39 @@ TEST(hardening, the_jolt_terrain_matches_the_engine_heightfield)
             }
         }
         CHECK(worst < 0.03f);
+    }
+}
+
+TEST(movement, walking_up_down_and_across_a_slope_keeps_your_heading_and_pace)
+{
+    for (f32 slope : {0.36f, 0.6f}) {
+        const Vec2 moves[4] = {{1.0f, 0.0f}, {-1.0f, 0.0f}, {0.7f, 0.7f}, {0.0f, 1.0f}};
+        for (u32 mode = 0; mode < 5; mode++) {
+            FlatRig rig;
+            rig.hf.init_slope(rig.arena, 96, 1.0f, slope);
+            rig.world.init(rig.arena, &rig.hf);
+            rig.world.set_jolt(&rig.jolt);
+            const f32 yaw = mode == 4 ? -kPi * 0.5f : 0.0f;
+            rig.move.init(&rig.jolt, Vec3{40.0f, slope * 40.0f + 0.3f, 30.0f}, Vec3{0.0f, 1.0f, 0.0f}, yaw);
+            rig.run(MoveCommand{}, 60);
+            const Vec3 start = rig.move.state().pos;
+            MoveCommand cmd;
+            cmd.move = mode == 4 ? Vec2{0.0f, 1.0f} : moves[mode];
+            cmd.sprint = mode == 4;
+            u32 air = 0;
+            for (i32 i = 0; i < 240; i++) {
+                rig.run(cmd, 1);
+                air += rig.move.state().grounded ? 0 : 1;
+            }
+            const Vec3 d = rig.move.state().pos - start;
+            CHECK(air == 0);
+            CHECK(length(d) > (mode == 4 ? 10.0f : 7.2f));
+            if (mode == 2) {
+                CHECK(f_abs(d.x + d.z) < 0.15f);
+            }
+            if (mode == 3) {
+                CHECK(f_abs(d.x) < 0.1f);
+            }
+        }
     }
 }

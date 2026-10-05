@@ -72,6 +72,14 @@ public:
     void set_travel_warp(f32 warp, f32 flash) { warp_ = warp; warp_flash_ = flash; }
     void set_chroma(f32 pixels, f32 seed) { chroma_ = pixels; chroma_seed_ = seed; }
     void set_fall_rotation(Quat rot) { fall_rot_ = rot; }
+    void set_haze(const Vec4* spheres, u32 count, f32 density, f32 chroma, f32 shimmer, Vec3 tint, f32 margin)
+    {
+        for (u32 i = 0; i < 4; i++) {
+            haze_[i] = i < count ? spheres[i] : Vec4{};
+        }
+        haze_params_ = Vec4{static_cast<f32>(count < 4 ? count : 4), density, chroma, shimmer};
+        haze_tint_ = Vec4{tint.x, tint.y, tint.z, margin};
+    }
     void set_screen_fx(const ScreenFx& fx) { screen_fx_ = fx; }
     void set_time(f32 seconds) { time_seconds_ = seconds; }
 
@@ -90,6 +98,7 @@ public:
     void draw_sky(f32 time);
     void draw_mesh(const GpuMesh* mesh, const Mat4& model);
     void flush_meshes();
+    void bind_procedural_ground();
     void draw_glass(const GpuMesh* mesh, const Mat4& model, f32 time);
     void draw_rain(f32 intensity, f32 wind, Vec3 cam_vel, f32 time);
     void draw_snow(f32 intensity, f32 wind, f32 time);
@@ -191,6 +200,10 @@ private:
     f32 chroma_ = 0.0f;
     f32 chroma_seed_ = 0.0f;
     Quat fall_rot_ = quat_identity();
+    Vec4 haze_[4] = {};
+    Vec4 haze_params_{};
+    Vec4 haze_tint_{};
+    u32 procedural_slots_[6] = {kNoTexture, kNoTexture, kNoTexture, kNoTexture, kNoTexture, kNoTexture};
 
     u32 scene_fbo_ = 0;
     u32 scene_color_ = 0;

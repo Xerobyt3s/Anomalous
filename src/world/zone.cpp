@@ -5,6 +5,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "physics/gravity_field.h"
+#include "world/islands/island_field.h"
 #include "physics/heightfield.h"
 #include "physics/world.h"
 #include "platform/filesystem.h"
@@ -254,6 +255,58 @@ void spawn_gravity(World& world, const Terrain& terrain, std::string_view line)
     }
 }
 
+void spawn_island(World& world, std::string_view line)
+{
+    Tokens t(line);
+    const std::string_view name = t.next();
+    const f32 x = t.next_f32();
+    const f32 y = t.next_f32();
+    const f32 z = t.next_f32();
+    const f32 yaw_deg = t.next_f32();
+    const f32 pitch_deg = t.next_f32();
+    const f32 roll_deg = t.next_f32();
+    const f32 radius = t.next_f32();
+    if (t.consumed() < 8 || name.empty()) {
+        log_warn("zone: malformed island line: %.*s", static_cast<int>(line.size()), line.data());
+        return;
+    }
+    const f32 depth = t.next_f32(0.0f);
+    const i32 seed = t.next_i32(1);
+    const i32 style = t.next_i32(0);
+    const i32 crater = t.next_i32(1);
+    const Quat rot = quat_from_euler(yaw_deg * kDegToRad, pitch_deg * kDegToRad, roll_deg * kDegToRad);
+    const EntityHandle handle = world.spawn(EntityKind::Island, Vec3{x, y, z}, rot, 1.0f, name, 0);
+    if (Entity* e = world.entity(handle)) {
+        e->half = Vec3{radius, 0.0f, 0.0f};
+        e->aux_value = depth;
+        e->aux_data = static_cast<u32>(seed);
+        e->aux_kind = (static_cast<u32>(style) & 0xFFu) | ((crater ? 1u : 0u) << 8);
+    }
+}
+
+void spawn_link(World& world, const Terrain& terrain, std::string_view line)
+{
+    Tokens t(line);
+    const std::string_view from = t.next();
+    const std::string_view to = t.next();
+    if (t.consumed() < 2 || from.empty() || to.empty()) {
+        log_warn("zone: malformed link line: %.*s", static_cast<int>(line.size()), line.data());
+        return;
+    }
+    const f32 width = t.next_f32(kLinkDefaultWidth);
+    const f32 gx = t.next_f32(0.0f);
+    const f32 gz = t.next_f32(0.0f);
+    const bool has_ground = t.consumed() >= 5;
+    FixedString<32> spec;
+    spec.format("%.*s>%.*s", static_cast<int>(from.size()), from.data(), static_cast<int>(to.size()), to.data());
+    const Vec3 pos{gx, has_ground ? terrain.heightfield().sample(gx, gz) : 0.0f, gz};
+    const EntityHandle handle = world.spawn(EntityKind::IslandLink, pos, quat_identity(), 1.0f, spec.view(), 0);
+    if (Entity* e = world.entity(handle)) {
+        e->aux_value = width;
+        e->aux_kind = has_ground ? 1u : 0u;
+    }
+}
+
 void spawn_tower(World& world, PhysWorld& phys, Arena& scratch, const Terrain& terrain,
                  std::string_view line, ZoneSpawn* out_spawn)
 {
@@ -319,6 +372,12 @@ u32 spawn_from_config(World& world, PhysWorld& phys, Arena& scratch, const Terra
             count++;
         } else if (entry.key == "entities.trigger") {
             spawn_trigger(world, terrain, entry.value);
+            count++;
+        } else if (entry.key == "entities.island") {
+            spawn_island(world, entry.value);
+            count++;
+        } else if (entry.key == "entities.link") {
+            spawn_link(world, terrain, entry.value);
             count++;
         } else if (entry.key == "entities.gravity") {
             spawn_gravity(world, terrain, entry.value);
@@ -422,6 +481,40 @@ void write_entities(std::FILE* out, const World& world, const PhysWorld& phys,
                          static_cast<f64>(groll * kRadToDeg), static_cast<f64>(e->scale),
                          static_cast<f64>(e->aux_value), static_cast<int>(e->aux_kind & 0xFu),
                          static_cast<int>(e->aux_kind >> 4), e->aux_data ? e->aux_data : 90u);
+            out_written++;
+            continue;
+        }
+
+        if (e->kind == EntityKind::Island) {
+            f32 iyaw = 0.0f;
+            f32 ipitch = 0.0f;
+            f32 iroll = 0.0f;
+            quat_to_euler(e->rot, iyaw, ipitch, iroll);
+            std::fprintf(out, "island = %s %.3f %.3f %.3f %.2f %.2f %.2f %.2f %.2f %u %u %u\n",
+                         e->mesh_name.empty() ? "unnamed" : e->mesh_name.c_str(),
+                         static_cast<f64>(e->pos.x), static_cast<f64>(e->pos.y),
+                         static_cast<f64>(e->pos.z), static_cast<f64>(iyaw * kRadToDeg),
+                         static_cast<f64>(ipitch * kRadToDeg), static_cast<f64>(iroll * kRadToDeg),
+                         static_cast<f64>(e->half.x), static_cast<f64>(e->aux_value), e->aux_data,
+                         e->aux_kind & 0xFFu, (e->aux_kind >> 8) & 1u);
+            out_written++;
+            continue;
+        }
+
+        if (e->kind == EntityKind::IslandLink) {
+            const std::string_view spec = e->mesh_name.view();
+            const size_t split = spec.find('>');
+            if (split == std::string_view::npos) {
+                continue;
+            }
+            const std::string_view from = spec.substr(0, split);
+            const std::string_view to = spec.substr(split + 1);
+            std::fprintf(out, "link = %.*s %.*s %.2f", static_cast<int>(from.size()), from.data(),
+                         static_cast<int>(to.size()), to.data(), static_cast<f64>(e->aux_value));
+            if (e->aux_kind & 1u) {
+                std::fprintf(out, " %.3f %.3f", static_cast<f64>(e->pos.x), static_cast<f64>(e->pos.z));
+            }
+            std::fputc('\n', out);
             out_written++;
             continue;
         }
@@ -559,6 +652,22 @@ bool zone_reload(std::string_view zone_dir, Arena& arena, Arena& scratch, World&
 
     log_info("zone: reloaded %s | %u entities", path.c_str(), count);
     return true;
+}
+
+void zone_add_entity_collision(const World& world, PhysWorld& phys, Arena& scratch)
+{
+    const Pool<Entity>& pool = world.entities();
+    for (u32 idx : pool.live_indices()) {
+        const Entity* e = pool.at(idx);
+        if (!e || !(e->flags & kEntityFlagCollides) || e->mesh_name.empty()) {
+            continue;
+        }
+        if (e->kind == EntityKind::Tree) {
+            add_tree_collision(phys, scratch, e->aux_kind, e->pos, e->rot, e->scale);
+        } else if (e->kind == EntityKind::Building || e->kind == EntityKind::StaticMesh) {
+            add_mesh_collision(phys, scratch, e->mesh_name.view(), e->kind, e->pos, e->rot, e->scale);
+        }
+    }
 }
 
 bool zone_out_of_bounds(const Heightfield& hf, Vec3 p)

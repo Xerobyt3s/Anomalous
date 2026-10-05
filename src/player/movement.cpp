@@ -13,6 +13,7 @@ constexpr f32 kDiveLeanDeg = 6.0f;
 constexpr f32 kLeanRate = 10.0f;
 constexpr f32 kWallNy = 0.3f;
 constexpr f32 kGroundHug = 1.0f;
+constexpr f32 kSlopeFacingMin = 0.35f;
 constexpr f32 kSettleDt = 1.0f / 60.0f;
 
 Vec3 approach(Vec3 current, Vec3 target, f32 max_delta)
@@ -325,7 +326,8 @@ void Movement::tick(const MoveCommand& cmd, const GravityField* field, f32 dt)
     if (s.grounded) {
         const Vec3 n = s.ground_normal;
         const f32 move_speed = length(move_vel);
-        Vec3 along = move_vel - n * dot(move_vel, n);
+        const f32 facing = f_max(dot(u, n), kSlopeFacingMin);
+        Vec3 along = move_vel - u * (dot(move_vel, n) / facing);
         const f32 along_len = length(along);
         if (along_len > 1e-4f) {
             along *= move_speed / along_len;
@@ -345,10 +347,7 @@ void Movement::tick(const MoveCommand& cmd, const GravityField* field, f32 dt)
         }
     }
     if (moved.grounded) {
-        const f32 into = dot(s.vel, moved.ground_normal);
-        if (into < 0.0f) {
-            s.vel -= moved.ground_normal * into;
-        }
+        s.vel -= u * dot(s.vel, u);
     }
     s.grounded = moved.grounded && !jumped;
     s.ground_vel = moved.grounded ? moved.ground_velocity : Vec3{};

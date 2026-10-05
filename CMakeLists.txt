@@ -142,6 +142,10 @@ set(ANOMALOUS_CORE_SOURCES
     src/vehicle/vehicle_config.cpp
     src/world/destination.cpp
     src/world/entity.cpp
+    src/world/islands/island_field.cpp
+    src/world/islands/island_shape.cpp
+    src/world/islands/sdf_noise.cpp
+    src/world/islands/surface_nets.cpp
     src/world/terrain.cpp
     src/world/weather.cpp
     src/world/zone.cpp
@@ -235,6 +239,10 @@ set(ANOMALOUS_CORE_HEADERS
     src/vehicle/vehicle_config.h
     src/world/destination.h
     src/world/entity.h
+    src/world/islands/island_field.h
+    src/world/islands/island_shape.h
+    src/world/islands/sdf_noise.h
+    src/world/islands/surface_nets.h
     src/world/terrain.h
     src/world/weather.h
     src/world/zone.h

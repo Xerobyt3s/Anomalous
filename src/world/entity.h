@@ -26,6 +26,8 @@ enum class EntityKind : u32 {
     PartPickup,
     Trigger,
     Gravity,
+    Island,
+    IslandLink,
 };
 
 struct Entity {

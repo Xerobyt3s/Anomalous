@@ -22,6 +22,15 @@ namespace {
 Aabb entity_world_aabb(const Entity& e)
 {
     const Mat4 model = mat4_trs(e.pos, e.rot, Vec3{e.scale, e.scale, e.scale});
+    if (e.kind == EntityKind::Island && !e.mesh) {
+        const f32 r = e.half.x;
+        const Aabb local{Vec3{-r, -e.aux_value, -r}, Vec3{r, 2.0f, r}};
+        return transform(mat4_trs(e.pos, e.rot, Vec3{1.0f, 1.0f, 1.0f}), local);
+    }
+    if (e.kind == EntityKind::IslandLink) {
+        const Aabb local{Vec3{-1.0f, -1.0f, -1.0f}, Vec3{1.0f, 1.0f, 1.0f}};
+        return transform(mat4_trs(e.pos, quat_identity(), Vec3{1.0f, 1.0f, 1.0f}), local);
+    }
     if (e.mesh) {
         return transform(model, e.mesh->bounds);
     }
@@ -347,7 +356,11 @@ EntityHandle Editor::pick(const Camera& cam, const World& world, Arena& scratch,
     f32 best_t = 1e30f;
     for (u32 idx = 0; idx < pool.capacity(); idx++) {
         const Entity* e = pool.at(idx);
-        if (!e || (!e->mesh && e->kind != EntityKind::Trigger && e->kind != EntityKind::Gravity)) {
+        if (!e || (!e->mesh && e->kind != EntityKind::Trigger && e->kind != EntityKind::Gravity
+                   && e->kind != EntityKind::Island)) {
+            continue;
+        }
+        if (e->kind == EntityKind::IslandLink && (e->aux_kind & 1u) == 0) {
             continue;
         }
         if (e->kind == EntityKind::Gravity && contains(entity_world_aabb(*e), ray.origin)) {
@@ -357,7 +370,7 @@ EntityHandle Editor::pick(const Camera& cam, const World& world, Arena& scratch,
         if (!ray_vs_aabb(ray, entity_world_aabb(*e), best_t, &t)) {
             continue;
         }
-        if (e->mesh && !e->mesh_name.empty()) {
+        if (e->mesh && !e->mesh_name.empty() && e->kind != EntityKind::Island) {
             const f32 exact = pick_mesh_t(*e, scratch, ray, best_t);
             if (exact < 0.0f) {
                 continue;
@@ -415,7 +428,8 @@ void Editor::drive_gizmo(const Input& input, const Camera& cam, World& world, Ph
 
     RigidBody* sel_body = phys.body(sel->body);
     const bool no_scale = sel_body != nullptr || sel->kind == EntityKind::Trigger
-                       || sel->kind == EntityKind::Gravity;
+                       || sel->kind == EntityKind::Gravity || sel->kind == EntityKind::Island
+                       || sel->kind == EntityKind::IslandLink;
 
     Vec3 gizmo_pos = sel_body ? sel_body->pos : sel->pos;
     const Vec3 prev_pos = gizmo_pos;
@@ -598,8 +612,47 @@ void Editor::render(Ui& ui, DebugDraw& debug, TextRenderer& text, const Input& i
     }
 
     const Pool<Entity>& pool = world.entities();
+    const auto island_at = [&pool](std::string_view name) -> const Entity* {
+        for (u32 idx : pool.live_indices()) {
+            const Entity* e = pool.at(idx);
+            if (e && e->kind == EntityKind::Island && e->mesh_name == name) {
+                return e;
+            }
+        }
+        return nullptr;
+    };
     for (u32 idx = 0; idx < pool.capacity(); idx++) {
         const Entity* e = pool.at(idx);
+        if (e && e->kind == EntityKind::Island) {
+            const bool is_sel = pool.handle_at(idx) == selection_;
+            const Vec3 up = rotate(e->rot, Vec3{0.0f, 1.0f, 0.0f});
+            debug.arrow(e->pos, e->pos + up * 4.0f, 0.6f, is_sel ? kDdYellow : kDdGreen);
+            debug.text_3d(e->pos + up * 4.5f, 13.0f, is_sel ? kDdYellow : kDdGreen, "%s", e->mesh_name.c_str());
+            if (is_sel) {
+                debug.obb(e->pos, e->rot, Vec3{e->half.x, 0.2f, e->half.x}, kDdYellow);
+            }
+            continue;
+        }
+        if (e && e->kind == EntityKind::IslandLink) {
+            const std::string_view spec = e->mesh_name.view();
+            const size_t split = spec.find('>');
+            const Entity* from = split == std::string_view::npos ? nullptr : island_at(spec.substr(0, split));
+            if (!from) {
+                continue;
+            }
+            const bool is_sel = pool.handle_at(idx) == selection_;
+            const std::string_view to_name = spec.substr(split + 1);
+            const Entity* to = to_name == "ground" ? nullptr : island_at(to_name);
+            Vec3 end = to ? to->pos : from->pos;
+            if (!to && (e->aux_kind & 1u) != 0) {
+                end = e->pos;
+                debug.cross(end, 1.5f, is_sel ? kDdYellow : kDdOrange);
+            } else if (!to) {
+                end = Vec3{from->pos.x, from->pos.y - 12.0f, from->pos.z};
+            }
+            debug.line(from->pos, end, is_sel ? kDdYellow : kDdOrange);
+            continue;
+        }
         if (e && e->kind == EntityKind::Gravity) {
             const bool is_sel = pool.handle_at(idx) == selection_;
             debug.obb(e->pos, e->rot, e->half, is_sel ? kDdYellow : kDdMagenta);

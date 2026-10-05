@@ -286,6 +286,37 @@ void TerrainRenderer::scrub_rings(u32 program, const Vec3* cam_local)
     }
 }
 
+u32 TerrainRenderer::register_patch_heights(std::string_view name, const f32* heights, u32 width,
+                                            u32 height)
+{
+    PatchTexture* entry = nullptr;
+    for (u32 i = 0; i < patch_texture_count_ && !entry; i++) {
+        if (patch_textures_[i].name == name) {
+            entry = &patch_textures_[i];
+        }
+    }
+    if (!entry) {
+        if (patch_texture_count_ >= kMaxPatchTextures) {
+            return 0;
+        }
+        entry = &patch_textures_[patch_texture_count_++];
+        entry->name.assign(name);
+        entry->texture = 0;
+    }
+    if (entry->texture) {
+        glDeleteTextures(1, &entry->texture);
+    }
+    glCreateTextures(GL_TEXTURE_2D, 1, &entry->texture);
+    glTextureStorage2D(entry->texture, 1, GL_R32F, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+    glTextureParameteri(entry->texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTextureParameteri(entry->texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTextureParameteri(entry->texture, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(entry->texture, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTextureSubImage2D(entry->texture, 0, 0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height),
+                        GL_RED, GL_FLOAT, heights);
+    return entry->texture;
+}
+
 u32 TerrainRenderer::patch_texture(Arena& scratch, std::string_view mesh_name)
 {
     for (u32 i = 0; i < patch_texture_count_; i++) {

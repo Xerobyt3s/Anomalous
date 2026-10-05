@@ -8,6 +8,9 @@ in vec3 v_world;
 in vec3 v_normal;
 in vec2 v_uv;
 in vec3 v_up;
+in vec3 v_obj;
+in vec3 v_obj_normal;
+in mat3 v_basis;
 
 layout(location = 10) uniform int u_maps;
 
@@ -15,6 +18,12 @@ layout(binding = 0) uniform sampler2D u_albedo;
 layout(binding = 4) uniform sampler2D u_normal_map;
 layout(binding = 5) uniform sampler2D u_surface_map;
 layout(binding = 6) uniform sampler2D u_blend_map;
+layout(binding = 8) uniform sampler2D u_tri_grass;
+layout(binding = 9) uniform sampler2D u_tri_soil;
+layout(binding = 10) uniform sampler2D u_tri_soil_n;
+layout(binding = 11) uniform sampler2D u_tri_rock;
+layout(binding = 12) uniform sampler2D u_tri_rock_n;
+layout(binding = 13) uniform sampler2D u_tri_rock_s;
 
 const float GROUND_FAR_START = 18.0;
 const float GROUND_FAR_END = 45.0;
@@ -23,6 +32,34 @@ const float GROUND_ROUGHNESS = 0.88;
 const float WET_DARKEN = 0.28;
 const float WET_ROUGHNESS = 0.22;
 const float SNOW_ROUGHNESS = 0.7;
+const float TRI_GRASS_SCALE = 0.25;
+const float TRI_SOIL_SCALE = 0.45;
+const float TRI_ROCK_SCALE = 0.3;
+const float TRI_ROCK_SCALE_FAR = 0.07;
+const float TRI_SHARPNESS = 4.0;
+
+vec3 tri_weights(vec3 n)
+{
+    vec3 w = pow(abs(n), vec3(TRI_SHARPNESS));
+    return w / max(w.x + w.y + w.z, 1e-5);
+}
+
+vec3 tri_sample(sampler2D t, vec3 p, vec3 w, float scale)
+{
+    return texture(t, p.zy * scale).rgb * w.x + texture(t, p.xz * scale).rgb * w.y
+         + texture(t, p.xy * scale).rgb * w.z;
+}
+
+vec3 tri_normal(sampler2D t, vec3 p, vec3 n, vec3 w, float scale)
+{
+    vec3 tx = texture(t, p.zy * scale).xyz * 2.0 - 1.0;
+    vec3 ty = texture(t, p.xz * scale).xyz * 2.0 - 1.0;
+    vec3 tz = texture(t, p.xy * scale).xyz * 2.0 - 1.0;
+    tx = vec3(tx.xy + n.zy, abs(tx.z) * n.x);
+    ty = vec3(ty.xy + n.xz, abs(ty.z) * n.y);
+    tz = vec3(tz.xy + n.xy, abs(tz.z) * n.z);
+    return normalize(tx.zyx * w.x + ty.xzy * w.y + tz.xyz * w.z);
+}
 
 out vec4 o_color;
 
@@ -92,6 +129,35 @@ void main()
         float roughness = 0.6;
         float metal = 0.0;
         float cavity = 1.0;
+        if ((u_maps & 16) != 0) {
+            vec3 on = normalize(v_obj_normal);
+            vec3 w = tri_weights(on);
+            float dist = length(u_cam_pos.xyz - v_world);
+            float breakup = fbm2(v_obj.xz * 0.35 + v_obj.y * 0.27, 3) - 0.5;
+            float c = clamp(v_uv.x + breakup * 0.3, 0.0, 1.0);
+            float w_grass = 1.0 - smoothstep(0.15, 0.35, c);
+            float w_rock = smoothstep(0.62, 0.85, c);
+            float w_soil = max(1.0 - w_grass - w_rock, 0.0);
+            vec3 grass = texture(u_tri_grass, v_obj.xz * TRI_GRASS_SCALE).rgb;
+            grass = mix(grass, textureLod(u_tri_grass, v_obj.xz * TRI_GRASS_SCALE, GROUND_FAR_LOD).rgb,
+                        smoothstep(GROUND_FAR_START, GROUND_FAR_END, dist) * 0.8);
+            vec3 soil = tri_sample(u_tri_soil, v_obj, w, TRI_SOIL_SCALE);
+            vec3 rock = tri_sample(u_tri_rock, v_obj, w, TRI_ROCK_SCALE);
+            vec3 rock_far = tri_sample(u_tri_rock, v_obj, w, TRI_ROCK_SCALE_FAR);
+            rock *= mix(vec3(1.0), rock_far / max(luminance(rock_far), 1e-3) * 0.5 + 0.5, 0.6);
+            vec3 rock_s = tri_sample(u_tri_rock_s, v_obj, w, TRI_ROCK_SCALE);
+            albedo = grass * w_grass + soil * w_soil + rock * w_rock;
+            vec3 n_obj = on;
+            if (w_rock > 0.0) {
+                n_obj = normalize(mix(n_obj, tri_normal(u_tri_rock_n, v_obj, on, w, TRI_ROCK_SCALE), w_rock));
+            }
+            if (w_soil > 0.0) {
+                n_obj = normalize(mix(n_obj, tri_normal(u_tri_soil_n, v_obj, on, w, TRI_SOIL_SCALE), w_soil));
+            }
+            n = normalize(v_basis * n_obj);
+            roughness = GROUND_ROUGHNESS * (w_grass + w_soil) + rock_s.r * w_rock;
+            cavity = v_uv.y * mix(1.0, rock_s.b, w_rock);
+        }
         if ((u_maps & 1) != 0) {
             vec3 tangent_normal = texture(u_normal_map, v_uv).xyz * 2.0 - 1.0;
             n = normalize(cotangent_frame(geometric, v_world, v_uv) * tangent_normal);

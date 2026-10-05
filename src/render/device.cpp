@@ -38,6 +38,9 @@ struct CameraUbo {
     Vec4 retro_params;
     Vec4 cloud_sun_color;
     Vec4 weather;
+    Vec4 haze[4];
+    Vec4 haze_params;
+    Vec4 haze_tint;
 };
 
 } // namespace
@@ -256,6 +259,11 @@ void RenderDevice::view_setup(const Camera& cam, f32 width, f32 height)
     ubo.retro_params = Vec4{retro_.near_distance, retro_.far_distance, 1.0f, time_seconds_};
     ubo.cloud_sun_color = vec4_from_vec3(lighting_.cloud_sun_color, 0.0f);
     ubo.weather = Vec4{snow_cover_, snow_fall_, wind_, 0.0f};
+    for (u32 i = 0; i < 4; i++) {
+        ubo.haze[i] = haze_[i];
+    }
+    ubo.haze_params = haze_params_;
+    ubo.haze_tint = haze_tint_;
 
     const f32 cone = std::cos(24.0f * kDegToRad);
     for (u32 i = 0; i < 2; i++) {
@@ -584,6 +592,19 @@ void RenderDevice::draw_mesh(const GpuMesh* mesh, const Mat4& model)
     mesh_queue_[mesh_queue_count_++] = MeshDraw{mesh, model};
 }
 
+void RenderDevice::bind_procedural_ground()
+{
+    constexpr u32 kProceduralFirstUnit = 8;
+    static constexpr const char* kNames[6] = {"island_grass", "island_soil", "island_soil_n",
+                                              "island_rock", "island_rock_n", "island_rock_s"};
+    for (u32 i = 0; i < 6; i++) {
+        if (procedural_slots_[i] == kNoTexture) {
+            procedural_slots_[i] = assets_.texture_slot(kNames[i]);
+        }
+        bind_texture(kProceduralFirstUnit + i, assets_.texture_gl(procedural_slots_[i]));
+    }
+}
+
 void RenderDevice::flush_meshes()
 {
     if (mesh_queue_count_ == 0) {
@@ -637,7 +658,8 @@ void RenderDevice::flush_meshes()
                 const i32 maps = (sub.normal_slot != kNoTexture ? 1 : 0)
                                | (sub.surface_slot != kNoTexture ? 2 : 0)
                                | (sub.blend_slot != kNoTexture ? 4 : 0)
-                               | (sub.ground ? 8 : 0);
+                               | (sub.ground ? 8 : 0)
+                               | (sub.procedural ? 16 : 0);
                 glProgramUniform1i(program, kMeshMapsLocation, maps);
                 if (maps & 1) {
                     bind_texture(4, assets_.texture_gl(sub.normal_slot));
@@ -647,6 +669,9 @@ void RenderDevice::flush_meshes()
                 }
                 if (maps & 4) {
                     bind_texture(6, assets_.texture_gl(sub.blend_slot));
+                }
+                if (maps & 16) {
+                    bind_procedural_ground();
                 }
             }
             stats_.draw_calls++;

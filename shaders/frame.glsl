@@ -24,6 +24,9 @@ layout(std140, binding = 0) uniform CameraBlock {
     vec4 u_retro_params;
     vec4 u_cloud_sun_color;
     vec4 u_weather;
+    vec4 u_haze[4];
+    vec4 u_haze_params;
+    vec4 u_haze_tint;
 };
 
 #define u_retro_near (u_retro_params.x)
@@ -39,6 +42,11 @@ layout(std140, binding = 0) uniform CameraBlock {
 #define u_snow_cover (u_weather.x)
 #define u_snow_fall (u_weather.y)
 #define u_wind (u_weather.z)
+
+#define u_haze_count (int(u_haze_params.x))
+#define u_haze_density (u_haze_params.y)
+#define u_haze_chroma (u_haze_params.z)
+#define u_haze_shimmer (u_haze_params.w)
 
 vec3 sun_toward() { return -u_sun_dir.xyz; }
 

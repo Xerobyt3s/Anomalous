@@ -16,6 +16,7 @@ struct GpuSubmesh {
     u32 surface_slot = kNoTexture;
     u32 blend_slot = kNoTexture;
     bool ground = false;
+    bool procedural = false;
 };
 
 struct GpuMesh {

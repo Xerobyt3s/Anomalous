@@ -350,3 +350,72 @@ TEST(zone_bounds, far_outside_the_map_or_not_a_number_is_out_of_bounds)
     const f32 nan = std::sqrt(-1.0f);
     CHECK(zone_out_of_bounds(hf, Vec3{nan, 0.0f, 0.0f}));
 }
+
+TEST(zone_save, islands_and_links_round_trip_with_their_graph)
+{
+    const FixedString<256> dir = temp_zone("save_islands");
+    CHECK(write_text(cfg_path(dir).view(), "[entities]\n"));
+
+    Bench bench;
+    const Quat tilt = quat_from_euler(0.6f, 0.2f, 1.4f);
+    const EntityHandle a = bench.world.spawn(EntityKind::Island, Vec3{10.0f, 14.5f, -6.0f}, tilt, 1.0f, "north", 0);
+    Entity* ea = bench.world.entity(a);
+    CHECK(ea != nullptr);
+    ea->half = Vec3{11.5f, 0.0f, 0.0f};
+    ea->aux_value = 8.25f;
+    ea->aux_data = 77u;
+    ea->aux_kind = 1u | (1u << 8);
+    const EntityHandle b = bench.world.spawn(EntityKind::Island, Vec3{-20.0f, 30.0f, 4.0f}, quat_identity(), 1.0f, "south", 0);
+    Entity* eb = bench.world.entity(b);
+    CHECK(eb != nullptr);
+    eb->half = Vec3{7.0f, 0.0f, 0.0f};
+    eb->aux_value = 5.0f;
+    eb->aux_data = 5u;
+    const EntityHandle l0 = bench.world.spawn(EntityKind::IslandLink, Vec3{}, quat_identity(), 1.0f, "north>south", 0);
+    bench.world.entity(l0)->aux_value = 6.5f;
+    const EntityHandle l1 = bench.world.spawn(EntityKind::IslandLink, Vec3{3.0f, 0.0f, 40.0f}, quat_identity(), 1.0f, "north>ground", 0);
+    bench.world.entity(l1)->aux_value = 9.0f;
+    bench.world.entity(l1)->aux_kind = 1u;
+
+    const std::string_view text = bench.save_and_read(dir);
+    CHECK(text.find("island = north") != std::string_view::npos);
+    CHECK(text.find("link = north south") != std::string_view::npos);
+    CHECK(text.find("link = north ground") != std::string_view::npos);
+
+    World reloaded;
+    reloaded.init(bench.arena);
+    CHECK(zone_reload(dir.view(), bench.arena, bench.arena, reloaded, bench.phys, bench.terrain, nullptr));
+    u32 islands = 0;
+    u32 links = 0;
+    for (u32 idx : reloaded.entities().live_indices()) {
+        const Entity* e = reloaded.entities().at(idx);
+        if (!e) {
+            continue;
+        }
+        if (e->kind == EntityKind::Island && e->mesh_name == "north") {
+            islands++;
+            CHECK(distance(e->pos, Vec3{10.0f, 14.5f, -6.0f}) < 0.01f);
+            CHECK(f_abs(e->rot.x * tilt.x + e->rot.y * tilt.y + e->rot.z * tilt.z + e->rot.w * tilt.w) > 0.9999f);
+            CHECK_NEAR(e->half.x, 11.5f, 0.01);
+            CHECK_NEAR(e->aux_value, 8.25f, 0.01);
+            CHECK(e->aux_data == 77u);
+            CHECK(e->aux_kind == (1u | (1u << 8)));
+        } else if (e->kind == EntityKind::Island && e->mesh_name == "south") {
+            islands++;
+            CHECK(e->aux_data == 5u);
+            CHECK(e->aux_kind == 0u);
+        } else if (e->kind == EntityKind::IslandLink && e->mesh_name == "north>south") {
+            links++;
+            CHECK_NEAR(e->aux_value, 6.5f, 0.01);
+            CHECK(e->aux_kind == 0u);
+        } else if (e->kind == EntityKind::IslandLink && e->mesh_name == "north>ground") {
+            links++;
+            CHECK_NEAR(e->aux_value, 9.0f, 0.01);
+            CHECK(e->aux_kind == 1u);
+            CHECK_NEAR(e->pos.x, 3.0f, 0.01);
+            CHECK_NEAR(e->pos.z, 40.0f, 0.01);
+        }
+    }
+    CHECK(islands == 2);
+    CHECK(links == 2);
+}
