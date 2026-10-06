@@ -101,6 +101,7 @@ struct PhysScene {
     Arena arena{megabytes(64)};
     Heightfield hf;
     PhysWorld world;
+    ghost::engine::PhysicsWorld jolt;
 
     u64 checksum = 0;
     f32 min_y = 1e30f;
@@ -113,6 +114,7 @@ struct PhysScene {
     {
         hf.init_procedural(arena, 96, 1.0f, 1234u, 1.0f);
         world.init(arena, &hf);
+        world.set_jolt(&jolt);
 
         Rng rng(1234u);
         for (i32 i = 0; i < 24; i++) {
@@ -152,12 +154,14 @@ struct CarRig {
     Arena arena{megabytes(64)};
     Heightfield hf;
     PhysWorld world;
+    ghost::engine::PhysicsWorld jolt;
     Vehicle veh;
 
     bool flat(f32 size, f32 cell)
     {
         hf.init_procedural(arena, static_cast<u32>(size), cell, 1u, 0.0f);
         world.init(arena, &hf);
+        world.set_jolt(&jolt);
         return veh.init(world, arena, kCarCfg, Vec3{-150.0f, 0.9f, 0.0f}, -kPi * 0.5f);
     }
 
@@ -165,6 +169,7 @@ struct CarRig {
     {
         hf.init_slope(arena, 120, 1.0f, grade);
         world.init(arena, &hf);
+        world.set_jolt(&jolt);
         return veh.init(world, arena, kCarCfg,
                         Vec3{spawn_x, spawn_x * grade + 0.9f, 0.0f}, -kPi * 0.5f);
     }
@@ -343,10 +348,12 @@ TEST(scene_zone, the_testzone_loads_and_answers_raycasts_the_same_way_twice)
         World world;
         Terrain terrain;
         PhysWorld phys;
+        ghost::engine::PhysicsWorld jolt;
         ZoneSpawn spawn;
 
         world.init(perm);
         phys.init(perm, &terrain.heightfield());
+        phys.set_jolt(&jolt);
         CHECK(zone_load(kZoneDir, perm, scratch, world, phys, terrain, spawn, nullptr));
         tris[pass] = phys.statics().tri_count();
 
@@ -378,10 +385,12 @@ TEST(scene_zone, the_car_spawns_in_the_zone_and_drives_away_from_its_spawn)
     World world;
     Terrain terrain;
     PhysWorld phys;
+    ghost::engine::PhysicsWorld jolt;
     ZoneSpawn spawn;
 
     world.init(perm);
     phys.init(perm, &terrain.heightfield());
+    phys.set_jolt(&jolt);
     CHECK(zone_load(kZoneDir, perm, scratch, world, phys, terrain, spawn, nullptr));
 
     Vehicle veh;
@@ -630,6 +639,7 @@ struct GravityZoneRig {
     World world;
     Terrain terrain;
     PhysWorld phys;
+    ghost::engine::PhysicsWorld jolt;
     ZoneSpawn spawn;
     GravityField field;
     IslandField islands;
@@ -638,6 +648,7 @@ struct GravityZoneRig {
     {
         world.init(perm);
         phys.init(perm, &terrain.heightfield());
+        phys.set_jolt(&jolt);
         if (!zone_load(kZoneDir, perm, scratch, world, phys, terrain, spawn, nullptr)) {
             return false;
         }
@@ -814,7 +825,9 @@ TEST(scene_gravity, recovering_rights_the_car_to_the_local_gravity)
     Heightfield hf;
     hf.init_procedural(arena, 64, 1.0f, 3u, 0.0f);
     PhysWorld phys;
+    ghost::engine::PhysicsWorld jolt;
     phys.init(arena, &hf);
+    phys.set_jolt(&jolt);
     GravityField field;
     GravityVolume wall;
     wall.pos = Vec3{0.0f, 20.0f, 0.0f};
@@ -922,8 +935,6 @@ TEST(scene_walk, walking_and_running_over_the_zone_stay_grounded_and_stop_cleanl
 {
     GravityZoneRig rig;
     CHECK(rig.load());
-    ghost::engine::PhysicsWorld jolt;
-    rig.phys.set_jolt(&jolt);
     const f32 headings[6] = {0.0f, 1.0f, 2.1f, 3.14f, 4.2f, 5.3f};
     for (u32 h = 0; h < 6; h++) {
         Player p;
@@ -957,8 +968,6 @@ TEST(scene_walk, walking_the_links_reaches_a_sideways_island_and_an_upside_down_
 {
     GravityZoneRig rig;
     CHECK(rig.load());
-    ghost::engine::PhysicsWorld jolt;
-    rig.phys.set_jolt(&jolt);
     const char* routes[2][2] = {{"isle_a", "isle_b"}, {"isle_g", "isle_c"}};
     for (u32 r = 0; r < 2; r++) {
         const BuiltLink* start = rig.link(routes[r][0], "ground");

@@ -82,6 +82,7 @@ public:
 
     void setChamber(int index, const Chamber& chamber);
     void loadAll(const Round& round);
+    void snapClosed();
 
     int loadTarget() const { return firstEmptyInFiringOrder(); }
 

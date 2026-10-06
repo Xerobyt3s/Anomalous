@@ -52,9 +52,23 @@ struct RayFilter {
     std::uint32_t ignore = 0xFFFFFFFFu;
 };
 
-struct VehiclePush {
-    glm::vec3 impulse{0.0f};
-    glm::vec3 point{0.0f};
+struct DynamicBodyDesc {
+    glm::vec3 center{0.0f};
+    glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3 halfExtents{0.5f};
+    glm::vec3 shapeOffset{0.0f};
+    float mass = 1.0f;
+    std::optional<glm::vec3> inertiaDiagonal;
+    float linearDamping = 0.05f;
+    float angularDamping = 0.05f;
+    float friction = 0.6f;
+    float restitution = 0.15f;
+    bool linearCast = false;
+    bool allowSleeping = true;
+    glm::vec3 velocity{0.0f};
+    glm::vec3 angularVelocity{0.0f};
+    std::uint64_t userData = 0;
+    std::vector<glm::vec3> hull;
 };
 
 inline constexpr std::uint32_t kNoBody = 0xFFFFFFFFu;
@@ -84,7 +98,14 @@ public:
                              std::uint64_t userData);
     BodyHandle addDynamicBox(const glm::vec3& center, const glm::quat& rotation, const glm::vec3& halfExtents, float mass,
                              std::uint64_t userData, const glm::vec3& velocity);
+    BodyHandle addDynamicBody(const DynamicBodyDesc& desc);
     void removeBody(BodyHandle body);
+    void addForce(BodyHandle body, const glm::vec3& force);
+    void addForceAtPoint(BodyHandle body, const glm::vec3& force, const glm::vec3& worldPoint);
+    void addTorque(BodyHandle body, const glm::vec3& torque);
+    void setVelocities(BodyHandle body, const glm::vec3& velocity, const glm::vec3& angularVelocity);
+    void activate(BodyHandle body);
+    bool isActive(BodyHandle body) const;
     bool valid(BodyHandle body) const;
     std::uint32_t dynamicCount() const;
     BodyState state(BodyHandle body) const;
@@ -95,14 +116,6 @@ public:
     void setLinearVelocity(BodyHandle body, const glm::vec3& velocity);
 
     void setPose(BodyHandle body, const glm::vec3& position, const glm::quat& rotation);
-
-    void setVehicle(const glm::vec3& position, const glm::quat& rotation, const glm::vec3& halfExtents,
-                    const glm::vec3& offset, const glm::vec3& velocity, const glm::vec3& angularVelocity,
-                    std::uint64_t userData);
-    void moveVehicle(const glm::vec3& position, const glm::quat& rotation, float dt);
-    void clearVehicle();
-    BodyHandle vehicle() const;
-    std::vector<VehiclePush> takeVehiclePushes();
 
     void setGravityField(GravityField field);
     void wakeAll();

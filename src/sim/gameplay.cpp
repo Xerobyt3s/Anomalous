@@ -9,6 +9,14 @@
 #include <variant>
 
 namespace ghost::game {
+
+std::vector<float> ricochetScales(const AmmoData& ammo) {
+    std::vector<float> scales;
+    for (std::size_t i = 0; i < ammo.elements.size(); ++i) {
+        scales.push_back(ammo.elements[static_cast<ElementId>(i)].ricochet);
+    }
+    return scales;
+}
 namespace {
 
 constexpr int kStartingPouch = 12;
@@ -93,6 +101,9 @@ void Gameplay::tickGun(PlayerId owner, PlayerGun& gun, const GunCommand& command
     if (c.quickFill) {
         gun.quickFill = true;
         gun.quickFillElement = c.quickFillElement;
+    }
+    if (holstered) {
+        gun.mechanism.snapClosed();
     }
     if (downed || holstered) {
         c.trigger = c.cock = false;
@@ -1354,6 +1365,7 @@ void Gameplay::clearWorld() {
     m_volumes.replace({});
     m_ballistics = Ballistics{};
     m_ballistics.setFields(m_hooks.gravity, m_hooks.wind);
+    m_ballistics.setRicochet(ricochetScales(m_ammo));
     m_pendingStrikes.clear();
     m_breaths.clear();
     m_reveals.clear();

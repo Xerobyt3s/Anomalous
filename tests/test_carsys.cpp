@@ -1,5 +1,9 @@
 #include "test.h"
 
+#include "engine/physics/physics_world.h"
+
+#include "carsys/car_lights.h"
+
 #include "carsys/carsys.h"
 #include "core/arena.h"
 #include "physics/heightfield.h"
@@ -17,6 +21,7 @@ struct CarRig {
     Arena arena{megabytes(64)};
     Heightfield hf;
     PhysWorld world;
+    ghost::engine::PhysicsWorld jolt;
     Vehicle car;
     CarSys sys;
 
@@ -30,6 +35,7 @@ struct CarRig {
         }
         hf.recompute_extents();
         world.init(arena, &hf);
+        world.set_jolt(&jolt);
         sys.init();
         return car.init(world, arena, "assets/cars/excel.cfg", Vec3{0.0f, 1.0f, 0.0f}, 0.0f);
     }
@@ -219,6 +225,99 @@ TEST(carsys, impact_damages_nearby_parts)
     parts_apply_impact(parts, part_def(PART_RADIATOR).socket_pos, 0.5f);
     CHECK(parts[PART_RADIATOR].condition < 0.6f);
     CHECK(parts[PART_FUEL_TANK].condition > 0.95f);
+}
+
+TEST(carsys, an_impact_bumps_the_serial_and_records_severity)
+{
+    CarRig rig;
+    CHECK(rig.setup());
+    rig.run(120);
+
+    const u32 before = rig.sys.impact_serial;
+    RigidBody* body = rig.world.body(rig.car.body());
+    CHECK(body != nullptr);
+    rig.sys.prev_vel = Vec3{0.0f, 0.0f, -20.0f};
+    body->vel = Vec3{};
+    rig.sys.tick(rig.car, rig.world, kDt);
+
+    CHECK(rig.sys.impact_serial == before + 1);
+    CHECK(rig.sys.last_impact_severity > 0.5f);
+
+    rig.sys.prev_vel = body->vel;
+    rig.sys.tick(rig.car, rig.world, kDt);
+    CHECK(rig.sys.impact_serial == before + 1);
+}
+
+TEST(carsys, headlights_place_two_beams_ahead_and_nothing_when_off)
+{
+    CarRig rig;
+    CHECK(rig.setup());
+    rig.run(60);
+    const RigidBody* body = rig.world.body(rig.car.body());
+    PointLight lights[kCarLightMax];
+    CHECK(car_lights(body->pos, body->rot, rig.car, rig.sys, lights) == 0u);
+
+    rig.car.effects().headlights_on = true;
+    const u32 on = car_lights(body->pos, body->rot, rig.car, rig.sys, lights);
+    CHECK(on == 3u);
+    CHECK(lights[0].pos.z < body->pos.z - 3.0f);
+    CHECK(lights[1].pos.z < body->pos.z - 3.0f);
+    CHECK(lights[0].pos.x < lights[1].pos.x);
+    CHECK(lights[0].color.x > 5.0f);
+
+    rig.sys.parts[PART_HEADLIGHTS].condition = 0.5f;
+    car_lights(body->pos, body->rot, rig.car, rig.sys, lights);
+    CHECK(lights[0].color.x < 5.0f);
+}
+
+TEST(carsys, a_braking_car_lights_its_tail)
+{
+    CarRig rig;
+    CHECK(rig.setup());
+    rig.run(60);
+    const RigidBody* body = rig.world.body(rig.car.body());
+    PointLight lights[kCarLightMax];
+    VehicleInput in;
+    in.brake = 1.0f;
+    rig.car.set_input(in);
+    CHECK(car_lights(body->pos, body->rot, rig.car, rig.sys, lights) == 1u);
+    CHECK(lights[0].pos.z > body->pos.z + 1.0f);
+    CHECK(lights[0].color.x > lights[0].color.y);
+
+    in.brake = 0.0f;
+    in.handbrake = true;
+    rig.car.set_input(in);
+    CHECK(car_lights(body->pos, body->rot, rig.car, rig.sys, lights) == 1u);
+}
+
+TEST(carsys, puff_rate_grows_with_slide_and_is_zero_when_gripping)
+{
+    CHECK(puff_rate(0.0f) == 0.0f);
+    CHECK(puff_rate(2.5f) == 0.0f);
+    CHECK(puff_rate(4.0f) > 0.0f);
+    CHECK(puff_rate(8.0f) > puff_rate(4.0f));
+}
+
+TEST(carsys, start_blocker_names_the_missing_thing)
+{
+    CarRig rig;
+    CHECK(rig.setup());
+    rig.run(60);
+    CHECK(rig.sys.start_blocker() == StartBlocker::NoKey);
+    rig.sys.key_inserted = true;
+    CHECK(rig.sys.start_blocker() == StartBlocker::None);
+    rig.sys.fluids.fuel = 0.0f;
+    CHECK(rig.sys.start_blocker() == StartBlocker::NoFuel);
+    rig.sys.fluids.fuel = 0.5f;
+    rig.sys.parts[PART_ENGINE].condition = 0.0f;
+    CHECK(rig.sys.start_blocker() == StartBlocker::EngineDead);
+    rig.sys.parts[PART_ENGINE].condition = 1.0f;
+    rig.sys.elec.battery_charge = 0.05f;
+    CHECK(rig.sys.start_blocker() == StartBlocker::BatteryFlat);
+    rig.sys.elec.battery_charge = 0.9f;
+    rig.sys.engine_on = true;
+    CHECK(rig.sys.start_blocker() == StartBlocker::Running);
+    CHECK(start_blocker_text(StartBlocker::NoFuel) == "no fuel");
 }
 
 TEST(fluids, overheating_damages_the_engine)

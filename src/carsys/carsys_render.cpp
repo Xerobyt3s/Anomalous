@@ -1,4 +1,5 @@
 #include "carsys/carsys_render.h"
+#include "carsys/car_lights.h"
 #include "carsys/carsys.h"
 #include "physics/world.h"
 #include "render/device.h"
@@ -63,8 +64,26 @@ void CarSysRenderer::spawn_sparks(Vec3 pos, u32 count)
 }
 
 void CarSysRenderer::draw_effects(RenderDevice& device, const CarSys& sys, const Vehicle& veh,
-                                  const Mat4& base, Vec3 gravity, f32 dt)
+                                  const Mat4& base, Vec3 gravity, Vec3 car_vel, f32 dt)
 {
+    const Vec3 up = length_sq(gravity) > 1e-6f ? normalize(gravity) * -1.0f : Vec3{0.0f, 1.0f, 0.0f};
+    for (u32 i = 0; i < kWheelCount; i++) {
+        const Wheel& w = veh.wheel(i);
+        if (!w.grounded) {
+            puff_accum_[i] = 0.0f;
+            continue;
+        }
+        const f32 slide = f_max(f_abs(w.slide_lat), f_abs(w.slide_long));
+        puff_accum_[i] += puff_rate(slide) * dt;
+        const bool road = veh.effects().surface_road[i] > 0.5f;
+        while (puff_accum_[i] >= 1.0f) {
+            puff_accum_[i] -= 1.0f;
+            const Vec3 jitter{(rand01() - 0.5f) * 0.4f, (rand01() - 0.5f) * 0.4f, (rand01() - 0.5f) * 0.4f};
+            spawn_puff(w.contact_point + up * 0.08f, car_vel * -0.15f + up * 0.8f + jitter,
+                       0.8f + rand01() * 0.6f, road ? 0.07f : 0.12f, false);
+        }
+    }
+
     if (sys.fluids.coolant_temp > 105.0f && sys.engine_on) {
         smoke_accum_ += (sys.fluids.coolant_temp - 105.0f) * 0.6f * dt;
         while (smoke_accum_ >= 1.0f) {
@@ -273,13 +292,16 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
     static const f32 kDialX[4] = {-0.44f, -0.30f, -0.405f, -0.335f};
     static const f32 kDialY[4] = {0.064f, 0.064f, 0.006f, 0.006f};
     static const f32 kDialScale[4] = {1.0f, 1.0f, 0.5f, 0.5f};
+    static const f32 kDialRate[4] = {8.0f, 14.0f, 1.0f, 1.0f};
     for (u32 d = 0; d < 4; d++) {
-        const f32 needle = 2.27f - dial_val[d] * 4.54f;
+        dial_sm_[d] = dial_valid_ ? f_approach_exp(dial_sm_[d], dial_val[d], kDialRate[d], dt) : dial_val[d];
+        const f32 needle = 2.27f - dial_sm_[d] * 4.54f;
         device.draw_mesh(assets.mesh("excel_needle"),
                          base * mat4_trs(Vec3{kDialX[d], kDialY[d], -0.305f} - com,
                                          quat_from_axis_angle(Vec3{0.0f, 0.0f, 1.0f}, needle),
                                          Vec3{kDialScale[d], kDialScale[d], kDialScale[d]}));
     }
+    dial_valid_ = true;
 
     const bool warn_on[4] = {
         sys.fluids.coolant_temp > kCoolantOverheatC,
@@ -298,7 +320,7 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
                                          quat_identity(), Vec3{0.014f, 0.014f, 0.008f}));
     }
 
-    if (veh.input().brake > 0.05f) {
+    if (veh.input().brake > 0.05f || veh.input().handbrake) {
         device.draw_mesh(assets.mesh("excel_brakelight"), offset_from(base, -com));
     }
     if (veh.train().gear == -1) {
@@ -306,7 +328,8 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
     }
 
     const RigidBody* car = phys.body(veh.body());
-    draw_effects(device, sys, veh, base, car ? phys.gravity_at(car->pos) : phys.gravity(), dt);
+    draw_effects(device, sys, veh, base, car ? phys.gravity_at(car->pos) : phys.gravity(), car ? car->vel : Vec3{},
+                 dt);
 }
 
 } // namespace anom

@@ -347,7 +347,9 @@ using GameEvent = std::variant<ShotFired, DryFired, HammerCocked, ProjectileImpa
                                TravelArmed, TravelStarted, TravelArrived, TowerBreached, TapeWritten, PortLinked,
                                CableDropped, TerminalClicked, TerminalPowered, PhotoTaken, DoorMoved, HoodMoved,
                                TrunkMoved, EngineStarted, CarImpact, PartInstalled, PartRemoved, ZoneLoaded,
-                               PlayerPlaced, SeatRefused>;
+                               PlayerPlaced, SeatRefused, HandbrakeMoved, HeadlightsSwitched, WipersSwitched,
+                               FuelCapMoved, Refuelled, OilFilled, KeyMoved, CargoMoved, DiskMoved, TapeMoved,
+                               DeckPlay, GearShifted, EngineStopped, TankFilled>;
 using EventList = std::vector<GameEvent>;
 
 }

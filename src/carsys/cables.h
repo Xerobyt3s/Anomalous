@@ -17,6 +17,7 @@ inline constexpr Vec3 kConnectorCoaxLocal{0.07f, -0.02f, -0.21f};
 inline constexpr Vec3 kConnectorBusLocal{-0.07f, -0.02f, -0.21f};
 inline constexpr Vec3 kAntennaJackLocal{0.35f, 0.54f, 0.36f};
 inline constexpr Vec3 kBayJackLocal{0.32f, 0.02f, -0.75f};
+inline constexpr Vec3 kLoosePrinterJackLocal{0.09f, 0.05f, -0.185f};
 inline constexpr Vec3 kPrinterJackLocal{0.42f, -0.17f, 0.695f};
 inline constexpr Vec3 kPrinterJackHalf{0.05f, 0.05f, 0.05f};
 

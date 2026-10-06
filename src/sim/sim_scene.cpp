@@ -138,6 +138,14 @@ bool Sim::switch_scene(i32 index)
     return true;
 }
 
+void Sim::kit_gun(ghost::game::PlayerGun& gun) const
+{
+    gameplay_.stockGun(gun);
+    if (rules_.arena) {
+        gameplay_.arenaKit(gun);
+    }
+}
+
 void Sim::respawn_owned(PlayerId id)
 {
     PlayerSlot* s = slot(id);

@@ -1,4 +1,9 @@
 #version 460 core
+#include "common.glsl"
+#include "frame.glsl"
+#include "shadow.glsl"
+#include "lighting.glsl"
+#include "clouds.glsl"
 
 in vec3 vWorldPos;
 in vec3 vNormal;
@@ -9,8 +14,6 @@ in vec3 vObjNormal;
 out vec4 fragColor;
 
 uniform vec3 uCameraPos;
-uniform vec3 uLightDir;
-uniform vec3 uSunColor;
 const int kMaxLights = 8;
 uniform int uPointCount;
 uniform vec3 uPointPos[kMaxLights];
@@ -41,35 +44,6 @@ uniform vec3 uSootFrom;
 uniform vec3 uSootTo;
 uniform float uSoot;
 
-vec3 gBase;
-float gRough;
-float gGrazing;
-
-const float PI = 3.14159265;
-
-vec3 environment(vec3 dir) {
-    return mix(vec3(0.05, 0.045, 0.04), vec3(0.35, 0.40, 0.50), clamp(dir.y * 0.5 + 0.5, 0.0, 1.0));
-}
-
-vec3 shade(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 F0) {
-    vec3 H = normalize(V + L);
-    float NdotL = max(dot(N, L), 0.0);
-    float NdotV = max(dot(N, V), 1e-4);
-    float NdotH = max(dot(N, H), 0.0);
-    float VdotH = max(dot(V, H), 0.0);
-
-    float alpha = gRough * gRough;
-    float alpha2 = alpha * alpha;
-    float denom = NdotH * NdotH * (alpha2 - 1.0) + 1.0;
-    float D = alpha2 / (PI * denom * denom);
-    float k = (gRough + 1.0) * (gRough + 1.0) / 8.0;
-    float G = (NdotV / (NdotV * (1.0 - k) + k)) * (NdotL / (NdotL * (1.0 - k) + k));
-    vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
-
-    vec3 specular = D * G * F / (4.0 * NdotV * NdotL + 1e-4);
-    vec3 diffuse = (1.0 - F) * (1.0 - uMetallic) * gBase / PI;
-    return (diffuse + specular) * radiance * NdotL;
-}
 
 void applyMaps(inout vec3 N) {
     vec3 n = normalize(vObjNormal + vec3(1e-6));
@@ -125,6 +99,7 @@ void main() {
     }
     gBase = uBaseColor;
     gRough = uRoughness;
+    gMetal = uMetallic;
     gGrazing = 1.0;
     if (uUseMaps != 0 && gl_FrontFacing) {
         applyMaps(N);
@@ -136,7 +111,10 @@ void main() {
     }
     vec3 F0 = mix(vec3(0.04), gBase, uMetallic);
 
-    vec3 color = shade(N, V, normalize(uLightDir), uSunColor, F0);
+    vec3 L = sun_toward();
+    float lit = shadow_factor(vWorldPos, max(dot(N, L), 0.0)) * cloudShadow(vWorldPos);
+    vec3 color = shade(N, V, L, u_sun_color_ambient.rgb, F0) * lit;
+    color += shadePoints(vWorldPos, N, V, F0);
 
     for (int i = 0; i < min(uPointCount, kMaxLights); ++i) {
         vec3 toLight = uPointPos[i] - vWorldPos;
@@ -146,10 +124,7 @@ void main() {
     }
 
     float NdotV = max(dot(N, V), 1e-4);
-    vec3 R = reflect(-V, N);
-    vec3 Fa = F0 + (max(vec3(1.0 - gRough), F0) - F0) * pow(1.0 - NdotV, 5.0) * gGrazing;
-    color += (1.0 - Fa) * (1.0 - uMetallic) * gBase * environment(N)
-           + Fa * mix(environment(R), environment(N), gRough);
+    color += ambientLight(N, V, F0);
 
     color += uEmissive;
     if (uGhost > 0.001) {

@@ -176,10 +176,30 @@ TEST_CASE("Fog shot halfway up a wall fills down to the floor and out from the w
 
 TEST_CASE("The reach between two samples blends toward the nearer surface") {
     FogReach reach = filledReach(10.0f);
-    reach[3] = 0.5f;
-    CHECK(fogReachToward(reach, {0.0f, -1.0f, 0.0f}) == doctest::Approx(0.5f).epsilon(0.05));
-    CHECK(fogReachToward(reach, {1.0f, 0.0f, 0.0f}) == doctest::Approx(10.0f).epsilon(0.05));
-    const float between = fogReachToward(reach, glm::normalize(glm::vec3(1.0f, -1.0f, 0.0f)));
+    reach[0] = 0.5f;
+    CHECK(fogReachToward(reach, {1.0f, 0.0f, 0.0f}) == doctest::Approx(0.5f).epsilon(0.05));
+    CHECK(fogReachToward(reach, {0.0f, 1.0f, 0.0f}) == doctest::Approx(10.0f).epsilon(0.05));
+    const float between = fogReachToward(reach, glm::normalize(glm::vec3(1.0f, 1.0f, 0.0f)));
     CHECK(between > 0.5f);
     CHECK(between < 5.0f);
+}
+
+TEST_CASE("A floor under a cloud cuts it flat instead of carving cones into its sides") {
+    FogReach reach = filledReach(10.0f);
+    reach[3] = 0.5f;
+    CHECK(fogReachToward(reach, glm::normalize(glm::vec3(1.0f, -1.0f, 0.0f))) == doctest::Approx(10.0f).epsilon(0.05));
+    CHECK(fogReachToward(reach, glm::normalize(glm::vec3(1.0f, -0.3f, 0.0f))) == doctest::Approx(10.0f).epsilon(0.05));
+    CHECK(fogFloorFade(reach, 0.2f) == doctest::Approx(1.0f));
+    CHECK(fogFloorFade(reach, 0.6f) == doctest::Approx(0.0f));
+    CHECK(fogFloorFade(filledReach(kFogUnlimited), 50.0f) == doctest::Approx(1.0f));
+
+    FogField fog;
+    const glm::vec3 low{0.0f, 0.6f, 0.0f};
+    fog.beginSync();
+    fog.syncCloud(1, low, 4.0f, 3.0f, 5.0f, 15.0f);
+    fog.endSync();
+    fog.setReach(1, measureFogReach(low, 4.0f, 3.0f, world()), low);
+    CHECK(fog.density({2.0f, 0.1f, 0.0f}) > 0.5f);
+    CHECK(fog.density({2.0f, 0.1f, 2.0f}) > 0.3f);
+    CHECK(fog.density({1.0f, -0.4f, 0.0f}) == doctest::Approx(0.0f));
 }

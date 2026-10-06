@@ -24,6 +24,7 @@ inline constexpr std::size_t kFogDirections = 14;
 using FogReach = std::array<float, kFogDirections>;
 constexpr float kFogUnlimited = 1e4f;
 
+
 constexpr FogReach filledReach(float value) {
     FogReach r{};
     for (float& v : r) {
@@ -96,6 +97,8 @@ private:
     std::vector<std::uint32_t> m_seen;
 };
 
+bool fogGroundward(std::size_t direction);
+float fogFloorFade(const FogReach& reach, float below);
 float fogCloudDensity(const FogCloud& cloud, const glm::vec3& point);
 float fogHoleClearing(const FogHole& hole, const glm::vec3& point);
 float distanceToSegment(const glm::vec3& point, const glm::vec3& from, const glm::vec3& to);

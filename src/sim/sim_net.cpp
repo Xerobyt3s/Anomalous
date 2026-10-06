@@ -37,7 +37,7 @@ void Sim::client_reset(PlayerId local, Vec3 feet, f32 yaw, std::string_view name
     s.name.assign(name);
     s.color = kSlotColors[local];
     s.interact.init();
-    gameplay_.stockGun(s.gun);
+    kit_gun(s.gun);
     place_player(s, feet, yaw);
     commands_[slot_index(local)] = PlayerCommand{};
     roster_.add(local);

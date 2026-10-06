@@ -59,6 +59,8 @@ float segmentDistance(vec3 p, vec3 a, vec3 b) {
 }
 
 const float kSpill = 0.2;
+const float kUnlimited = 1e4;
+
 float reachToward(vec3 dir) {
     float weights = 0.0;
     float inverse = 0.0;
@@ -71,6 +73,7 @@ float reachToward(vec3 dir) {
             int k = i - 6;
             axis = normalize(vec3((k & 1) != 0 ? 1.0 : -1.0, (k & 2) != 0 ? 1.0 : -1.0, (k & 4) != 0 ? 1.0 : -1.0));
         }
+        if (axis.y < -0.1) continue;
         float a = max(dot(dir, axis), 0.0);
         float a2 = a * a;
         float w = a2 * a2 * a2 * a2;
@@ -84,7 +87,12 @@ float walls(vec3 p) {
     float dist = length(local);
     if (dist < 1e-4) return 1.0;
     float reach = reachToward(local / dist);
-    return 1.0 - smoothstep(reach - kSpill, reach, dist);
+    float floorFade = 1.0;
+    if (uReach[3] < kUnlimited * 0.5) {
+        float floorAt = uReach[3] - kSpill;
+        floorFade = 1.0 - smoothstep(floorAt, floorAt + kSpill, -local.y);
+    }
+    return (1.0 - smoothstep(reach - kSpill, reach, dist)) * floorFade;
 }
 
 float shape(vec3 p, float wobble) {
@@ -137,7 +145,7 @@ vec2 fog(vec3 p) {
     float fine = n_noise3(noiseAt * uNoiseScale * 3.1 + vec3(-t * 0.3, t * 0.22, uSeed));
     float d = shape(shapeAt, (big - 0.5) * 1.0 + (fine - 0.5) * 0.18) * burn * walls(p);
     if (d <= 0.0) return vec2(0.0, fine);
-    d *= smoothstep(0.12, 0.7, big) * 1.25;
+    d *= mix(0.35 * smoothstep(0.35, 0.85, d), 1.25, smoothstep(0.12, 0.7, big));
     d = clamp(d + (fine - 0.5) * 0.35 * (1.0 - d), 0.0, 1.0);
 
     for (int i = 0; i < min(uHoleCount, kMaxHoles); ++i) {

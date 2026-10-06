@@ -67,6 +67,7 @@ AmmoData parseAmmoData(std::string_view elementsJson, std::string_view reactions
         def.glow = vec3Or(e, "glow", def.glow);
         def.velocityScale = e.value("velocityScale", 1.0f);
         def.dragScale = e.value("dragScale", 1.0f);
+        def.ricochet = std::max(e.value("ricochet", 1.0f), 0.0f);
         def.trail = parseTrail(e.value("trail", std::string("none")));
         {
             const std::string kind = e.value("damage", std::string("plain"));

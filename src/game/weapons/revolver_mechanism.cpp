@@ -281,6 +281,33 @@ void RevolverMechanism::tickCylinder(const MechanismInput& input, float dt, Even
     }
 }
 
+void RevolverMechanism::snapClosed() {
+    MechanismState& s = m_state;
+    if (s.isClosed()) {
+        return;
+    }
+    if (s.loadingChamber >= 0) {
+        s.chambers[static_cast<std::size_t>(s.loadingChamber)] = {ChamberState::Live, s.loadingRound};
+        s.loadingChamber = -1;
+    }
+    if (s.speedloadProgress >= 0.0f) {
+        for (int i = 0; i < kChamberCount; ++i) {
+            if (const auto& round = s.speedloadRounds[static_cast<std::size_t>(i)]) {
+                s.chambers[static_cast<std::size_t>((s.nextToFire() + i) % kChamberCount)] = {ChamberState::Live, *round};
+            }
+        }
+        s.speedloadProgress = -1.0f;
+    }
+    s.ejectTime = -1.0f;
+    s.loadProgress = 0.0f;
+    s.closePending = false;
+    indexForClose();
+    s.crane = 0.0f;
+    s.cylinder = CylinderPhase::Closed;
+    s.triggerNeedsReset = true;
+    m_previous = s;
+}
+
 void RevolverMechanism::indexForClose() {
     MechanismState& s = m_state;
     for (int step = 0; step < kChamberCount; ++step) {

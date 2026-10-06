@@ -121,20 +121,13 @@ f32 Player::field_presence() const
     return state_ == PlayerState::OnFoot ? movement_.state().field_presence : car_presence_;
 }
 
-void Player::sync_jolt(PhysWorld& phys, const RigidBody* car)
+void Player::sync_jolt(PhysWorld& phys)
 {
     ghost::engine::PhysicsWorld* jolt = phys.jolt();
     if (!jolt) {
         return;
     }
     jolt->characterSetSolid(static_cast<int>(movement_.character()), state_ == PlayerState::OnFoot);
-    if (car) {
-        jolt->setVehicle(to_glm(car->pos), to_glm(car->rot), to_glm(car->half_extents), to_glm(car->box_offset),
-                         to_glm(car->vel), to_glm(car->angular_vel),
-                         static_cast<std::uint64_t>(ghost::game::Surface::Steel));
-    } else {
-        jolt->clearVehicle();
-    }
 }
 
 bool Player::probe_exit(PhysWorld& phys, const Vehicle& veh, Vec3* out_foot) const
@@ -223,7 +216,7 @@ bool Player::can_exit(PhysWorld& phys, const Vehicle* veh) const
 void Player::tick(PhysWorld& phys, Vehicle* veh, const PlayerCommand& cmd, f32 dt)
 {
     RigidBody* body = veh ? phys.body(veh->body()) : nullptr;
-    sync_jolt(phys, body);
+    sync_jolt(phys);
     seat_prev_pos_ = seat_pos_;
     look(cmd.look_dx, cmd.look_dy);
     if (cmd.face_view && state_ == PlayerState::OnFoot && length_sq(cmd.view_dir) > 1e-8f) {

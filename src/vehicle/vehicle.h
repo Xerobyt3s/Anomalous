@@ -3,6 +3,7 @@
 #include "core/types.h"
 #include "math/vmath.h"
 #include "physics/body.h"
+#include "physics/world.h"
 #include "vehicle/vehicle_config.h"
 
 #include <string_view>
@@ -10,6 +11,8 @@
 namespace anom {
 class Arena;
 class PhysWorld;
+struct TireParams;
+struct WheelFrame;
 
 struct Drivetrain {
     f32 engine_omega = 0.0f;
@@ -20,6 +23,7 @@ struct Drivetrain {
     bool manual = false;
     i32 shift_request = 0;
     f32 tc_cut = 0.0f;
+    bool brake_hold = false;
 };
 
 struct Wheel {
@@ -47,6 +51,8 @@ struct Wheel {
     Vec3 force_lat;
     Vec3 stick_pos;
     bool stick_active = false;
+    f32 prev_compression = 0.0f;
+    f32 prev_spin_angle = 0.0f;
 };
 
 struct VehicleEffects {
@@ -56,6 +62,8 @@ struct VehicleEffects {
     f32 tire_radius_mul[kWheelCount] = {1.0f, 1.0f, 1.0f, 1.0f};
     f32 brake_mul = 1.0f;
     bool headlights_on = false;
+    f32 surface_road[kWheelCount] = {1.0f, 1.0f, 1.0f, 1.0f};
+    f32 rolling_resist_mul = 1.0f;
 };
 
 struct VehicleInput {
@@ -104,9 +112,13 @@ public:
     CarWire wire(const PhysWorld& world) const;
     void adopt(PhysWorld& world, const CarWire& wire);
 
+    f32 planar_speed(const PhysWorld& world) const;
+
     f32 forward_speed(const PhysWorld& world) const;
 
     BodyHandle body() const { return body_; }
+    const BodyDesc& body_desc() const { return body_desc_; }
+    BodyDesc make_body_desc() const;
     VehicleConfig& config() { return cfg_; }
     const VehicleConfig& config() const { return cfg_; }
     Wheel& wheel(u32 index) { return wheels_[index]; }
@@ -119,9 +131,19 @@ public:
     f32 steer_deg() const { return steer_deg_; }
 
 private:
-    void update_steering(f32 speed, f32 dt);
+    void update_steering(f32 speed, f32 slip_deg, f32 dt);
+    void probe_suspension(const PhysWorld& world, const RigidBody& body, const Mat3& rot, Vec3 up,
+                          u32 probe_count, f32 dt, WheelFrame* frames);
+    void compute_arb(f32* arb_force) const;
+    void apply_suspension(RigidBody& body, u32 i, const WheelFrame& frame, f32 arb, f32 rebound_mul,
+                          f32& total_load);
+    void apply_tire(RigidBody& body, u32 i, const WheelFrame& frame, const Mat3& rot, const TireParams& tp,
+                    f32 g_mag, f32 tire_load_clamp, f32 nominal_load, f32 wheel_inertia, Vec3 grav_up, f32 dt);
+    void integrate_wheels(f32 wheel_inertia, f32 dt);
+    void apply_body_drag(RigidBody& body, f32 speed, f32 total_load) const;
 
     BodyHandle body_;
+    BodyDesc body_desc_;
     VehicleConfig cfg_;
     Wheel wheels_[kWheelCount];
     Drivetrain train_;

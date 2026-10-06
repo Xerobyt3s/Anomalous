@@ -89,6 +89,7 @@ public:
         m_gravityAt = std::move(gravity);
         m_windAt = std::move(wind);
     }
+    void setRicochet(std::vector<float> scales) { m_ricochet = std::move(scales); }
     BallisticsTuning& tuning() { return m_tuning; }
     const BallisticsTuning& tuning() const { return m_tuning; }
 
@@ -96,6 +97,7 @@ private:
     BallisticsTuning m_tuning;
     std::vector<Projectile> m_projectiles;
     std::uint32_t m_nextId = 1;
+    std::vector<float> m_ricochet;
     FieldFn m_gravityAt;
     FieldFn m_windAt;
 };

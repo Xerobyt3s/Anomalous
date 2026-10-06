@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/drive_controls.h"
 #include "app/player_bodies.h"
 #include "app/play_view.h"
 #include "app/player_view.h"
@@ -112,8 +113,8 @@ private:
     PlayFrame play_frame() const;
     bool gun_out() const;
     f32 look_zoom() const;
-    void drive_input(const Input& input);
     void foot_input(const Input& input, f32 frame_dt);
+    void drive_input(const Input& input, f32 frame_dt);
     void terminal_input(const Input& input);
     void clear_pending_edges();
     void consume_events();
@@ -133,6 +134,7 @@ private:
     void draw_loose_terminal(RenderDevice& device, u32 screen_texture);
     u32 terminal_screen_texture() const;
     Vec3 hands_item_pos() const;
+    Vec3 car_dash_pos() const;
     void draw_play_hud();
     void draw_debug_panels();
     void draw_coil_arcs(RenderDevice& device, DebugDraw& debug);
@@ -163,6 +165,12 @@ private:
     std::vector<HeldItem> held_items_;
     std::vector<PropView> props_;
     std::vector<TintedCylinder> tank_fill_;
+    struct LooseTankView {
+        Mat4 model;
+        const u16* doses = nullptr;
+    };
+    std::vector<LooseTankView> loose_tanks_;
+    void push_tank_fill(const glm::mat4& base, const glm::vec3& center, const u16* doses);
     std::vector<SeeThrough> see_through_;
     Mat4 hud_view_proj_ = mat4_identity();
     Audio audio_;
@@ -178,6 +186,20 @@ private:
 
     ghost::engine::FixedStepClock clock_;
     PlayerCommand pending_;
+    f32 steer_key_ = 0.0f;
+    f32 throttle_key_ = 0.0f;
+    f32 handbrake_held_ = 0.0f;
+    f32 ignition_held_ = 0.0f;
+    PadTapState pad_taps_;
+    bool pad_use_down_ = false;
+    bool pad_use_pressed_ = false;
+    bool look_behind_ = false;
+    Vec2 pad_look_;
+    f32 wiper_prev_sweep_ = 0.0f;
+    f32 wiper_prev_delta_ = 0.0f;
+    u64 seat_tick_ = 0;
+    bool was_driving_ = false;
+    bool controls_card_done_ = false;
     PlayerId local_ = 0;
     NetSession net_;
     std::vector<SlotCommand> slot_cmds_;

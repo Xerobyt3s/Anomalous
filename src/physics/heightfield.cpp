@@ -5,7 +5,6 @@
 namespace anom {
 namespace {
 
-constexpr f32 kRayEps = 1e-4f;
 constexpr f32 kInf = 1e30f;
 
 Vec3 triangle_normal_up(Vec3 a, Vec3 b, Vec3 c)
@@ -182,78 +181,6 @@ Aabb Heightfield::bounds() const
 {
     return Aabb{Vec3{origin_.x, min_height_ - 0.5f, origin_.z},
                 Vec3{origin_.x + span_x(), max_height_ + 0.5f, origin_.z + span_z()}};
-}
-
-bool Heightfield::raycast(Ray ray, f32 max_t, f32* out_t, Vec3* out_normal) const
-{
-    const Aabb box = bounds();
-
-    f32 t_cur = 0.0f;
-    if (!contains(box, ray.origin)) {
-        if (!ray_vs_aabb(ray, box, max_t, &t_cur)) {
-            return false;
-        }
-        t_cur += kRayEps;
-    }
-
-    const Vec3 p = ray.origin + ray.dir * t_cur;
-    const i32 max_ix = static_cast<i32>(size_x_) - 2;
-    const i32 max_iz = static_cast<i32>(size_z_) - 2;
-    i32 ix = static_cast<i32>(f_clamp((p.x - origin_.x) / cell_size_, 0.0f,
-                                      static_cast<f32>(max_ix)));
-    i32 iz = static_cast<i32>(f_clamp((p.z - origin_.z) / cell_size_, 0.0f,
-                                      static_cast<f32>(max_iz)));
-
-    const i32 step_x = ray.dir.x > 0.0f ? 1 : -1;
-    const i32 step_z = ray.dir.z > 0.0f ? 1 : -1;
-    f32 t_max_x = kInf;
-    f32 t_max_z = kInf;
-    f32 t_delta_x = kInf;
-    f32 t_delta_z = kInf;
-
-    if (f_abs(ray.dir.x) > 1e-9f) {
-        const f32 boundary = origin_.x + static_cast<f32>(ix + (step_x > 0 ? 1 : 0)) * cell_size_;
-        t_max_x = t_cur + (boundary - p.x) / ray.dir.x;
-        t_delta_x = cell_size_ / f_abs(ray.dir.x);
-    }
-    if (f_abs(ray.dir.z) > 1e-9f) {
-        const f32 boundary = origin_.z + static_cast<f32>(iz + (step_z > 0 ? 1 : 0)) * cell_size_;
-        t_max_z = t_cur + (boundary - p.z) / ray.dir.z;
-        t_delta_z = cell_size_ / f_abs(ray.dir.z);
-    }
-
-    while (ix >= 0 && ix <= max_ix && iz >= 0 && iz <= max_iz && t_cur <= max_t) {
-        Vec3 tris[6];
-        cell_triangles(static_cast<u32>(ix), static_cast<u32>(iz), tris);
-
-        RayHitTri hit{};
-        f32 best_t = kInf;
-        Vec3 best_normal{0.0f, 1.0f, 0.0f};
-        for (i32 tri = 0; tri < 2; tri++) {
-            const Vec3 a = tris[tri * 3 + 0];
-            const Vec3 b = tris[tri * 3 + 1];
-            const Vec3 c = tris[tri * 3 + 2];
-            if (ray_vs_triangle(ray, a, b, c, max_t, &hit) && hit.t < best_t) {
-                best_t = hit.t;
-                best_normal = triangle_normal_up(a, b, c);
-            }
-        }
-        if (best_t < kInf) {
-            if (out_t) { *out_t = best_t; }
-            if (out_normal) { *out_normal = best_normal; }
-            return true;
-        }
-        if (t_max_x < t_max_z) {
-            t_cur = t_max_x;
-            t_max_x += t_delta_x;
-            ix += step_x;
-        } else {
-            t_cur = t_max_z;
-            t_max_z += t_delta_z;
-            iz += step_z;
-        }
-    }
-    return false;
 }
 
 } // namespace anom

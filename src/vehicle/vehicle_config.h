@@ -59,6 +59,11 @@ struct VehicleConfig {
     f32 tire_peak_mu = 1.05f;
     f32 tire_slide_mu = 0.8f;
     f32 tire_low_speed = 0.6f;
+    f32 tire_grass_grip = 0.80f;
+    f32 climb_grip = 1.0f;
+    f32 climb_slope_start = 12.0f;
+    f32 climb_slope_full = 25.0f;
+    f32 climb_speed = 6.0f;
     f32 tire_load_sens = 0.0f;
     f32 tire_relax_long = 0.0f;
     f32 tire_relax_lat = 0.0f;
@@ -87,6 +92,7 @@ struct VehicleConfig {
     f32 driveline_eff = 0.9f;
     f32 clutch_strength = 8.0f;
     f32 clutch_max_torque = 450.0f;
+    f32 clutch_creep_torque = 15.0f;
     f32 shift_up_rpm = 5800.0f;
     f32 shift_down_rpm = 2200.0f;
     f32 shift_time = 0.35f;
@@ -100,14 +106,19 @@ struct VehicleConfig {
     f32 brake_torque = 1700.0f;
     f32 handbrake_torque = 2500.0f;
     f32 handbrake_grip_mul = 0.85f;
+    f32 park_latch_speed = 2.0f;
 
     f32 drag_coef = 0.8f;
     f32 rolling_resist = 0.012f;
+    f32 offroad_rolling_mul = 2.2f;
 
     f32 steer_max_deg = 32.0f;
     f32 steer_high_deg = 8.0f;
     f32 steer_high_speed = 40.0f;
     f32 steer_rate_deg = 240.0f;
+    f32 steer_time_in = 0.16f;
+    f32 steer_time_in_high = 0.45f;
+    f32 steer_time_out = 0.09f;
 
     Vec3 seat_eye{-0.4f, 0.35f, -0.3f};
     Vec3 seat_hips{-0.4f, -0.12f, -0.25f};

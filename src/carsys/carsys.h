@@ -8,6 +8,8 @@
 #include "core/types.h"
 #include "math/vmath.h"
 
+#include <string_view>
+
 namespace anom {
 
 class PhysWorld;
@@ -20,6 +22,7 @@ inline constexpr i32 kCoaxTargetCamera = 1;
 inline constexpr i32 kBusTargetCar = 0;
 inline constexpr i32 kBusTargetTower = 1;
 inline constexpr i32 kBusTargetPrinter = 2;
+inline constexpr i32 kBusTargetLoosePrinter = 3;
 
 inline constexpr f32 kTrunkMinX = -0.50f;
 inline constexpr f32 kTrunkMaxX = 0.50f;
@@ -73,12 +76,38 @@ struct SynthBay {
     }
 };
 
+inline constexpr u32 kLooseTanks = 8;
+inline constexpr u32 kLoosePrinters = 4;
+
+struct LooseTank {
+    bool used = false;
+    u16 doses[kSynthMaterials] = {};
+
+    u32 total() const
+    {
+        u32 n = 0;
+        for (u16 c : doses) {
+            n += c;
+        }
+        return n;
+    }
+};
+
+struct LoosePrinter {
+    bool used = false;
+    bool has_tank = false;
+    f32 tank_condition = 1.0f;
+    SynthBay bay;
+};
+
 struct SynthTuning {
     f32 print_time = 3.0f;
     f32 battery_per_round = 0.01f;
     f32 min_battery = 0.15f;
     u32 tray_max = 24;
     u32 tank_capacity = 60;
+    u32 start_each = 0;
+    u32 start_propellant = 0;
 };
 
 struct CargoItem {
@@ -89,6 +118,18 @@ struct CargoItem {
     bool supported = false;
 };
 
+enum class StartBlocker : u32 {
+    None = 0,
+    NoKey,
+    NoFuel,
+    EngineDead,
+    BatteryFlat,
+    StarterUnpowered,
+    Running,
+};
+
+std::string_view start_blocker_text(StartBlocker blocker);
+
 class CarSys {
 public:
     void init();
@@ -96,6 +137,7 @@ public:
 
     bool try_start(Vehicle& veh);
     void stop_engine();
+    StartBlocker start_blocker() const;
 
     bool cargo_add(Item item, Vec3 pos);
     bool cargo_take(u32 index, Item& out_item);
@@ -108,6 +150,9 @@ public:
     Cable cables[CABLE_KIND_COUNT];
     CargoItem cargo[kCargoMax];
     SynthBay synth;
+    LooseTank loose_tanks[kLooseTanks];
+    LoosePrinter loose_printers[kLoosePrinters];
+    i32 bus_printer = 0;
 
     bool engine_on = false;
     f32 crank_timer = 0.0f;
@@ -144,6 +189,23 @@ public:
     Vec3 prev_vel;
     f32 impact_cooldown = 1.0f;
     f32 last_impact_severity = 0.0f;
+    u32 impact_serial = 0;
+    f32 stall_notice = 0.0f;
+    bool horn_on = false;
+
+    i32 claim_tank();
+    i32 claim_printer();
+    LooseTank* loose_tank(i32 id);
+    const LooseTank* loose_tank(i32 id) const;
+    LoosePrinter* loose_printer(i32 id);
+    const LoosePrinter* loose_printer(i32 id) const;
+    i32 stash_tank(u16* doses);
+    void fill_tank_from(i32 id, u16* doses);
+    i32 stash_installed_printer();
+    void install_printer_from(i32 id);
+    bool bus_on_loose_printer(i32 id) const;
+    SynthBay* bus_bay(bool& has_tank, bool& has_printer);
+    const SynthBay* bus_bay(bool& has_tank, bool& has_printer) const;
 
 private:
     bool can_run() const;
@@ -151,6 +213,7 @@ private:
     void detect_impacts(Vehicle& veh, const struct RigidBody& body, Vec3 dv, f32 dt);
     void cargo_tick(Vec3 apparent, f32 dt);
     void synth_tick(const SynthTuning& tuning, f32 dt);
+    void tick_bay(SynthBay& s, bool present, const SynthTuning& tuning, f32 dt);
 };
 
 } // namespace anom

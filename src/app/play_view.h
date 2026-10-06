@@ -126,7 +126,7 @@ struct EffectsTuning {
     float flashSize = 0.13f;
     float flashTime = 0.07f;
     float flashLight = 14.0f;
-    float smokeOpacity = 0.32f;
+    float smokeOpacity = 0.42f;
     float smokeLife = 1.8f;
     float impactScale = 1.0f;
 };
@@ -222,6 +222,7 @@ public:
     void renderCylinders(const std::vector<TintedCylinder>& cylinders, const glm::mat4& viewProj, const glm::vec3& cameraPos,
                          const FrameLights& lights);
     void renderProps(const std::vector<PropView>& props, const glm::mat4& viewProj, const glm::vec3& cameraPos, const FrameLights& lights);
+    void renderPropShadows(const std::vector<PropView>& props, const glm::mat4& lightViewProj, unsigned program);
     GunPoints gunPoints() const { return {m_revolver.muzzle(), m_revolver.gripCenter(), m_revolver.roundCenter(), true}; }
     void renderOtherGuns(const std::vector<OtherGun>& guns, const glm::mat4& viewProj, const glm::vec3& cameraPos);
     const GameAudio& audio() const { return m_audio; }

@@ -192,7 +192,9 @@ TEST(gravity_physics, a_body_in_a_sideways_volume_falls_sideways)
     Heightfield hf;
     hf.init_procedural(arena, 64, 1.0f, 3u, 0.0f);
     PhysWorld world;
+    ghost::engine::PhysicsWorld jolt;
     world.init(arena, &hf);
+    world.set_jolt(&jolt);
     GravityField field;
     field.add(box_volume(Vec3{0.0f, 10.0f, 0.0f}, roll_deg(90.0f), Vec3{8.0f, 8.0f, 8.0f}, 2.0f));
     world.set_gravity_field(&field);
@@ -213,7 +215,9 @@ TEST(gravity_physics, a_sleeping_body_wakes_when_its_gravity_changes)
     Heightfield hf;
     hf.init_procedural(arena, 64, 1.0f, 3u, 0.0f);
     PhysWorld world;
+    ghost::engine::PhysicsWorld jolt;
     world.init(arena, &hf);
+    world.set_jolt(&jolt);
     GravityField field;
     world.set_gravity_field(&field);
 
@@ -515,7 +519,9 @@ TEST(hardening, recovering_in_zero_gravity_keeps_a_valid_upright_car)
     Heightfield hf;
     hf.init_procedural(arena, 64, 1.0f, 3u, 0.0f);
     PhysWorld phys;
+    ghost::engine::PhysicsWorld jolt;
     phys.init(arena, &hf);
+    phys.set_jolt(&jolt);
     GravityField field;
     GravityVolume v = box_volume(Vec3{0.0f, 20.0f, 0.0f}, roll_deg(90.0f), Vec3{15.0f, 15.0f, 15.0f}, 0.0f);
     v.strength = 0.0f;

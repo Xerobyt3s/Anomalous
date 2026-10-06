@@ -278,9 +278,9 @@ void Terminal::launch(const FsNode& node, const TermView& view)
         if (view.bus_tower || view.bus_state != PORT_LINKED) {
             s.print(view.bus_state == PORT_PLUGGED ? "BUS PORT NOT INITIALIZED. RUN LINK.\n"
                                                    : "NO BUS LINK. CABLE THE CAR BUS OR THE PRINTER.\n");
-        } else if (!view.sys || !view.sys->parts[PART_PRINTER].installed) {
+        } else if (!view.synth_bay || !view.synth_printer) {
             s.print("NO PRINTER ON THE BUS.\n");
-        } else if (!view.sys->parts[PART_TANK].installed) {
+        } else if (!view.synth_tank) {
             s.print("NO MATERIAL TANK ON THE PRINTER.\n");
         } else {
             set_mode(TermMode::Synth, view);
@@ -315,8 +315,8 @@ void Terminal::update(const TermView& view, f32 dt)
     if (mode_ == TermMode::Status && (view.bus_state != PORT_LINKED || view.bus_tower || view.bus_printer)) {
         set_mode(TermMode::Shell, view);
     }
-    if (mode_ == TermMode::Synth && (view.bus_state != PORT_LINKED || view.bus_tower || !view.sys
-                                     || !view.sys->parts[PART_PRINTER].installed || !view.sys->parts[PART_TANK].installed)) {
+    if (mode_ == TermMode::Synth && (view.bus_state != PORT_LINKED || view.bus_tower || !view.synth_bay
+                                     || !view.synth_printer || !view.synth_tank)) {
         set_mode(TermMode::Shell, view);
         shell_.screen().print("SYNTH LINK LOST.\n");
     }

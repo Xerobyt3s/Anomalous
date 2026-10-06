@@ -14,6 +14,7 @@ constexpr f32 kTcAttack = 12.0f;
 constexpr f32 kTcRelease = 10.0f;
 constexpr f32 kTcSpeedFloor = 8.0f;
 constexpr f32 kClutchLockRads = 40.0f;
+constexpr f32 kClutchBleedRate = 8.0f;
 
 void axle_lsd(const VehicleConfig& cfg, Wheel* wheels, u32 left, u32 right, f32 wheel_inertia,
               f32 dt)
@@ -184,7 +185,7 @@ void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels,
     f32 clutch_engage = f_clamp01((rpm - cfg.idle_rpm * 0.9f)
                                   / f_max(bite_rpm - cfg.idle_rpm * 0.9f, 100.0f));
     clutch_engage *= clutch_engage;
-    if (train.shifting || ratio == 0.0f) {
+    if (train.shifting || ratio == 0.0f || train.brake_hold) {
         clutch_engage = 0.0f;
     }
 
@@ -229,6 +230,13 @@ void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels,
         clutch_torque = f_clamp(clutch_slip * cfg.clutch_strength, -cfg.clutch_max_torque,
                                 cfg.clutch_max_torque)
                       * clutch_engage;
+        if (clutch_slip > 0.0f) {
+            const f32 bite_omega = bite_rpm * kRpmToRad;
+            const f32 bleed = f_max(train.engine_omega - bite_omega, 0.0f)
+                            * f_max(cfg.engine_inertia, 0.01f) * kClutchBleedRate;
+            const f32 cap = f_max(engine_torque, 0.0f) + bleed + cfg.clutch_creep_torque;
+            clutch_torque = f_min(clutch_torque, cap);
+        }
     }
 
     train.engine_omega += (engine_torque - clutch_torque) / f_max(cfg.engine_inertia, 0.01f) * dt;

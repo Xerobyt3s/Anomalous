@@ -75,7 +75,12 @@ struct AudioBackend {
     Loop rain_heavy;
     Loop rain_roof;
     Loop tape;
+    Loop wind;
 
+    f32 wind_vol = 0.0f;
+    f32 grass_skid = 0.0f;
+    f32 load_sm = 0.0f;
+    f32 cabin_lp = 0.0f;
     f32 horn_vol = 0.0f;
     f32 skid_vol = 0.0f;
     f32 roll_road_vol = 0.0f;
@@ -238,6 +243,68 @@ void engine_crossfade(std::span<const f32> base_rpm, f32 rpm, std::span<f32> out
     }
 }
 
+f32 skid_intensity(f32 slide_lat, f32 slide_long)
+{
+    const f32 lat = f_clamp01((f_abs(slide_lat) - 1.5f) / 6.0f);
+    const f32 lon = f_clamp01((f_abs(slide_long) - 2.0f) / 7.0f);
+    return f_max(lat, lon);
+}
+
+f32 engine_load_lowpass(f32 load)
+{
+    const f32 l = f_clamp01(load);
+    return l > 0.97f ? 0.0f : f_lerp(1500.0f, 9000.0f, l);
+}
+
+f32 cabin_lowpass(f32 occlusion)
+{
+    const f32 occ = f_clamp01(occlusion);
+    if (occ >= 0.99f) {
+        return 0.0f;
+    }
+    return f_lerp(1300.0f, 6000.0f, f_clamp01((occ - 0.55f) / 0.44f));
+}
+
+f32 wind_volume(f32 speed, bool seated)
+{
+    const f32 t = f_clamp01((speed - 8.0f) / 35.0f);
+    return std::pow(t, 1.5f) * 0.35f * (seated ? 0.5f : 1.0f);
+}
+
+f32 wind_lowpass(f32 speed)
+{
+    return 400.0f + 1800.0f * f_clamp01(speed / 40.0f);
+}
+
+void fill_noise_loop(std::span<f32> out, u32 seed)
+{
+    if (out.empty()) {
+        return;
+    }
+    u32 state = seed | 1u;
+    f32 smooth = 0.0f;
+    f32 sum_sq = 0.0f;
+    for (f32& s : out) {
+        state = state * 1664525u + 1013904223u;
+        const f32 white = static_cast<f32>(state >> 8) / 16777216.0f * 2.0f - 1.0f;
+        smooth += (white - smooth) * 0.08f;
+        s = smooth;
+        sum_sq += s * s;
+    }
+    const f32 rms = std::sqrt(sum_sq / static_cast<f32>(out.size()));
+    const f32 gain = rms > 1e-6f ? 0.2f / rms : 1.0f;
+    const size_t fade = out.size() < 2048 ? out.size() / 4 : 1024;
+    for (size_t i = 0; i < out.size(); i++) {
+        f32 w = 1.0f;
+        if (i < fade) {
+            w = static_cast<f32>(i) / static_cast<f32>(fade);
+        } else if (i + fade >= out.size()) {
+            w = static_cast<f32>(out.size() - 1 - i) / static_cast<f32>(fade);
+        }
+        out[i] = f_clamp(out[i] * gain * w, -1.0f, 1.0f);
+    }
+}
+
 Audio::Audio() = default;
 
 Audio::~Audio()
@@ -265,6 +332,12 @@ bool Audio::init(ghost::engine::AudioEngine& audio_engine)
     be.start(be.rain_light, load_sound("rain_light.wav"), false);
     be.start(be.rain_heavy, load_sound("rain_heavy.wav"), false);
     be.start(be.rain_roof, load_sound("rain_roof.wav"), false);
+    {
+        engine::SoundBuffer noise;
+        noise.samples.resize(static_cast<size_t>(engine::kAudioSampleRate) * 2);
+        fill_noise_loop(noise.samples, 0x5EEDu);
+        be.start(be.wind, std::make_shared<const engine::SoundBuffer>(std::move(noise)), false);
+    }
     load_engine_set(be);
     log_info("audio: car audio on the shared engine (%u engine layers)", be.layer_count);
     return true;
@@ -280,7 +353,8 @@ void Audio::shutdown()
         be.release(be.layers[i]);
     }
     AudioBackend::Loop* loops[] = {&be.starter,   &be.skid,       &be.roll_road,  &be.roll_grass, &be.roll_wet,
-                                   &be.horn,      &be.rain_light, &be.rain_heavy, &be.rain_roof,  &be.tape};
+                                   &be.horn,      &be.rain_light, &be.rain_heavy, &be.rain_roof,  &be.tape,
+                                   &be.wind};
     for (AudioBackend::Loop* loop : loops) {
         be.release(*loop);
     }
@@ -303,7 +377,19 @@ void Audio::set_occlusion(f32 factor, f32 dt)
     if (!backend_) {
         return;
     }
-    backend_->occ = f_approach_exp(backend_->occ, f_clamp01(factor), 9.0f, dt);
+    AudioBackend& be = *backend_;
+    be.occ = f_approach_exp(be.occ, f_clamp01(factor), 9.0f, dt);
+    const f32 lp = cabin_lowpass(be.occ);
+    if (f_abs(lp - be.cabin_lp) > 1.0f) {
+        be.cabin_lp = lp;
+        AudioBackend::Loop* exterior[] = {&be.starter, &be.skid,       &be.roll_road,  &be.roll_grass, &be.roll_wet,
+                                          &be.horn,    &be.rain_light, &be.rain_heavy, &be.wind};
+        for (AudioBackend::Loop* loop : exterior) {
+            if (loop->voice) {
+                be.engine->filter(loop->voice, lp, 0.0f);
+            }
+        }
+    }
 }
 
 f32 Audio::occlusion() const
@@ -363,25 +449,33 @@ void Audio::play_at(SfxKind kind, f32 volume, f32 pitch, Vec3 pos)
     backend_->engine->play(backend_->sfx[kind], params);
 }
 
-void Audio::set_engine(f32 rpm, f32 load, bool running, bool cranking, f32 dt)
+void Audio::set_engine(f32 rpm, f32 load, bool running, bool cranking, f32 dt, bool shifting)
 {
     if (!backend_) {
         return;
     }
     AudioBackend& be = *backend_;
-    const f32 master_target = running ? 0.30f + 0.45f * f_clamp01(load) : (cranking ? 0.10f : 0.0f);
+    const f32 load_eff = shifting ? 0.0f : f_clamp01(load);
+    const f32 master_target = running ? 0.30f + 0.45f * load_eff : (cranking ? 0.10f : 0.0f);
     be.master = f_approach_exp(be.master, master_target, 10.0f, dt);
+    be.load_sm = f_approach_exp(be.load_sm, load_eff, 12.0f, dt);
     f32 target[kEngineLayerMax] = {};
     const f32 rpm_eff = f_max(rpm, 100.0f);
     if (be.master > 0.001f) {
         engine_crossfade(std::span<const f32>(be.base_rpm, be.layer_count), rpm_eff, target);
     }
+    const f32 load_lp = engine_load_lowpass(be.load_sm);
+    const f32 lp = load_lp <= 0.0f ? be.cabin_lp : (be.cabin_lp <= 0.0f ? load_lp : f_min(load_lp, be.cabin_lp));
+    const f32 shift_pitch = shifting ? 0.92f : 1.0f;
     for (u32 i = 0; i < be.layer_count; i++) {
         be.layer_vol[i] = f_approach_exp(be.layer_vol[i], target[i] * be.master, 18.0f, dt);
         if (be.layer_vol[i] > 0.002f) {
             be.layers[i].pitch = f_clamp(rpm_eff / be.base_rpm[i], 0.45f, 2.3f);
         }
-        be.push(be.layers[i], be.layer_vol[i] * be.occ);
+        if (be.layers[i].voice) {
+            be.engine->filter(be.layers[i].voice, lp, 0.0f);
+        }
+        be.push(be.layers[i], be.layer_vol[i] * be.occ, shift_pitch);
     }
     be.push(be.starter, cranking ? 0.5f * be.occ : 0.0f);
 }
@@ -406,7 +500,7 @@ void Audio::set_rolling(f32 speed, f32 road_amount, bool grounded, f32 wetness, 
     const f32 wet = f_clamp01(wetness);
     const f32 road_target = base * road_amount * (1.0f - wet * 0.75f);
     const f32 wet_target = base * road_amount * wet * 1.5f;
-    const f32 grass_target = base * (1.0f - road_amount) * (1.15f + wet * 0.35f);
+    const f32 grass_target = base * (1.0f - road_amount) * (1.15f + wet * 0.35f) * (1.0f + 0.6f * be.grass_skid);
     be.roll_road_vol = f_approach_exp(be.roll_road_vol, road_target, 8.0f, dt);
     be.roll_wet_vol = f_approach_exp(be.roll_wet_vol, wet_target, 8.0f, dt);
     be.roll_grass_vol = f_approach_exp(be.roll_grass_vol, grass_target, 8.0f, dt);
@@ -449,13 +543,34 @@ void Audio::set_horn(bool on, f32 dt)
 
 void Audio::set_skid(f32 intensity, f32 dt)
 {
+    set_skid_surface(intensity, 0.0f, dt);
+}
+
+void Audio::set_skid_surface(f32 squeal, f32 grass, f32 dt)
+{
     if (!backend_) {
         return;
     }
     AudioBackend& be = *backend_;
-    be.skid_vol = f_approach_exp(be.skid_vol, f_clamp01(intensity) * 0.55f, 14.0f, dt);
-    be.skid.pitch = 0.9f + 0.25f * f_clamp01(intensity);
+    be.grass_skid = f_approach_exp(be.grass_skid, f_clamp01(grass), 14.0f, dt);
+    be.skid_vol = f_approach_exp(be.skid_vol, f_clamp01(squeal) * 0.55f, 14.0f, dt);
+    be.skid.pitch = 0.9f + 0.25f * f_clamp01(squeal);
     be.push(be.skid, be.skid_vol * be.occ);
+}
+
+void Audio::set_wind(f32 speed, bool seated, f32 dt)
+{
+    if (!backend_) {
+        return;
+    }
+    AudioBackend& be = *backend_;
+    be.wind_vol = f_approach_exp(be.wind_vol, wind_volume(speed, seated), 4.0f, dt);
+    if (be.wind.voice) {
+        const f32 wind_lp = wind_lowpass(speed);
+        const f32 lp = be.cabin_lp <= 0.0f ? wind_lp : f_min(wind_lp, be.cabin_lp);
+        be.engine->filter(be.wind.voice, lp, 0.0f);
+    }
+    be.push(be.wind, be.wind_vol);
 }
 
 bool Audio::tape_play(std::string_view path)

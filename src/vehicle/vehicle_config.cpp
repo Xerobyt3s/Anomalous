@@ -59,6 +59,11 @@ bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view pa
     out.tire_peak_mu = cfg.get_f32("tire.peak_mu", 1.05f);
     out.tire_slide_mu = cfg.get_f32("tire.slide_mu", 0.8f);
     out.tire_low_speed = cfg.get_f32("tire.low_speed", 0.6f);
+    out.tire_grass_grip = cfg.get_f32("tire.grass_grip", 0.80f);
+    out.climb_grip = f_max(cfg.get_f32("tire.climb_grip", 1.0f), 1.0f);
+    out.climb_slope_start = cfg.get_f32("tire.climb_slope_start", 12.0f);
+    out.climb_slope_full = cfg.get_f32("tire.climb_slope_full", 25.0f);
+    out.climb_speed = f_max(cfg.get_f32("tire.climb_speed", 6.0f), 0.1f);
     out.tire_load_sens = cfg.get_f32("tire.load_sensitivity", 0.0f);
     out.tire_relax_long = cfg.get_f32("tire.relax_long", 0.0f);
     out.tire_relax_lat = cfg.get_f32("tire.relax_lat", 0.0f);
@@ -105,6 +110,7 @@ bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view pa
     out.driveline_eff = cfg.get_f32("gearbox.efficiency", 0.9f);
     out.clutch_strength = cfg.get_f32("gearbox.clutch_strength", 8.0f);
     out.clutch_max_torque = cfg.get_f32("gearbox.clutch_max_torque", 450.0f);
+    out.clutch_creep_torque = cfg.get_f32("gearbox.clutch_creep_torque", 15.0f);
     out.shift_up_rpm = cfg.get_f32("gearbox.shift_up_rpm", 5800.0f);
     out.shift_down_rpm = cfg.get_f32("gearbox.shift_down_rpm", 2200.0f);
     out.shift_time = cfg.get_f32("gearbox.shift_time", 0.35f);
@@ -118,14 +124,19 @@ bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view pa
     out.brake_torque = cfg.get_f32("brakes.torque", 1700.0f);
     out.handbrake_torque = cfg.get_f32("brakes.handbrake_torque", 2500.0f);
     out.handbrake_grip_mul = cfg.get_f32("brakes.handbrake_grip_mul", 0.85f);
+    out.park_latch_speed = f_max(cfg.get_f32("brakes.park_latch_speed", 2.0f), 0.0f);
 
     out.drag_coef = cfg.get_f32("aero.drag_coef", 0.8f);
     out.rolling_resist = cfg.get_f32("aero.rolling_resist", 0.012f);
+    out.offroad_rolling_mul = cfg.get_f32("aero.offroad_rolling_mul", 2.2f);
 
     out.steer_max_deg = cfg.get_f32("steering.max_deg", 32.0f);
     out.steer_high_deg = cfg.get_f32("steering.high_speed_deg", 8.0f);
     out.steer_high_speed = cfg.get_f32("steering.high_speed", 40.0f);
     out.steer_rate_deg = cfg.get_f32("steering.rate_deg", 240.0f);
+    out.steer_time_in = cfg.get_f32("steering.time_in", 0.16f);
+    out.steer_time_in_high = cfg.get_f32("steering.time_in_high", 0.45f);
+    out.steer_time_out = cfg.get_f32("steering.time_out", 0.09f);
 
     out.seat_eye = cfg.get_vec3("cabin.seat_eye", Vec3{-0.4f, 0.35f, -0.3f});
     out.seat_hips = cfg.get_vec3("cabin.seat_hips", out.seat_eye - Vec3{0.0f, 0.62f, -0.05f});
@@ -170,6 +181,8 @@ bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view pa
     out.synth.min_battery = cfg.get_f32("synth.min_battery", 0.15f);
     out.synth.tray_max = static_cast<u32>(cfg.get_i32("synth.tray_max", 24));
     out.synth.tank_capacity = static_cast<u32>(cfg.get_i32("synth.tank_capacity", 60));
+    out.synth.start_each = static_cast<u32>(std::max(cfg.get_i32("synth.start_each", 0), 0));
+    out.synth.start_propellant = static_cast<u32>(std::max(cfg.get_i32("synth.start_propellant", 0), 0));
 
     out.body_mesh.assign(cfg.get_str("render.body_mesh", ""));
     out.wheel_mesh.assign(cfg.get_str("render.wheel_mesh", ""));

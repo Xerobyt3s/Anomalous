@@ -21,6 +21,7 @@ namespace {
 constexpr f32 kHoodOpenForBay = 0.8f;
 constexpr f32 kDoorOpenForUse = 0.6f;
 constexpr f32 kExitLookYaw = 1.15f;
+constexpr const char* kDriverOnly = "driver's controls";
 
 const InteractBox kDefaultBoxes[IBOX_COUNT] = {
     {"door", {0.78f, -0.02f, 0.10f}, {0.10f, 0.26f, 0.62f}},
@@ -176,6 +177,12 @@ bool Interact::take_rounds_request()
     rounds_request_ = false;
     return value;
 }
+bool Interact::pour_request()
+{
+    const bool request = pour_request_;
+    pour_request_ = false;
+    return request;
+}
 
 bool Interact::take_holster_request()
 {
@@ -219,6 +226,58 @@ void Interact::perform(const InteractContext& ctx)
     case InteractAction::EngineOff:
         sys.stop_engine();
         break;
+    case InteractAction::PourMaterials:
+        pour_target_ = 0;
+        pour_request_ = true;
+        break;
+    case InteractAction::PlaceTankOnPrinter: {
+        Entity* entity = ctx.world->entity(target_entity_);
+        if (!entity || hands_.kind != ITEM_TANK) {
+            break;
+        }
+        i32 id = static_cast<i32>(entity->aux_data);
+        if (!sys.loose_printer(id)) {
+            id = sys.claim_printer();
+            entity->aux_data = static_cast<u32>(id);
+        }
+        LoosePrinter* printer = sys.loose_printer(id);
+        if (printer && !printer->has_tank) {
+            printer->has_tank = true;
+            printer->tank_condition = hands_.condition;
+            sys.fill_tank_from(hands_.aux, printer->bay.tank);
+            hands_ = Item{};
+        }
+        break;
+    }
+    case InteractAction::TakeTankOffPrinter: {
+        const Entity* entity = ctx.world->entity(target_entity_);
+        LoosePrinter* printer = entity ? sys.loose_printer(static_cast<i32>(entity->aux_data)) : nullptr;
+        if (printer && printer->has_tank && hands_.kind == ITEM_NONE) {
+            hands_.kind = ITEM_TANK;
+            hands_.condition = printer->tank_condition;
+            hands_.aux = sys.stash_tank(printer->bay.tank);
+            printer->has_tank = false;
+        }
+        break;
+    }
+    case InteractAction::CablePlugLoosePrinter: {
+        Entity* entity = ctx.world->entity(target_entity_);
+        if (!entity) {
+            break;
+        }
+        i32 id = static_cast<i32>(entity->aux_data);
+        if (!sys.loose_printer(id)) {
+            id = sys.claim_printer();
+            entity->aux_data = static_cast<u32>(id);
+        }
+        if (id != 0) {
+            sys.cables[CABLE_BUS].state = CableState::Plugged;
+            sys.bus_target = kBusTargetLoosePrinter;
+            sys.bus_printer = id;
+            cable_drag_ = -1;
+        }
+        break;
+    }
     case InteractAction::FuelCap:
         sys.fuel_cap_open = !sys.fuel_cap_open;
         break;
@@ -232,6 +291,11 @@ void Interact::perform(const InteractContext& ctx)
                                                    : item_for_part(target_part_);
         hands_.condition = slot.condition;
         hands_.aux = 0;
+        if (target_part_ == PART_TANK) {
+            hands_.aux = sys.stash_tank(sys.synth.tank);
+        } else if (target_part_ == PART_PRINTER) {
+            hands_.aux = sys.stash_installed_printer();
+        }
         slot.installed = false;
         if (target_part_ == PART_ANTENNA) {
             sys.cables[CABLE_COAX].reset();
@@ -247,8 +311,13 @@ void Interact::perform(const InteractContext& ctx)
         slot.condition = hands_.condition;
         if (target_part_ == PART_ANTENNA) {
             slot.variant = antenna_variant_for_item(hands_.kind);
+        } else if (target_part_ == PART_TANK) {
+            sys.fill_tank_from(hands_.aux, sys.synth.tank);
+        } else if (target_part_ == PART_PRINTER) {
+            sys.install_printer_from(hands_.aux);
         }
         hands_.kind = ITEM_NONE;
+        hands_.aux = 0;
         break;
     }
 
@@ -336,6 +405,7 @@ void Interact::perform(const InteractContext& ctx)
         }
         if (target_cable_ == static_cast<i32>(CABLE_BUS)) {
             sys.bus_target = kBusTargetCar;
+            sys.bus_printer = 0;
         }
         if (cable_drag_ == target_cable_) {
             cable_drag_ = -1;
@@ -358,9 +428,14 @@ void Interact::perform(const InteractContext& ctx)
         sys.wiper_mode = (sys.wiper_mode + 1) % 3;
         break;
 
-    case InteractAction::TakeRounds:
+    case InteractAction::TakeRounds: {
+        const Entity* entity = ctx.world->entity(target_entity_);
+        rounds_target_ = entity && static_cast<ItemKind>(entity->aux_kind) == ITEM_PRINTER
+                           ? -static_cast<i32>(entity->aux_data)
+                           : 0;
         rounds_request_ = true;
         break;
+    }
 
     case InteractAction::TapeInsert:
         sys.tape_inserted = hands_.aux;
@@ -628,36 +703,54 @@ void Interact::resolve_in_car(Candidate& best, const InteractBoxes& boxes,
     const Vec3 lever_center = boxes.box(IBOX_HANDBRAKE).center - com;
     const Vec3 lever_half = boxes.box(IBOX_HANDBRAKE).half;
     if (ray_vs_local_box(local, lever_center, lever_half, &t)) {
-        best.consider(t, InteractAction::Handbrake, lever_center, lever_half, false,
-                      sys.handbrake_latched ? "[E] release handbrake" : "[E] set handbrake");
+        if (ctx.is_driver) {
+            best.consider(t, InteractAction::Handbrake, lever_center, lever_half, false,
+                          sys.handbrake_latched ? "[E] release handbrake" : "[E] set handbrake");
+        } else {
+            best.consider(t, InteractAction::Info, lever_center, lever_half, false, kDriverOnly);
+        }
     }
 
     static constexpr const char* kWiperModes[3] = {"off", "interval", "full"};
     const Vec3 stalk_center = boxes.box(IBOX_WIPER).center - com;
     const Vec3 stalk_half = boxes.box(IBOX_WIPER).half;
     if (ray_vs_local_box(local, stalk_center, stalk_half, &t)) {
-        FixedString<96> prompt;
-        prompt.format("[E] wipers: %s", kWiperModes[sys.wiper_mode % 3]);
-        best.consider(t, InteractAction::Wipers, stalk_center, stalk_half, false, prompt.view());
+        if (ctx.is_driver) {
+            FixedString<96> prompt;
+            prompt.format("[E] wipers: %s", kWiperModes[sys.wiper_mode % 3]);
+            best.consider(t, InteractAction::Wipers, stalk_center, stalk_half, false, prompt.view());
+        } else {
+            best.consider(t, InteractAction::Info, stalk_center, stalk_half, false, kDriverOnly);
+        }
     }
 
     const Vec3 ign_center = boxes.box(IBOX_IGNITION).center - com;
     const Vec3 ign_half = boxes.box(IBOX_IGNITION).half;
     if (ray_vs_local_box(local, ign_center, ign_half, &t)) {
-        if (!sys.key_inserted) {
+        if (!ctx.is_driver) {
+            best.consider(t, InteractAction::Info, ign_center, ign_half, false, kDriverOnly);
+        } else if (!sys.key_inserted) {
             if (has_key_) {
                 best.consider(t, InteractAction::InsertKey, ign_center, ign_half, false,
-                              "[E] insert key");
+                              "[E] insert key  (or [I])");
             } else {
                 best.consider(t, InteractAction::Info, ign_center, ign_half, false,
                               "ignition - no key");
             }
         } else if (sys.engine_on) {
             best.consider(t, InteractAction::EngineOff, ign_center, ign_half, false,
-                          "[E] switch off");
+                          "[E] switch off  (or tap [I])");
         } else {
-            best.consider(t, InteractAction::Crank, ign_center, ign_half, false,
-                          "hold [E] turn key | [G] take key");
+            const StartBlocker blocker = sys.start_blocker();
+            if (blocker == StartBlocker::None) {
+                best.consider(t, InteractAction::Crank, ign_center, ign_half, false,
+                              "hold [E] turn key | [G] take key");
+            } else {
+                FixedString<96> prompt;
+                const std::string_view why = start_blocker_text(blocker);
+                prompt.format("hold [E] turn key - %.*s | [G] take key", static_cast<int>(why.size()), why.data());
+                best.consider(t, InteractAction::Crank, ign_center, ign_half, false, prompt.view());
+            }
         }
     }
 
@@ -761,6 +854,11 @@ void Interact::resolve_car_targets(Candidate& best, const InteractBoxes& boxes,
                 } else if (kind == PART_COMPUTER) {
                     prompt.format("tap [E] power | hold [E] take terminal (%.0f%%)",
                                   static_cast<f64>(slot.condition * 100.0f));
+                    taken = best.consider(t, InteractAction::RemovePart, center, def.socket_half,
+                                          true, prompt.view());
+                } else if (kind == PART_TANK && ctx.materials > 0) {
+                    prompt.format("tap [E] pour %u materials | hold [E] take tank (%u doses)", ctx.materials,
+                                  sys.synth.tank_total());
                     taken = best.consider(t, InteractAction::RemovePart, center, def.socket_half,
                                           true, prompt.view());
                 } else if (kind == PART_TANK) {
@@ -890,6 +988,12 @@ void Interact::resolve_car_targets(Candidate& best, const InteractBoxes& boxes,
     } else {
         const Vec3 edge_center = boxes.box(IBOX_TRUNK_EDGE).center - com;
         if (ray_vs_local_box(local, edge_center, boxes.box(IBOX_TRUNK_EDGE).half, &t)) {
+            if (ctx.materials > 0 && sys.parts[PART_TANK].installed && hands_.kind == ITEM_NONE) {
+                FixedString<96> pour;
+                pour.format("[E] pour %u materials into tank", ctx.materials);
+                best.consider(t, InteractAction::PourMaterials, edge_center, boxes.box(IBOX_TRUNK_EDGE).half,
+                              false, pour.view());
+            }
             best.consider(t + 0.1f, InteractAction::ToggleTrunk, edge_center,
                           boxes.box(IBOX_TRUNK_EDGE).half, false, "[E] close trunk");
         }
@@ -992,10 +1096,34 @@ void Interact::resolve_pickups(Candidate& best, const InteractBoxes& boxes,
                 || (sys.coax_target == kCoaxTargetCamera
                     && sys.cables[CABLE_COAX].state == CableState::Plugged));
 
+        const bool is_printer = pick_kind == ITEM_PRINTER;
+        const bool printer_business =
+            is_printer && (hands_.kind == ITEM_TANK || cable_drag_ == static_cast<i32>(CABLE_BUS));
         if ((hands_.kind != ITEM_NONE || cable_drag_ >= 0) && pick_kind != ITEM_KEY
             && !(is_computer && (sys.computer_on || hands_.kind == ITEM_FLOPPY))
-            && !(is_reel && cable_drag_ >= 0) && !coax_business) {
+            && !(is_reel && cable_drag_ >= 0) && !coax_business && !printer_business) {
             continue;
+        }
+
+        if (is_printer) {
+            const i32 id = static_cast<i32>(entity->aux_data);
+            Sphere jack;
+            jack.center = entity->pos + rotate(entity->rot, kLoosePrinterJackLocal);
+            jack.radius = 0.08f;
+            f32 jt = 0.0f;
+            if (ray_vs_sphere(ctx.view_ray, jack, kInteractRange, &jt)) {
+                if (sys.bus_on_loose_printer(id)) {
+                    if (best.consider(jt - 0.20f, InteractAction::CableUnplug, Vec3{}, Vec3{}, false,
+                                      "[E] unplug bus cable")) {
+                        best.cable = static_cast<i32>(CABLE_BUS);
+                    }
+                } else if (cable_drag_ == static_cast<i32>(CABLE_BUS)
+                           && best.consider(jt - 0.20f, InteractAction::CablePlugLoosePrinter, Vec3{}, Vec3{}, false,
+                                            "[E] connect bus to printer")) {
+                    best.entity = world.entities().handle_at(idx);
+                    best.cable = static_cast<i32>(CABLE_BUS);
+                }
+            }
         }
 
         if (is_computer) {
@@ -1092,6 +1220,61 @@ void Interact::resolve_pickups(Candidate& best, const InteractBoxes& boxes,
                                   prompt.view())) {
                     best.entity = world.entities().handle_at(idx);
                 }
+            }
+            continue;
+        }
+
+        if (pick_kind == ITEM_TANK && hands_.kind == ITEM_NONE) {
+            const LooseTank* tank = sys.loose_tank(static_cast<i32>(entity->aux_data));
+            const u32 doses = tank ? tank->total() : 0;
+            if (ctx.materials > 0) {
+                prompt.format("tap [E] pour %u materials | hold [E] take tank (%u doses)", ctx.materials, doses);
+            } else {
+                prompt.format("[E] take tank (%u doses)", doses);
+            }
+            if (best.consider(t, InteractAction::Pickup, Vec3{}, Vec3{}, ctx.materials > 0, prompt.view())) {
+                best.entity = world.entities().handle_at(idx);
+            }
+            continue;
+        }
+
+        if (pick_kind == ITEM_PRINTER) {
+            const LoosePrinter* printer = sys.loose_printer(static_cast<i32>(entity->aux_data));
+            bool considered = false;
+            if (cable_drag_ == static_cast<i32>(CABLE_BUS)) {
+                considered = best.consider(t, InteractAction::CablePlugLoosePrinter, Vec3{}, Vec3{}, false,
+                                           "[E] connect bus to printer");
+                if (considered) {
+                    best.cable = static_cast<i32>(CABLE_BUS);
+                }
+            } else if (hands_.kind == ITEM_TANK) {
+                if (printer && printer->has_tank) {
+                    best.consider(t, InteractAction::Info, Vec3{}, Vec3{}, false, "printer already has a tank");
+                } else {
+                    considered = best.consider(t, InteractAction::PlaceTankOnPrinter, Vec3{}, Vec3{}, false,
+                                               "[E] put tank on printer");
+                }
+            } else if (hands_.kind != ITEM_NONE) {
+                continue;
+            } else if (printer && printer->bay.tray_total() > 0) {
+                prompt.format("[E] take %u rounds from the printer", printer->bay.tray_total());
+                considered = best.consider(t, InteractAction::TakeRounds, Vec3{}, Vec3{}, false, prompt.view());
+            } else if (printer && printer->has_tank) {
+                if (ctx.materials > 0) {
+                    prompt.format("tap [E] pour %u materials | hold [E] take tank (%u doses)", ctx.materials,
+                                  printer->bay.tank_total());
+                } else {
+                    prompt.format("hold [E] take tank off the printer (%u doses)", printer->bay.tank_total());
+                }
+                considered = best.consider(t, InteractAction::TakeTankOffPrinter, Vec3{}, Vec3{}, true, prompt.view());
+            } else {
+                const std::string_view iname = item_name(pick_kind);
+                prompt.format("[E] take %.*s (%.0f%%)", static_cast<int>(iname.size()), iname.data(),
+                              static_cast<f64>(entity->aux_value * 100.0f));
+                considered = best.consider(t, InteractAction::Pickup, Vec3{}, Vec3{}, false, prompt.view());
+            }
+            if (considered) {
+                best.entity = world.entities().handle_at(idx);
             }
             continue;
         }
@@ -1240,7 +1423,7 @@ void Interact::update(const InteractBoxes& boxes, const InteractContext& ctx, f3
 
     if (best.action == InteractAction::TapeEject && best.is_hold) {
         if (!ctx.e_down) {
-            if (press_latch_ && hold_time_ > 0.0f) {
+            if (press_latch_ && hold_time_ > 0.0f && !ctx.preview) {
                 ctx.sys->deck_play = !ctx.sys->deck_play;
             }
             press_latch_ = false;
@@ -1285,15 +1468,36 @@ void Interact::update(const InteractBoxes& boxes, const InteractContext& ctx, f3
                 }
             }
         } else {
-            if (press_latch_ && hold_time_ > 0.0f && best.action == InteractAction::Pickup) {
+            if (press_latch_ && hold_time_ > 0.0f && best.action == InteractAction::Pickup && !ctx.preview) {
                 const Entity* entity = ctx.world->entity(best.entity);
                 if (entity && static_cast<ItemKind>(entity->aux_kind) == ITEM_COMPUTER) {
                     ctx.sys->computer_on = true;
                 }
             }
             if (press_latch_ && hold_time_ > 0.0f && best.action == InteractAction::RemovePart
-                && best.part == PART_COMPUTER) {
+                && best.part == PART_COMPUTER && !ctx.preview) {
                 ctx.sys->computer_on = !ctx.sys->computer_on;
+            }
+            if (press_latch_ && hold_time_ > 0.0f && ctx.materials > 0 && !ctx.preview) {
+                Entity* entity = ctx.world->entity(best.entity);
+                const ItemKind kind = entity ? static_cast<ItemKind>(entity->aux_kind) : ITEM_NONE;
+                if (best.action == InteractAction::RemovePart && best.part == PART_TANK) {
+                    pour_target_ = 0;
+                    pour_request_ = true;
+                } else if (best.action == InteractAction::Pickup && kind == ITEM_TANK) {
+                    i32 id = static_cast<i32>(entity->aux_data);
+                    if (!ctx.sys->loose_tank(id)) {
+                        id = ctx.sys->claim_tank();
+                        entity->aux_data = static_cast<u32>(id);
+                    }
+                    if (id != 0) {
+                        pour_target_ = id;
+                        pour_request_ = true;
+                    }
+                } else if (best.action == InteractAction::TakeTankOffPrinter && kind == ITEM_PRINTER) {
+                    pour_target_ = -static_cast<i32>(entity->aux_data);
+                    pour_request_ = true;
+                }
             }
             hold_time_ = 0.0f;
             press_latch_ = false;

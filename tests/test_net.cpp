@@ -140,6 +140,24 @@ TEST(net, edges_travel_reliably_and_the_rest_continuously)
     net::mergeEdges(merged, cmd);
     CHECK(merged.use_pressed);
     CHECK_NEAR(merged.throttle, 0.7f, 1e-6);
+
+    PlayerCommand car;
+    car.horn = true;
+    CHECK(!net::hasEdges(car));
+    car.handbrake_toggle = true;
+    CHECK(net::hasEdges(car));
+    car.handbrake_toggle = false;
+    car.ignition_tap = true;
+    CHECK(net::hasEdges(car));
+    car.wipers_cycle = true;
+    const PlayerCommand car_steady = net::continuousPart(car);
+    CHECK(!car_steady.ignition_tap);
+    CHECK(!car_steady.wipers_cycle);
+    CHECK(car_steady.horn);
+    PlayerCommand car_merged = car_steady;
+    net::mergeEdges(car_merged, car);
+    CHECK(car_merged.ignition_tap);
+    CHECK(car_merged.wipers_cycle);
 }
 
 TEST(net, a_world_snapshot_survives_the_wire)
@@ -243,6 +261,37 @@ TEST(net, the_client_follows_the_host_into_an_arena_and_back)
     CHECK(csim.has_car());
 }
 
+TEST(net, a_client_joining_a_host_already_in_an_arena_gets_the_arena_kit)
+{
+    Pair pair;
+    if (!pair.host.setup() || !pair.client.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    CHECK(pair.host.sim->switch_scene(scene_index("yard")));
+    pair.host.step(PlayerCommand{});
+    auto h = ghost::engine::loopbackHost();
+    auto c = ghost::engine::loopbackClient(*h);
+    pair.host.net.attach(std::move(h), NetSession::Role::Host, *pair.host.sim, "Host");
+    pair.client.net.attach(std::move(c), NetSession::Role::Client, *pair.client.sim, "Guest");
+    pair.run(PlayerCommand{}, PlayerCommand{}, 8);
+    CHECK(pair.client.net.welcomed());
+    pair.run(pair.idle(pair.host), pair.idle(pair.client), 12);
+
+    Sim& csim = *pair.client.sim;
+    CHECK(csim.player_rules().arena);
+    const PlayerSlot* mine = csim.slot(pair.client.me());
+    const PlayerSlot* hosts = pair.host.sim->slot(0);
+    CHECK(mine != nullptr);
+    CHECK(hosts != nullptr);
+    if (!mine || !hosts) {
+        return;
+    }
+    CHECK(mine->gun.pouch.count(ghost::game::kPlainElement) == 30);
+    CHECK(mine->gun.pouch.total() == hosts->gun.pouch.total());
+    CHECK(pair.host.sim->slot(pair.client.me())->gun.pouch.total() == hosts->gun.pouch.total());
+}
+
 TEST(net, printed_rounds_a_client_takes_land_in_their_own_pouch)
 {
     Pair pair;
@@ -255,7 +304,7 @@ TEST(net, printed_rounds_a_client_takes_land_in_their_own_pouch)
     const ghost::game::ElementId fire = hsim.gameplay().ammo().element("fire");
     hsim.carsys().synth.tray[fire] = 5;
     const int before = csim.slot(pair.client.me())->gun.pouch.count(fire);
-    hsim.take_tray(*hsim.slot(pair.client.me()));
+    hsim.take_tray(*hsim.slot(pair.client.me()), 0);
     pair.run(pair.idle(pair.host), pair.idle(pair.client), 10);
     CHECK(csim.slot(pair.client.me())->gun.pouch.count(fire) == before + 5);
     CHECK(hsim.carsys().synth.tray_total() == 0u);

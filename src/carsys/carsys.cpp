@@ -10,6 +10,8 @@ constexpr f32 kColdCrankExtra = 1.1f;
 constexpr f32 kImpactAccelThreshold = 110.0f;
 constexpr f32 kImpactSeverityScale = 0.0022f;
 constexpr f32 kImpactCooldown = 0.25f;
+constexpr f32 kStallNotice = 3.0f;
+constexpr f32 kStarterMinCharge = 0.12f;
 constexpr f32 kOverrevDmgPerS = 0.02f;
 constexpr f32 kCrankRpm = 350.0f;
 constexpr f32 kBumpStartRpm = 250.0f;
@@ -220,6 +222,50 @@ void CarSys::stop_engine()
     crank_timer = 0.0f;
 }
 
+StartBlocker CarSys::start_blocker() const
+{
+    if (engine_on) {
+        return StartBlocker::Running;
+    }
+    if (!key_inserted) {
+        return StartBlocker::NoKey;
+    }
+    if (fluids.fuel <= 0.0f) {
+        return StartBlocker::NoFuel;
+    }
+    if (parts[PART_ENGINE].condition <= 0.02f) {
+        return StartBlocker::EngineDead;
+    }
+    if (elec.battery_charge <= kStarterMinCharge) {
+        return StartBlocker::BatteryFlat;
+    }
+    if (!parts[PART_BATTERY].installed) {
+        return StartBlocker::StarterUnpowered;
+    }
+    return StartBlocker::None;
+}
+
+std::string_view start_blocker_text(StartBlocker blocker)
+{
+    switch (blocker) {
+    case StartBlocker::NoKey:
+        return "no key";
+    case StartBlocker::NoFuel:
+        return "no fuel";
+    case StartBlocker::EngineDead:
+        return "engine dead";
+    case StartBlocker::BatteryFlat:
+        return "battery flat";
+    case StartBlocker::StarterUnpowered:
+        return "starter unpowered";
+    case StartBlocker::Running:
+        return "running";
+    case StartBlocker::None:
+        break;
+    }
+    return "";
+}
+
 void CarSys::detect_impacts(Vehicle& veh, const RigidBody& body, Vec3 dv, f32 dt)
 {
     impact_cooldown = f_max(impact_cooldown - dt, 0.0f);
@@ -230,6 +276,7 @@ void CarSys::detect_impacts(Vehicle& veh, const RigidBody& body, Vec3 dv, f32 dt
     impact_cooldown = kImpactCooldown;
     const f32 severity = (accel - kImpactAccelThreshold) * kImpactSeverityScale;
     last_impact_severity = severity;
+    impact_serial++;
 
     const Vec3 dir_local = rotate(conjugate(body.rot), normalize(-dv));
     const Vec3 he = veh.config().half_extents;
@@ -239,15 +286,166 @@ void CarSys::detect_impacts(Vehicle& veh, const RigidBody& body, Vec3 dv, f32 dt
     parts_apply_impact(parts, point + veh.config().com_offset, severity);
 }
 
+namespace {
+
+void move_print_job(SynthBay& to, SynthBay& from)
+{
+    for (u32 e = 0; e < kSynthElements; e++) {
+        to.tray[e] = from.tray[e];
+        from.tray[e] = 0;
+    }
+    to.job_element = from.job_element;
+    to.job_total = from.job_total;
+    to.job_left = from.job_left;
+    to.progress = from.progress;
+    to.stalled = false;
+    from.job_element = -1;
+    from.job_total = 0;
+    from.job_left = 0;
+    from.progress = 0.0f;
+    from.stalled = false;
+}
+
+}
+
+i32 CarSys::claim_tank()
+{
+    for (u32 i = 0; i < kLooseTanks; i++) {
+        if (!loose_tanks[i].used) {
+            loose_tanks[i] = LooseTank{};
+            loose_tanks[i].used = true;
+            return static_cast<i32>(i + 1);
+        }
+    }
+    return 0;
+}
+
+i32 CarSys::claim_printer()
+{
+    for (u32 i = 0; i < kLoosePrinters; i++) {
+        if (!loose_printers[i].used) {
+            loose_printers[i] = LoosePrinter{};
+            loose_printers[i].used = true;
+            return static_cast<i32>(i + 1);
+        }
+    }
+    return 0;
+}
+
+LooseTank* CarSys::loose_tank(i32 id)
+{
+    return id >= 1 && id <= static_cast<i32>(kLooseTanks) && loose_tanks[id - 1].used ? &loose_tanks[id - 1] : nullptr;
+}
+
+const LooseTank* CarSys::loose_tank(i32 id) const
+{
+    return id >= 1 && id <= static_cast<i32>(kLooseTanks) && loose_tanks[id - 1].used ? &loose_tanks[id - 1] : nullptr;
+}
+
+LoosePrinter* CarSys::loose_printer(i32 id)
+{
+    return id >= 1 && id <= static_cast<i32>(kLoosePrinters) && loose_printers[id - 1].used ? &loose_printers[id - 1]
+                                                                                            : nullptr;
+}
+
+const LoosePrinter* CarSys::loose_printer(i32 id) const
+{
+    return id >= 1 && id <= static_cast<i32>(kLoosePrinters) && loose_printers[id - 1].used ? &loose_printers[id - 1]
+                                                                                            : nullptr;
+}
+
+i32 CarSys::stash_tank(u16* doses)
+{
+    const i32 id = claim_tank();
+    LooseTank* tank = loose_tank(id);
+    for (u32 m = 0; m < kSynthMaterials; m++) {
+        if (tank) {
+            tank->doses[m] = doses[m];
+        }
+        doses[m] = 0;
+    }
+    return id;
+}
+
+void CarSys::fill_tank_from(i32 id, u16* doses)
+{
+    LooseTank* tank = loose_tank(id);
+    for (u32 m = 0; m < kSynthMaterials; m++) {
+        doses[m] = tank ? tank->doses[m] : 0;
+    }
+    if (tank) {
+        tank->used = false;
+    }
+}
+
+i32 CarSys::stash_installed_printer()
+{
+    const i32 id = claim_printer();
+    if (LoosePrinter* printer = loose_printer(id)) {
+        move_print_job(printer->bay, synth);
+    }
+    return id;
+}
+
+void CarSys::install_printer_from(i32 id)
+{
+    LoosePrinter* printer = loose_printer(id);
+    if (!printer) {
+        return;
+    }
+    move_print_job(synth, printer->bay);
+    if (printer->has_tank && !parts[PART_TANK].installed) {
+        parts[PART_TANK].installed = true;
+        parts[PART_TANK].condition = printer->tank_condition;
+        for (u32 m = 0; m < kSynthMaterials; m++) {
+            synth.tank[m] = printer->bay.tank[m];
+        }
+    }
+    printer->used = false;
+}
+
+bool CarSys::bus_on_loose_printer(i32 id) const
+{
+    return id != 0 && bus_target == kBusTargetLoosePrinter && bus_printer == id
+        && cables[CABLE_BUS].state == CableState::Plugged;
+}
+
+SynthBay* CarSys::bus_bay(bool& has_tank, bool& has_printer)
+{
+    if (bus_target == kBusTargetLoosePrinter) {
+        LoosePrinter* printer = loose_printer(bus_printer);
+        has_printer = printer != nullptr;
+        has_tank = printer && printer->has_tank;
+        return printer ? &printer->bay : nullptr;
+    }
+    has_printer = parts[PART_PRINTER].installed;
+    has_tank = parts[PART_TANK].installed;
+    return &synth;
+}
+
+const SynthBay* CarSys::bus_bay(bool& has_tank, bool& has_printer) const
+{
+    return const_cast<CarSys*>(this)->bus_bay(has_tank, has_printer);
+}
+
 void CarSys::synth_tick(const SynthTuning& tuning, f32 dt)
 {
-    SynthBay& s = synth;
+    tick_bay(synth, parts[PART_PRINTER].installed, tuning, dt);
+    for (u32 i = 0; i < kLoosePrinters; i++) {
+        if (loose_printers[i].used) {
+            tick_bay(loose_printers[i].bay, bus_on_loose_printer(static_cast<i32>(i + 1)), tuning, dt);
+        }
+    }
+}
+
+void CarSys::tick_bay(SynthBay& s, bool present, const SynthTuning& tuning, f32 dt)
+{
     s.stalled = false;
     if (s.job_left == 0 || s.job_element < 0) {
         s.progress = 0.0f;
         return;
     }
-    if (!parts[PART_PRINTER].installed || s.tray_total() >= tuning.tray_max || elec.battery_charge < tuning.min_battery) {
+    if (!present || s.tray_total() >= tuning.tray_max || elec.battery_charge < tuning.min_battery) {
         s.stalled = true;
         return;
     }
@@ -357,10 +555,12 @@ void CarSys::tick(Vehicle& veh, PhysWorld& world, f32 dt)
         crank_hold = 0.0f;
     }
 
+    stall_notice = f_max(stall_notice - dt, 0.0f);
     if (engine_on) {
         if (!can_run() || !elec.powered[CONSUMER_FUEL_PUMP]
             || !elec.powered[CONSUMER_IGNITION]) {
             engine_on = false;
+            stall_notice = kStallNotice;
         }
     }
 

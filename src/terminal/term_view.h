@@ -13,6 +13,7 @@ struct AmmoData;
 namespace anom {
 
 class CarSys;
+struct SynthBay;
 class PhysWorld;
 class Terrain;
 class Vehicle;
@@ -56,6 +57,9 @@ struct TermView {
     bool coax_camera = false;
     bool bus_tower = false;
     bool bus_printer = false;
+    const SynthBay* synth_bay = nullptr;
+    bool synth_tank = false;
+    bool synth_printer = false;
     bool tower_breached = false;
     Vec3 tower_pos;
 };

@@ -3,13 +3,16 @@
 #include "assets/mesh_data.h"
 #include "core/arena.h"
 #include "core/log.h"
+#include "engine/physics/physics_world.h"
 #include "physics/heightfield.h"
 #include "physics/world.h"
+#include "vehicle/surface.h"
 #include "vehicle/tire.h"
 #include "vehicle/vehicle_config.h"
 #include "vehicle/vehicle.h"
 
 #include <cmath>
+#include <cstring>
 
 using namespace anom;
 
@@ -31,16 +34,44 @@ Heightfield make_flat(Arena& arena, u32 size = 128, f32 cell = 2.0f)
     return hf;
 }
 
+Heightfield make_ramp(Arena& arena, u32 size, f32 cell, f32 start_z, f32 slope_deg)
+{
+    constexpr f32 kBlend = 4.0f;
+    Heightfield hf;
+    hf.alloc(arena, size, cell);
+    const f32 rise = std::tan(slope_deg * kDegToRad);
+    for (u32 z = 0; z < size; z++) {
+        const f32 world_z = hf.origin().z + static_cast<f32>(z) * cell;
+        const f32 d = f_max(start_z - world_z, 0.0f);
+        const f32 h = d < kBlend ? rise * d * d / (2.0f * kBlend) : rise * (d - kBlend * 0.5f);
+        for (u32 x = 0; x < size; x++) {
+            hf.set_height(x, z, h);
+        }
+    }
+    hf.recompute_extents();
+    return hf;
+}
+
 struct Rig {
     Arena arena{megabytes(64)};
     Heightfield hf;
     PhysWorld world;
+    ghost::engine::PhysicsWorld jolt;
     Vehicle car;
 
     bool setup(u32 size = 128, f32 cell = 2.0f)
     {
         hf = make_flat(arena, size, cell);
         world.init(arena, &hf);
+        world.set_jolt(&jolt);
+        return car.init(world, arena, kCarPath, Vec3{0.0f, 1.0f, 0.0f}, 0.0f);
+    }
+
+    bool setup_ramp(f32 slope_deg)
+    {
+        hf = make_ramp(arena, 256, 0.5f, -8.0f, slope_deg);
+        world.init(arena, &hf);
+        world.set_jolt(&jolt);
         return car.init(world, arena, kCarPath, Vec3{0.0f, 1.0f, 0.0f}, 0.0f);
     }
 
@@ -237,6 +268,117 @@ TEST(vehicle, drive_is_deterministic)
     CHECK(speed_a == speed_b);
 }
 
+namespace {
+f32 expected_lock(const Rig& rig)
+{
+    const VehicleConfig& cfg = rig.car.config();
+    const f32 speed = f_abs(rig.car.forward_speed(rig.world));
+    return f_remap(speed, 0.0f, cfg.steer_high_speed, cfg.steer_max_deg, cfg.steer_high_deg);
+}
+
+i32 ticks_to_lock(Rig& rig, f32 throttle)
+{
+    i32 ticks = 0;
+    while (ticks < 240 && f_abs(rig.car.steer_deg()) < 0.95f * expected_lock(rig)) {
+        rig.step(throttle, 0.0f, 1.0f, false, 1);
+        ticks++;
+    }
+    return ticks;
+}
+}
+
+TEST(vehicle, steering_turns_in_slower_at_speed)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    const i32 slow = ticks_to_lock(rig, 0.0f);
+    rig.step(0.0f, 0.0f, 0.0f, false, 120);
+    rig.step(1.0f, 0.0f, 0.0f, false, 900);
+    CHECK(f_abs(rig.car.forward_speed(rig.world)) > 18.0f);
+    const i32 fast = ticks_to_lock(rig, 1.0f);
+    CHECK(slow > 0);
+    CHECK(fast * 2 > slow * 3);
+    CHECK(fast < 240);
+}
+
+TEST(vehicle, steering_returns_to_centre_faster_than_it_turns_in)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    const i32 in = ticks_to_lock(rig, 0.0f);
+    i32 out = 0;
+    while (out < 240 && f_abs(rig.car.steer_deg()) > 0.05f * expected_lock(rig)) {
+        rig.step(0.0f, 0.0f, 0.0f, false, 1);
+        out++;
+    }
+    CHECK(in > 0);
+    CHECK(out > 0);
+    CHECK(out < in);
+}
+
+TEST(vehicle, steering_lock_ignores_vertical_speed)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    rig.step(0.0f, 0.0f, 1.0f, false, 120);
+    const f32 lock = f_abs(rig.car.steer_deg());
+    CHECK(lock > 30.0f);
+    rig.world.body(rig.car.body())->vel = Vec3{0.0f, 12.0f, 0.0f};
+    rig.step(0.0f, 0.0f, 1.0f, false, 1);
+    CHECK_NEAR(f_abs(rig.car.steer_deg()), lock, 0.5);
+}
+
+TEST(vehicle, grass_grips_less_than_road_and_rain_stacks_on_top)
+{
+    CHECK_NEAR(surface_grip_mul(1.0f, 0.0f, 0.8f), 1.0f, 1e-6);
+    CHECK_NEAR(surface_grip_mul(0.0f, 0.0f, 0.8f), 0.8f, 1e-6);
+    CHECK(surface_grip_mul(0.5f, 0.0f, 0.8f) > 0.8f);
+    CHECK(surface_grip_mul(0.5f, 0.0f, 0.8f) < 1.0f);
+    CHECK_NEAR(surface_grip_mul(1.0f, 1.0f, 0.8f), 0.76f, 1e-6);
+    CHECK_NEAR(surface_grip_mul(0.0f, 1.0f, 0.8f), 0.8f * 0.6f, 1e-6);
+    CHECK(surface_grip_mul(0.0f, 0.5f, 0.8f) < surface_grip_mul(1.0f, 0.5f, 0.8f));
+    CHECK_NEAR(surface_rolling_mul(1.0f, 2.2f), 1.0f, 1e-6);
+    CHECK_NEAR(surface_rolling_mul(0.0f, 2.2f), 2.2f, 1e-6);
+}
+
+TEST(vehicle, offroad_rolling_resistance_shortens_the_coast)
+{
+    const auto coast = [](f32 rolling_mul) {
+        Rig rig;
+        rig.setup(512, 8.0f);
+        rig.step(0.0f, 0.0f, 0.0f, false, 240);
+        rig.car.train().gear = 0;
+        rig.car.train().manual = true;
+        rig.world.body(rig.car.body())->vel = rotate(rig.body().rot, Vec3{0.0f, 0.0f, -15.0f});
+        const Vec3 start = rig.body().pos;
+        for (i32 i = 0; i < 1200; i++) {
+            rig.car.effects().rolling_resist_mul = rolling_mul;
+            rig.step(0.0f, 0.0f, 0.0f, false, 1);
+        }
+        return distance(rig.body().pos, start);
+    };
+    const f32 road = coast(1.0f);
+    const f32 grass = coast(4.0f);
+    CHECK(road > 40.0f);
+    CHECK(grass < road - 5.0f);
+    CHECK(grass < road * 0.92f);
+}
+
+TEST(vehicle, wheels_remember_their_previous_compression)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    const f32 compression = rig.car.wheel(0).compression;
+    const f32 spin = rig.car.wheel(2).spin_angle;
+    rig.step(1.0f, 0.0f, 0.0f, false, 1);
+    CHECK(rig.car.wheel(0).prev_compression == compression);
+    CHECK(rig.car.wheel(2).prev_spin_angle == spin);
+}
+
 TEST(drivetrain, torque_curve_interpolates_and_clamps)
 {
     VehicleConfig cfg;
@@ -384,6 +526,7 @@ f32 split_mu_launch(f32 diff_lock, f32& out_spin_delta)
         return 0.0f;
     }
     rig.car.config().diff_lock = diff_lock;
+    rig.car.config().tc_strength = 0.0f;
     rig.step(0.0f, 0.0f, 0.0f, false, 240);
     rig.car.effects().tire_grip_mul[WHEEL_RL] = 0.03f;
     rig.step(1.0f, 0.0f, 0.0f, false, 360);
@@ -477,14 +620,20 @@ TEST(tire, the_trail_settles_the_car_into_a_tighter_yaw_rate)
 {
     const auto yaw_rate = [](bool trail) {
         Rig rig;
-        rig.setup();
+        rig.setup(512, 8.0f);
         if (!trail) {
             rig.car.config().tire_pneumatic_trail = 0.0f;
             rig.car.config().tire_mech_trail = 0.0f;
         }
         rig.step(0.0f, 0.0f, 0.0f, false, 240);
-        rig.step(0.35f, 0.0f, 0.6f, false, 600);
-        return f_abs(rig.body().angular_vel.y);
+        rig.step(1.0f, 0.0f, 0.0f, false, 420);
+        rig.step(0.35f, 0.0f, 0.6f, false, 360);
+        f32 sum = 0.0f;
+        for (i32 i = 0; i < 240; i++) {
+            rig.step(0.35f, 0.0f, 0.6f, false, 1);
+            sum += f_abs(rig.body().angular_vel.y);
+        }
+        return sum / 240.0f;
     };
 
     CHECK(yaw_rate(true) < yaw_rate(false));
@@ -513,11 +662,12 @@ TEST(differential, a_partial_lock_lands_between_open_and_locked)
     f32 open_delta = 0.0f;
     f32 partial_delta = 0.0f;
     f32 locked_delta = 0.0f;
-    split_mu_launch(0.0f, open_delta);
-    split_mu_launch(0.25f, partial_delta);
-    split_mu_launch(1.0f, locked_delta);
+    const f32 open_speed = split_mu_launch(0.0f, open_delta);
+    const f32 partial_speed = split_mu_launch(0.25f, partial_delta);
+    const f32 locked_speed = split_mu_launch(1.0f, locked_delta);
 
-    CHECK(partial_delta < open_delta);
+    CHECK(partial_speed > open_speed);
+    CHECK(partial_speed < locked_speed);
     CHECK(partial_delta >= locked_delta);
 }
 
@@ -572,10 +722,9 @@ TEST(suspension, the_chassis_proxy_rides_clear_of_the_contact_patches)
     const RigidBody* body = rig.world.body(rig.car.body());
     CHECK(body != nullptr);
 
-    f32 lowest_sphere = 1.0e9f;
-    for (u32 i = 0; i < body->sphere_count; i++) {
-        lowest_sphere = f_min(lowest_sphere, body->sphere_offsets[i].y - body->sphere_radius);
-    }
+    const BodyDesc& desc = rig.car.body_desc();
+    const f32 lowest_sphere = desc.box_offset.y - desc.half_extents.y;
+    CHECK(body->jolt_id != kNoJoltBody);
 
     const VehicleConfig& cfg = rig.car.config();
     f32 lowest_tread = 1.0e9f;
@@ -709,15 +858,20 @@ TEST(handling, the_underside_stays_clear_over_a_crest)
         }
     }
     rig.hf.recompute_extents();
+    rig.world.sync_jolt();
 
     rig.step(0.0f, 0.0f, 0.0f, false, 240);
     f32 worst = 1.0e9f;
+    const BodyDesc& desc = rig.car.body_desc();
     for (i32 i = 0; i < 900; i++) {
         rig.step(0.5f, 0.0f, 0.0f, false, 1);
         const RigidBody& b = rig.body();
-        for (u32 s = 0; s < b.sphere_count; s++) {
-            const Vec3 w = b.pos + rotate(b.rot, b.sphere_offsets[s]);
-            worst = f_min(worst, (w.y - b.sphere_radius) - rig.hf.sample(w.x, w.z));
+        for (u32 s = 0; s < 4; s++) {
+            const Vec3 corner{(s & 1) ? desc.half_extents.x : -desc.half_extents.x,
+                              -desc.half_extents.y,
+                              (s & 2) ? desc.half_extents.z : -desc.half_extents.z};
+            const Vec3 w = b.pos + rotate(b.rot, desc.box_offset + corner);
+            worst = f_min(worst, w.y - rig.hf.sample(w.x, w.z));
         }
     }
     CHECK(worst > 0.0f);
@@ -870,6 +1024,46 @@ TEST(drivetrain, kickdown_never_drops_into_a_gear_past_the_shift_point)
     }
 }
 
+TEST(drivetrain, a_third_throttle_launch_does_not_judder)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+
+    f32 worst_slip = 0.0f;
+    f32 worst_tc = 0.0f;
+    for (i32 i = 0; i < 600; i++) {
+        rig.step(0.35f, 0.0f, 0.0f, false, 1);
+        if (i >= 360) {
+            worst_slip = f_max(worst_slip, f_abs(rig.car.wheel(WHEEL_RL).slip_ratio));
+            worst_tc = f_max(worst_tc, rig.car.train().tc_cut);
+        }
+    }
+    CHECK(worst_slip < 0.15f);
+    CHECK(worst_tc < 0.05f);
+    CHECK(rig.car.forward_speed(rig.world) > 4.0f);
+}
+
+TEST(drivetrain, idle_creep_is_gentle)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 840);
+    const f32 speed = rig.car.forward_speed(rig.world);
+    CHECK(speed > 0.2f);
+    CHECK(speed < 2.3f);
+}
+
+TEST(drivetrain, a_light_brake_holds_against_creep)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.3f, 0.0f, false, 600);
+    CHECK(f_abs(rig.car.forward_speed(rig.world)) < 0.05f);
+    CHECK(rig.car.train().brake_hold);
+    CHECK(rig.car.train().engine_omega > 0.0f);
+}
+
 TEST(drivetrain, traction_control_does_not_strangle_a_launch)
 {
     Rig rig;
@@ -882,4 +1076,204 @@ TEST(drivetrain, traction_control_does_not_strangle_a_launch)
         ticks++;
     }
     CHECK(static_cast<f32>(ticks) * kDt < 4.5f);
+}
+
+namespace {
+void hash_f32(u64& h, f32 v)
+{
+    u32 bits;
+    std::memcpy(&bits, &v, sizeof(bits));
+    h ^= bits;
+    h *= 1099511628211ull;
+}
+
+void hash_vec(u64& h, Vec3 v)
+{
+    hash_f32(h, v.x);
+    hash_f32(h, v.y);
+    hash_f32(h, v.z);
+}
+}
+
+TEST(vehicle, the_chassis_stops_against_a_static_prop)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.world.add_static_box(Vec3{0.0f, 1.5f, -14.0f}, Vec3{3.0f, 1.5f, 1.0f}, 0);
+    rig.world.statics_build(rig.arena);
+
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    rig.step(1.0f, 0.0f, 0.0f, false, 600);
+
+    const RigidBody& body = rig.body();
+    CHECK(body_state_valid(body));
+    CHECK(body.pos.z > -13.0f + rig.car.config().half_extents.z - 0.3f);
+    CHECK(length(body.vel) < 2.0f);
+    CHECK(dot(rotate(body.rot, Vec3{0.0f, 1.0f, 0.0f}), Vec3{0.0f, 1.0f, 0.0f}) > 0.9f);
+}
+
+TEST(vehicle, wheel_rays_see_a_static_box)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.world.add_static_box(Vec3{0.0f, 0.75f, 0.0f}, Vec3{6.0f, 0.75f, 6.0f}, 0);
+    rig.world.statics_build(rig.arena);
+    rig.car.teleport(rig.world, Vec3{0.0f, 2.5f, 0.0f}, 0.0f);
+
+    rig.step(0.0f, 1.0f, 0.0f, true, 480);
+
+    for (u32 i = 0; i < kWheelCount; i++) {
+        CHECK(rig.car.wheel(i).grounded);
+        CHECK(rig.car.wheel(i).contact_point.y > 1.4f);
+    }
+    CHECK(rig.body().pos.y > 1.5f);
+    CHECK(length(rig.body().vel) < 0.1f);
+}
+
+TEST(vehicle, a_config_reload_resizes_the_chassis)
+{
+    Rig rig;
+    CHECK(rig.setup());
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+
+    RigidBody* body = rig.world.body(rig.car.body());
+    const u32 before = body->jolt_id;
+    const f32 mass = rig.car.config().mass * 1.5f;
+    rig.car.config().mass = mass;
+    rig.car.config().half_extents.y += 0.1f;
+    body->vel = Vec3{0.0f, 0.0f, -3.0f};
+    rig.car.apply_config(rig.world);
+
+    CHECK(body->jolt_id != before);
+    CHECK_NEAR(body->inv_mass, 1.0f / mass, 1e-6);
+    CHECK_NEAR(rig.car.body_desc().mass, mass, 1e-6);
+    CHECK(rig.world.jolt()->dynamicCount() == 1);
+
+    rig.step(0.0f, 0.0f, 0.0f, false, 1);
+    CHECK(body->vel.z < -2.5f);
+    CHECK(body->vel.z > -3.5f);
+
+    rig.car.apply_config(rig.world);
+    CHECK(body->jolt_id == rig.world.body(rig.car.body())->jolt_id);
+}
+
+TEST(vehicle, driving_through_props_and_pickups_is_bit_identical)
+{
+    u64 sums[2] = {14695981039346656037ull, 14695981039346656037ull};
+    for (u32 pass = 0; pass < 2; pass++) {
+        Rig rig;
+        CHECK(rig.setup());
+        rig.world.add_static_box(Vec3{1.2f, 0.5f, -20.0f}, Vec3{0.5f, 0.5f, 0.5f}, 0);
+        rig.world.statics_build(rig.arena);
+        const auto crate = rig.world.jolt()->addDynamicBox(glm::vec3(-0.3f, 0.3f, -9.0f), glm::vec3(0.25f), 6.0f, 0);
+
+        rig.step(0.0f, 0.0f, 0.0f, false, 120);
+        rig.step(1.0f, 0.0f, 0.08f, false, 480);
+        rig.step(0.0f, 1.0f, -0.2f, false, 240);
+
+        const RigidBody& body = rig.body();
+        hash_vec(sums[pass], body.pos);
+        hash_vec(sums[pass], body.vel);
+        hash_vec(sums[pass], body.angular_vel);
+        hash_f32(sums[pass], body.rot.x);
+        hash_f32(sums[pass], body.rot.y);
+        hash_f32(sums[pass], body.rot.z);
+        hash_f32(sums[pass], body.rot.w);
+        for (u32 i = 0; i < kWheelCount; i++) {
+            hash_f32(sums[pass], rig.car.wheel(i).omega);
+        }
+        const ghost::engine::BodyState c = rig.world.jolt()->state(crate);
+        hash_f32(sums[pass], c.position.x);
+        hash_f32(sums[pass], c.position.y);
+        hash_f32(sums[pass], c.position.z);
+        CHECK(body_state_valid(body));
+        CHECK(body.pos.z < -8.0f);
+    }
+    CHECK(sums[0] == sums[1]);
+}
+
+namespace {
+f32 signed_slip_deg(const Rig& rig)
+{
+    const RigidBody& b = rig.body();
+    const Vec3 v = rotate(conjugate(b.rot), b.vel);
+    if (std::sqrt(v.x * v.x + v.z * v.z) < 1.0f) {
+        return 0.0f;
+    }
+    return std::atan2(v.x, f_abs(v.z)) * kRadToDeg;
+}
+
+struct Climb {
+    f32 height = 0.0f;
+    f32 rear_slip = 0.0f;
+};
+
+Climb climb(f32 slope_deg, f32 grip, f32 fixed_throttle, f32 seconds)
+{
+    Rig rig;
+    if (!rig.setup_ramp(slope_deg)) {
+        return Climb{};
+    }
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    const f32 ground = rig.body().pos.y;
+    const f32 throttle = fixed_throttle;
+    Climb out;
+    f32 slip_sum = 0.0f;
+    i32 slip_ticks = 0;
+    const i32 ticks = static_cast<i32>(seconds / kDt);
+    for (i32 i = 0; i < ticks; i++) {
+        for (f32& g : rig.car.effects().tire_grip_mul) {
+            g = grip;
+        }
+        const f32 slip = f_max(rig.car.wheel(WHEEL_RL).slip_ratio, rig.car.wheel(WHEEL_RR).slip_ratio);
+        rig.step(throttle, 0.0f, 0.0f, false, 1);
+        if (rig.body().pos.y - ground > 2.0f) {
+            slip_sum += slip;
+            slip_ticks++;
+        }
+        out.height = f_max(out.height, rig.body().pos.y - ground);
+    }
+    out.rear_slip = slip_ticks > 0 ? slip_sum / static_cast<f32>(slip_ticks) : 0.0f;
+    return out;
+}
+}
+
+TEST(climbing, full_throttle_gets_up_a_35_degree_grass_slope)
+{
+    CHECK(climb(35.0f, 0.95f, 1.0f, 15.0f).height > 25.0f);
+}
+
+TEST(climbing, full_throttle_gets_up_a_40_degree_road_slope)
+{
+    CHECK(climb(40.0f, 1.0f, 1.0f, 15.0f).height > 25.0f);
+}
+
+TEST(climbing, half_throttle_is_not_enough_for_a_40_degree_slope)
+{
+    const Climb c = climb(40.0f, 1.0f, 0.5f, 15.0f);
+    CHECK(c.height < 12.0f);
+    CHECK(c.rear_slip > 0.15f);
+}
+
+TEST(handling, a_handbrake_slide_is_caught_by_countersteering)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    CHECK(reach_speed(rig, 72.0f));
+    for (i32 i = 0; i < 240 && f_abs(signed_slip_deg(rig)) < 25.0f; i++) {
+        rig.step(0.0f, 0.0f, 1.0f, true, 1);
+    }
+    CHECK(f_abs(signed_slip_deg(rig)) > 20.0f);
+    i32 caught = -1;
+    for (i32 i = 0; i < 300 && caught < 0; i++) {
+        const f32 slip = signed_slip_deg(rig);
+        const f32 steer = f_clamp(slip / 15.0f, -1.0f, 1.0f);
+        rig.step(0.15f, 0.0f, steer, false, 1);
+        if (f_abs(signed_slip_deg(rig)) < 10.0f && length(rig.body().vel) > 3.0f) {
+            caught = i;
+        }
+    }
+    CHECK(caught >= 0);
+    CHECK(static_cast<f32>(caught) * kDt < 2.5f);
 }

@@ -332,7 +332,7 @@ void PlayerBodies::update_seated(const Sim& sim, const PlayerSlot& slot, Shown& 
     in.wheelNormal = to_glm(normalize(cfg.wheel_normal));
     in.wheelUp = glm::normalize(glm::cross(in.wheelNormal, glm::vec3(1.0f, 0.0f, 0.0f)));
     in.wheelRadius = cfg.wheel_radius;
-    in.steer = sim.vehicle().input().steer * kWheelHandTurn;
+    in.steer = sim.vehicle().steer_deg() / f_max(cfg.steer_max_deg, 1.0f) * kWheelHandTurn;
     in.shifting = shown.shift_time > 0.0f ? std::sin(kPi * (1.0f - shown.shift_time / kShiftReach)) : 0.0f;
     in.shifter = cabin(cfg.shifter);
     shown.frame = car_rot;

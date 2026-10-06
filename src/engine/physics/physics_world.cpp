@@ -15,9 +15,11 @@
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
@@ -93,7 +95,6 @@ constexpr float kStickMaxRise = 0.5f;
 constexpr float kStepBlockUp = 0.64f;
 constexpr float kStepBlockInto = 0.1f;
 constexpr float kFitsSlack = 0.02f;
-constexpr float kVehicleReach = 0.5f;
 constexpr float kDefaultGravity = 9.81f;
 
 JPH::Vec3 toJolt(const glm::vec3& v) { return {v.x, v.y, v.z}; }
@@ -119,6 +120,8 @@ JPH::Quat upRotation(const glm::vec3& up) {
     return JPH::Quat::sRotation(toJolt(axis), std::acos(std::clamp(d, -1.0f, 1.0f)));
 }
 
+constexpr float kHullConvexRadius = 0.05f;
+
 float boxConvexRadius(const glm::vec3& half) {
     return std::min(JPH::cDefaultConvexRadius, 0.5f * std::min({half.x, half.y, half.z}));
 }
@@ -135,36 +138,6 @@ JPH::RefConst<JPH::Shape> makeCapsule(float radius, float height) {
     return result.Get();
 }
 
-class VehicleContacts final : public JPH::ContactListener {
-public:
-    void OnContactAdded(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold,
-                        JPH::ContactSettings&) override {
-        note(a, b, manifold);
-    }
-    void OnContactPersisted(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold,
-                            JPH::ContactSettings&) override {
-        note(a, b, manifold);
-    }
-
-    JPH::BodyID vehicle;
-    std::mutex mutex;
-    std::vector<std::pair<JPH::BodyID, glm::vec3>> touched;
-
-private:
-    void note(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold) {
-        if (vehicle.IsInvalid() || manifold.mRelativeContactPointsOn1.empty()) {
-            return;
-        }
-        const JPH::Body* other = a.GetID() == vehicle ? &b : (b.GetID() == vehicle ? &a : nullptr);
-        if (!other || !other->IsDynamic()) {
-            return;
-        }
-        const glm::vec3 point = toGlmR(manifold.GetWorldSpaceContactPointOn1(0));
-        std::lock_guard<std::mutex> lock(mutex);
-        touched.emplace_back(other->GetID(), point);
-    }
-};
-
 }
 
 struct PhysicsWorld::Impl {
@@ -174,7 +147,6 @@ struct PhysicsWorld::Impl {
     std::unique_ptr<JPH::TempAllocatorImpl> tempAllocator;
     std::unique_ptr<JPH::JobSystemThreadPool> jobSystem;
     JPH::PhysicsSystem system;
-    VehicleContacts vehicleContacts;
 
     struct Character {
         JPH::Ref<JPH::CharacterVirtual> body;
@@ -187,10 +159,6 @@ struct PhysicsWorld::Impl {
 
     std::vector<JPH::BodyID> statics;
     std::vector<JPH::BodyID> dynamics;
-    JPH::BodyID vehicle;
-    glm::vec3 vehicleHalf{0.0f};
-    glm::vec3 vehicleOffset{0.0f};
-    std::vector<VehiclePush> pushes;
     GravityField gravity;
 
     JPH::BodyInterface& bodies() { return system.GetBodyInterface(); }
@@ -321,7 +289,6 @@ PhysicsWorld::PhysicsWorld() {
     constexpr JPH::uint kMaxContactConstraints = 4096;
     m_impl->system.Init(kMaxBodies, 0, kMaxBodyPairs, kMaxContactConstraints, m_impl->broadPhaseLayers,
                         m_impl->objectVsBroadPhase, m_impl->objectPairs);
-    m_impl->system.SetContactListener(&m_impl->vehicleContacts);
 }
 
 PhysicsWorld::~PhysicsWorld() {
@@ -396,14 +363,66 @@ PhysicsWorld::BodyHandle PhysicsWorld::addDynamicBox(const glm::vec3& center, co
 PhysicsWorld::BodyHandle PhysicsWorld::addDynamicBox(const glm::vec3& center, const glm::quat& rotation,
                                                      const glm::vec3& halfExtents, float mass, std::uint64_t userData,
                                                      const glm::vec3& velocity) {
-    JPH::BodyCreationSettings settings(new JPH::BoxShape(toJolt(halfExtents), boxConvexRadius(halfExtents)),
-                                       toJoltR(center), toJolt(rotation), JPH::EMotionType::Dynamic, Layers::kMoving);
-    settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
-    settings.mMassPropertiesOverride.mMass = mass;
-    settings.mUserData = userData;
-    settings.mLinearVelocity = toJolt(velocity);
-    settings.mFriction = 0.6f;
-    settings.mRestitution = 0.15f;
+    DynamicBodyDesc desc;
+    desc.center = center;
+    desc.rotation = rotation;
+    desc.halfExtents = halfExtents;
+    desc.mass = mass;
+    desc.userData = userData;
+    desc.velocity = velocity;
+    return addDynamicBody(desc);
+}
+
+PhysicsWorld::BodyHandle PhysicsWorld::addDynamicBody(const DynamicBodyDesc& desc) {
+    JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(toJolt(desc.halfExtents), boxConvexRadius(desc.halfExtents));
+    if (desc.hull.size() >= 4) {
+        JPH::Array<JPH::Vec3> points;
+        for (const glm::vec3& p : desc.hull) {
+            points.push_back(toJolt(p));
+        }
+        JPH::ConvexHullShapeSettings hullSettings(points, kHullConvexRadius);
+        JPH::ShapeSettings::ShapeResult hullResult = hullSettings.Create();
+        if (hullResult.HasError()) {
+            return kNoBody;
+        }
+        JPH::OffsetCenterOfMassShapeSettings centred(-hullResult.Get()->GetCenterOfMass(), hullResult.Get());
+        JPH::ShapeSettings::ShapeResult centredResult = centred.Create();
+        if (centredResult.HasError()) {
+            return kNoBody;
+        }
+        shape = centredResult.Get();
+    } else if (glm::dot(desc.shapeOffset, desc.shapeOffset) > 0.0f) {
+        JPH::RotatedTranslatedShapeSettings moved(toJolt(desc.shapeOffset), JPH::Quat::sIdentity(), shape);
+        JPH::ShapeSettings::ShapeResult movedResult = moved.Create();
+        if (movedResult.HasError()) {
+            return kNoBody;
+        }
+        JPH::OffsetCenterOfMassShapeSettings recentred(toJolt(-desc.shapeOffset), movedResult.Get());
+        JPH::ShapeSettings::ShapeResult recentredResult = recentred.Create();
+        if (recentredResult.HasError()) {
+            return kNoBody;
+        }
+        shape = recentredResult.Get();
+    }
+
+    JPH::BodyCreationSettings settings(shape, toJoltR(desc.center), toJolt(desc.rotation), JPH::EMotionType::Dynamic,
+                                       Layers::kMoving);
+    settings.mMassPropertiesOverride.mMass = desc.mass;
+    if (desc.inertiaDiagonal) {
+        settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
+        settings.mMassPropertiesOverride.mInertia = JPH::Mat44::sScale(toJolt(*desc.inertiaDiagonal));
+    } else {
+        settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+    }
+    settings.mUserData = desc.userData;
+    settings.mLinearVelocity = toJolt(desc.velocity);
+    settings.mAngularVelocity = toJolt(desc.angularVelocity);
+    settings.mFriction = desc.friction;
+    settings.mRestitution = desc.restitution;
+    settings.mLinearDamping = desc.linearDamping;
+    settings.mAngularDamping = desc.angularDamping;
+    settings.mMotionQuality = desc.linearCast ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete;
+    settings.mAllowSleeping = desc.allowSleeping;
     if (m_impl->gravity) {
         settings.mGravityFactor = 0.0f;
     }
@@ -413,6 +432,49 @@ PhysicsWorld::BodyHandle PhysicsWorld::addDynamicBox(const glm::vec3& center, co
     }
     m_impl->dynamics.push_back(id);
     return id.GetIndexAndSequenceNumber();
+}
+
+void PhysicsWorld::addForce(BodyHandle body, const glm::vec3& force) {
+    if (!valid(body)) {
+        return;
+    }
+    m_impl->bodies().AddForce(JPH::BodyID(body), toJolt(force), JPH::EActivation::Activate);
+}
+
+void PhysicsWorld::addForceAtPoint(BodyHandle body, const glm::vec3& force, const glm::vec3& worldPoint) {
+    if (!valid(body)) {
+        return;
+    }
+    m_impl->bodies().AddForce(JPH::BodyID(body), toJolt(force), JPH::RVec3(worldPoint.x, worldPoint.y, worldPoint.z),
+                              JPH::EActivation::Activate);
+}
+
+void PhysicsWorld::addTorque(BodyHandle body, const glm::vec3& torque) {
+    if (!valid(body)) {
+        return;
+    }
+    m_impl->bodies().AddTorque(JPH::BodyID(body), toJolt(torque), JPH::EActivation::Activate);
+}
+
+void PhysicsWorld::setVelocities(BodyHandle body, const glm::vec3& velocity, const glm::vec3& angularVelocity) {
+    if (!valid(body)) {
+        return;
+    }
+    JPH::BodyInterface& bodies = m_impl->bodies();
+    const JPH::BodyID id(body);
+    bodies.SetLinearAndAngularVelocity(id, toJolt(velocity), toJolt(angularVelocity));
+    bodies.ActivateBody(id);
+}
+
+void PhysicsWorld::activate(BodyHandle body) {
+    if (!valid(body)) {
+        return;
+    }
+    m_impl->bodies().ActivateBody(JPH::BodyID(body));
+}
+
+bool PhysicsWorld::isActive(BodyHandle body) const {
+    return valid(body) && m_impl->bodies().IsActive(JPH::BodyID(body));
 }
 
 void PhysicsWorld::removeBody(BodyHandle body) {
@@ -489,65 +551,6 @@ void PhysicsWorld::setLinearVelocity(BodyHandle body, const glm::vec3& velocity)
 void PhysicsWorld::setPose(BodyHandle body, const glm::vec3& position, const glm::quat& rotation) {
     m_impl->bodies().SetPositionAndRotation(JPH::BodyID(body), toJoltR(position), toJolt(rotation),
                                             JPH::EActivation::Activate);
-}
-
-void PhysicsWorld::setVehicle(const glm::vec3& position, const glm::quat& rotation, const glm::vec3& halfExtents,
-                              const glm::vec3& offset, const glm::vec3& velocity, const glm::vec3& angularVelocity,
-                              std::uint64_t userData) {
-    JPH::BodyInterface& bodies = m_impl->bodies();
-    const glm::vec3 dh = halfExtents - m_impl->vehicleHalf;
-    const glm::vec3 doff = offset - m_impl->vehicleOffset;
-    if (!m_impl->vehicle.IsInvalid() && (glm::dot(dh, dh) > 1e-8f || glm::dot(doff, doff) > 1e-8f)) {
-        clearVehicle();
-    }
-    if (m_impl->vehicle.IsInvalid()) {
-        JPH::RotatedTranslatedShapeSettings shape(toJolt(offset), JPH::Quat::sIdentity(),
-                                                  new JPH::BoxShape(toJolt(halfExtents), boxConvexRadius(halfExtents)));
-        JPH::ShapeSettings::ShapeResult result = shape.Create();
-        if (result.HasError()) {
-            return;
-        }
-        JPH::BodyCreationSettings body(result.Get(), toJoltR(position), toJolt(rotation), JPH::EMotionType::Kinematic,
-                                       Layers::kMoving);
-        body.mUserData = userData;
-        m_impl->vehicle = bodies.CreateAndAddBody(body, JPH::EActivation::Activate);
-        m_impl->vehicleHalf = halfExtents;
-        m_impl->vehicleOffset = offset;
-        m_impl->vehicleContacts.vehicle = m_impl->vehicle;
-    }
-    if (m_impl->vehicle.IsInvalid()) {
-        return;
-    }
-    bodies.SetPositionAndRotation(m_impl->vehicle, toJoltR(position), toJolt(rotation), JPH::EActivation::Activate);
-    bodies.SetLinearAndAngularVelocity(m_impl->vehicle, toJolt(velocity), toJolt(angularVelocity));
-}
-
-void PhysicsWorld::moveVehicle(const glm::vec3& position, const glm::quat& rotation, float dt) {
-    if (m_impl->vehicle.IsInvalid() || dt <= 0.0f) {
-        return;
-    }
-    m_impl->bodies().MoveKinematic(m_impl->vehicle, toJoltR(position), toJolt(rotation), dt);
-}
-
-void PhysicsWorld::clearVehicle() {
-    if (m_impl->vehicle.IsInvalid()) {
-        return;
-    }
-    JPH::BodyInterface& bodies = m_impl->bodies();
-    bodies.RemoveBody(m_impl->vehicle);
-    bodies.DestroyBody(m_impl->vehicle);
-    m_impl->vehicle = JPH::BodyID();
-    m_impl->vehicleContacts.vehicle = JPH::BodyID();
-}
-
-PhysicsWorld::BodyHandle PhysicsWorld::vehicle() const {
-    return m_impl->vehicle.IsInvalid() ? kNoBody : m_impl->vehicle.GetIndexAndSequenceNumber();
-}
-
-std::vector<VehiclePush> PhysicsWorld::takeVehiclePushes() {
-    std::vector<VehiclePush> out;
-    out.swap(m_impl->pushes);
-    return out;
 }
 
 void PhysicsWorld::setGravityField(GravityField field) {
@@ -873,33 +876,6 @@ float PhysicsWorld::characterRadius(int id) const {
 }
 
 void PhysicsWorld::step(float dt) {
-    JPH::BodyInterface& bodies = m_impl->bodies();
-    struct Before {
-        JPH::BodyID id;
-        glm::vec3 velocity{0.0f};
-        glm::vec3 gravity{0.0f};
-        float mass = 0.0f;
-    };
-    std::vector<Before> near;
-    if (!m_impl->vehicle.IsInvalid()) {
-        const JPH::AABox box = bodies.GetTransformedShape(m_impl->vehicle).GetWorldSpaceBounds();
-        JPH::AABox reach = box;
-        reach.ExpandBy(JPH::Vec3::sReplicate(kVehicleReach));
-        JPH::AllHitCollisionCollector<JPH::CollideShapeBodyCollector> collector;
-        m_impl->system.GetBroadPhaseQuery().CollideAABox(reach, collector);
-        std::sort(collector.mHits.begin(), collector.mHits.end());
-        for (const JPH::BodyID id : collector.mHits) {
-            JPH::BodyLockRead lock(m_impl->system.GetBodyLockInterface(), id);
-            if (!lock.Succeeded() || !lock.GetBody().IsDynamic()) {
-                continue;
-            }
-            const JPH::Body& body = lock.GetBody();
-            const float inverseMass = body.GetMotionProperties()->GetInverseMass();
-            near.push_back({id, toGlm(body.GetLinearVelocity()), m_impl->gravityAt(toGlmR(body.GetPosition())),
-                            inverseMass > 0.0f ? 1.0f / inverseMass : 0.0f});
-        }
-    }
-
     if (m_impl->gravity) {
         JPH::BodyIDVector active;
         m_impl->system.GetActiveBodies(JPH::EBodyType::RigidBody, active);
@@ -918,25 +894,7 @@ void PhysicsWorld::step(float dt) {
         }
     }
 
-    m_impl->vehicleContacts.touched.clear();
     m_impl->system.Update(dt, 1, m_impl->tempAllocator.get(), m_impl->jobSystem.get());
-
-    std::vector<std::pair<JPH::BodyID, glm::vec3>> touched = m_impl->vehicleContacts.touched;
-    std::sort(touched.begin(), touched.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    JPH::BodyID last;
-    for (const auto& [id, point] : touched) {
-        if (id == last) {
-            continue;
-        }
-        last = id;
-        const auto before = std::find_if(near.begin(), near.end(), [&](const Before& b) { return b.id == id; });
-        if (before == near.end() || before->mass <= 0.0f) {
-            continue;
-        }
-        const glm::vec3 after = toGlm(bodies.GetLinearVelocity(id));
-        const glm::vec3 change = after - before->velocity - before->gravity * dt;
-        m_impl->pushes.push_back({-change * before->mass, point});
-    }
 }
 
 }

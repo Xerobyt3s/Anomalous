@@ -54,6 +54,36 @@ enum class MouseButton : i32 {
     Middle = 2,
 };
 
+enum class PadAxis : i32 {
+    LeftX = 0,
+    LeftY,
+    RightX,
+    RightY,
+    LeftTrigger,
+    RightTrigger,
+};
+
+enum class PadButton : i32 {
+    A = 0,
+    B,
+    X,
+    Y,
+    LeftBumper,
+    RightBumper,
+    Back,
+    Start,
+    Guide,
+    LeftThumb,
+    RightThumb,
+    DpadUp,
+    DpadRight,
+    DpadDown,
+    DpadLeft,
+};
+
+inline constexpr i32 kPadAxisCount = 6;
+inline constexpr i32 kPadButtonCount = 15;
+
 class Input {
 public:
     static constexpr i32 kMaxKeys = 512;
@@ -73,6 +103,13 @@ public:
     f32 scroll() const { return scroll_dy_; }
 
     std::span<const u32> chars() const { return {chars_, char_count_}; }
+
+    bool pad_connected() const { return pad_connected_; }
+    f32 pad_axis(PadAxis axis) const { return pad_axes_[static_cast<i32>(axis)]; }
+    bool pad_down(PadButton b) const { return pad_down_[static_cast<i32>(b)] != 0; }
+    bool pad_pressed(PadButton b) const { return pad_pressed_[static_cast<i32>(b)] != 0; }
+    bool pad_released(PadButton b) const { return pad_released_[static_cast<i32>(b)] != 0; }
+    void set_pad(bool connected, const f32* axes, const u8* buttons);
 
     void begin_frame();
     void set_key(i32 key, bool is_down);
@@ -112,6 +149,11 @@ private:
     f32 prev_mouse_y_ = 0.0f;
     f32 scroll_dy_ = 0.0f;
     bool first_mouse_sample_ = true;
+    bool pad_connected_ = false;
+    f32 pad_axes_[kPadAxisCount] = {};
+    u8 pad_down_[kPadButtonCount] = {};
+    u8 pad_pressed_[kPadButtonCount] = {};
+    u8 pad_released_[kPadButtonCount] = {};
 };
 
 } // namespace anom

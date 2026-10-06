@@ -24,7 +24,6 @@ public:
     void build(Arena& arena);
     void clear();
 
-    bool raycast(Ray ray, f32 max_t, f32* out_t, Vec3* out_normal) const;
 
     std::span<const u32> cell_tris(i32 x, i32 z) const;
     bool cell_range(Vec3 lo, Vec3 hi, i32& x0, i32& x1, i32& z0, i32& z1) const;

@@ -44,7 +44,8 @@ bool hasEdges(const PlayerCommand& c)
 {
     return c.use_pressed || c.throw_power >= 0.0f || c.place_commit || c.stow_cable || c.take_key
         || c.terminal_keys != 0 || c.terminal_char_count > 0 || c.terminal_leave || c.headlights_toggle
-        || c.manual_toggle || c.shift != 0 || c.recover || c.reset_car || c.dummy_cycle || c.dummy_script >= 0;
+        || c.manual_toggle || c.shift != 0 || c.recover || c.reset_car || c.dummy_cycle || c.dummy_script >= 0
+        || c.handbrake_toggle || c.ignition_tap || c.wipers_cycle;
 }
 
 PlayerCommand continuousPart(const PlayerCommand& c)
@@ -65,6 +66,9 @@ PlayerCommand continuousPart(const PlayerCommand& c)
     out.reset_car = false;
     out.dummy_cycle = false;
     out.dummy_script = -1;
+    out.handbrake_toggle = false;
+    out.ignition_tap = false;
+    out.wipers_cycle = false;
     out.jump = false;
     out.crawl = false;
     out.interact = false;
@@ -97,6 +101,9 @@ void mergeEdges(PlayerCommand& into, const PlayerCommand& from)
     into.reset_car = from.reset_car;
     into.dummy_cycle = from.dummy_cycle;
     into.dummy_script = from.dummy_script;
+    into.handbrake_toggle = from.handbrake_toggle;
+    into.ignition_tap = from.ignition_tap;
+    into.wipers_cycle = from.wipers_cycle;
 }
 
 std::vector<std::uint8_t> encodeBody(const BodyMsg& body)

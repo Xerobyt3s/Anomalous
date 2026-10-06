@@ -498,6 +498,7 @@ TEST(gameplay, an_elemental_round_that_skips_off_the_ground_leaves_its_effect_on
         me->gun.mechanism.setChamber(k, {ghost::game::ChamberState::Live, ghost::game::Round{fire}});
     }
     range.draw();
+    range.sim->gameplay().ballistics().setRicochet(std::vector<float>(range.sim->gameplay().ammo().elements.size(), 1.0f));
     const Heightfield& field = range.sim->terrain().heightfield();
     const Vec3 eye = range.eye();
     Vec3 target{};
@@ -615,4 +616,33 @@ TEST(gameplay, an_inferno_drags_a_wisp_into_its_column_and_burns_it)
     }
     CHECK(caught);
     CHECK((lowest < full * 0.7f || range.count<ghost::game::GhostDied>() > 0));
+}
+
+TEST(gameplay, a_player_put_back_holstered_mid_reload_is_not_stuck)
+{
+    Range range;
+    if (!range.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    range.draw();
+    PlayerCommand open;
+    open.cylinder = true;
+    range.run(open, 1);
+    range.run(PlayerCommand{}, 30);
+    const PlayerSlot* me = range.sim->slot(0);
+    CHECK(!me->gun.mechanism.state().isClosed());
+
+    const Player& p = range.sim->player(0);
+    range.sim->player(0).init(p.pos(), 0.0f);
+    range.run(PlayerCommand{}, 2);
+    CHECK(me->player.movement().state().holstered);
+    CHECK(me->gun.mechanism.state().isClosed());
+
+    range.draw();
+    CHECK(!me->player.movement().state().holstered);
+    PlayerCommand aim;
+    aim.aim = true;
+    range.run(aim, 30);
+    CHECK(me->player.movement().state().aiming);
 }

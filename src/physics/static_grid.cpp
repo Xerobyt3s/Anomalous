@@ -3,12 +3,6 @@
 #include "core/log.h"
 
 namespace anom {
-namespace {
-
-constexpr f32 kRayEps = 1e-4f;
-constexpr f32 kInf = 1e30f;
-
-} // namespace
 
 void StaticGrid::reserve(Arena& arena, u32 max_tris)
 {
@@ -150,82 +144,6 @@ bool StaticGrid::cell_range(Vec3 lo, Vec3 hi, i32& x0, i32& x1, i32& z0, i32& z1
     z0 = static_cast<i32>(f_clamp((lo.z - origin_.z) / cell_size_, 0.0f, max_z));
     z1 = static_cast<i32>(f_clamp((hi.z - origin_.z) / cell_size_, 0.0f, max_z));
     return true;
-}
-
-bool StaticGrid::raycast(Ray ray, f32 max_t, f32* out_t, Vec3* out_normal) const
-{
-    if (!built_) {
-        return false;
-    }
-    const Aabb box = bounds();
-
-    f32 t_cur = 0.0f;
-    if (!contains(box, ray.origin)) {
-        if (!ray_vs_aabb(ray, box, max_t, &t_cur)) {
-            return false;
-        }
-        t_cur += kRayEps;
-    }
-
-    const Vec3 p = ray.origin + ray.dir * t_cur;
-    const i32 max_ix = static_cast<i32>(cells_x_) - 1;
-    const i32 max_iz = static_cast<i32>(cells_z_) - 1;
-    i32 ix = static_cast<i32>(f_clamp((p.x - origin_.x) / cell_size_, 0.0f,
-                                      static_cast<f32>(max_ix)));
-    i32 iz = static_cast<i32>(f_clamp((p.z - origin_.z) / cell_size_, 0.0f,
-                                      static_cast<f32>(max_iz)));
-
-    const i32 step_x = ray.dir.x > 0.0f ? 1 : -1;
-    const i32 step_z = ray.dir.z > 0.0f ? 1 : -1;
-    f32 t_max_x = kInf;
-    f32 t_max_z = kInf;
-    f32 t_delta_x = kInf;
-    f32 t_delta_z = kInf;
-    if (f_abs(ray.dir.x) > 1e-9f) {
-        const f32 boundary = origin_.x + static_cast<f32>(ix + (step_x > 0 ? 1 : 0)) * cell_size_;
-        t_max_x = t_cur + (boundary - p.x) / ray.dir.x;
-        t_delta_x = cell_size_ / f_abs(ray.dir.x);
-    }
-    if (f_abs(ray.dir.z) > 1e-9f) {
-        const f32 boundary = origin_.z + static_cast<f32>(iz + (step_z > 0 ? 1 : 0)) * cell_size_;
-        t_max_z = t_cur + (boundary - p.z) / ray.dir.z;
-        t_delta_z = cell_size_ / f_abs(ray.dir.z);
-    }
-
-    f32 best_t = max_t;
-    Vec3 best_normal{0.0f, 1.0f, 0.0f};
-    bool found = false;
-
-    while (ix >= 0 && ix <= max_ix && iz >= 0 && iz <= max_iz && t_cur <= best_t) {
-        for (const u32 index : cell_tris(ix, iz)) {
-            const StaticTri& t = tris_[index];
-            RayHitTri hit{};
-            if (ray_vs_triangle(ray, t.a, t.b, t.c, best_t, &hit) && hit.t < best_t) {
-                best_t = hit.t;
-                Vec3 n = normalize(cross(t.b - t.a, t.c - t.a));
-                if (dot(n, ray.dir) > 0.0f) {
-                    n = -n;
-                }
-                best_normal = n;
-                found = true;
-            }
-        }
-        if (t_max_x < t_max_z) {
-            t_cur = t_max_x;
-            t_max_x += t_delta_x;
-            ix += step_x;
-        } else {
-            t_cur = t_max_z;
-            t_max_z += t_delta_z;
-            iz += step_z;
-        }
-    }
-
-    if (found) {
-        if (out_t) { *out_t = best_t; }
-        if (out_normal) { *out_normal = best_normal; }
-    }
-    return found;
 }
 
 } // namespace anom

@@ -8,6 +8,7 @@
 #include "physics/heightfield.h"
 #include "terminal/program.h"
 #include "world/destination.h"
+#include "vehicle/surface.h"
 
 #include <cmath>
 #include <cstring>
@@ -27,13 +28,13 @@ constexpr f32 kJumpArrive = 1.10f;
 constexpr f32 kJumpCarrySpeed = 0.75f;
 constexpr Vec3 kTowerPortLocal{0.0f, 1.35f, 0.62f};
 constexpr f32 kHandsEyeHeight = 1.38f;
-constexpr f32 kImpactJump = 0.25f;
+constexpr f32 kRefuelNotice = 0.005f;
+constexpr f32 kHornMinCharge = 0.05f;
 constexpr Vec3 kHoodLocal{0.0f, 0.45f, -1.4f};
 constexpr Vec3 kTrunkLocal{0.0f, 0.45f, 1.6f};
 constexpr Vec3 kEngineLocal{0.0f, 0.10f, -1.55f};
 constexpr f32 kSlotSpacing = 1.2f;
 constexpr u32 kCableNearPickups = 12;
-constexpr f32 kVehiclePushShare = 1.0f;
 constexpr f32 kDebugGhostAhead = 8.0f;
 constexpr f32 kDummyAhead = 4.0f;
 
@@ -52,16 +53,16 @@ void hash_bytes(u64& h, const void* data, size_t size)
 
 }
 
-struct CarSnapshot {
-    bool door_target[2];
-    bool hood_target;
-    bool trunk_target;
-    bool engine_on;
-    f32 impact_cooldown;
-    bool installed[PART_COUNT];
-};
+static u32 tank_total(const SynthBay& synth)
+{
+    u32 total = 0;
+    for (const u32 dose : synth.tank) {
+        total += dose;
+    }
+    return total;
+}
 
-static CarSnapshot snapshot_car(const CarSys& sys)
+static CarSnapshot snapshot_car(const CarSys& sys, const Drivetrain& train)
 {
     CarSnapshot s{};
     s.door_target[0] = sys.door_target[0];
@@ -69,10 +70,23 @@ static CarSnapshot snapshot_car(const CarSys& sys)
     s.hood_target = sys.hood_target;
     s.trunk_target = sys.trunk_target;
     s.engine_on = sys.engine_on;
-    s.impact_cooldown = sys.impact_cooldown;
+    s.impact_serial = sys.impact_serial;
     for (u32 i = 0; i < PART_COUNT; i++) {
         s.installed[i] = sys.parts[i].installed;
     }
+    s.handbrake_latched = sys.handbrake_latched;
+    s.headlight_switch = sys.headlight_switch;
+    s.wiper_mode = sys.wiper_mode;
+    s.fuel_cap_open = sys.fuel_cap_open;
+    s.key_inserted = sys.key_inserted;
+    s.fuel = sys.fluids.fuel;
+    s.oil = sys.fluids.oil;
+    s.cargo_count = sys.cargo_count();
+    s.floppy_disk = sys.floppy_disk;
+    s.tape_inserted = sys.tape_inserted;
+    s.deck_play = sys.deck_play;
+    s.gear = train.gear;
+    s.tank_total = tank_total(sys.synth);
     return s;
 }
 
@@ -86,7 +100,6 @@ bool Sim::init(Arena& perm, Arena& scratch, std::string_view zone_dir)
     phys_.init(perm, &terrain_.heightfield());
     phys_.set_gravity_field(&gravity_);
     phys_.set_jolt(&jolt_);
-    jolt_.setGravityField([this](const glm::vec3& p) { return to_glm(gravity_.gravity_at(from_glm(p))); });
 
     if (!islands_arena_.reserve(kIslandsArenaBytes)) {
         log_error("sim: islands arena reserve failed");
@@ -136,6 +149,7 @@ bool Sim::init(Arena& perm, Arena& scratch, std::string_view zone_dir)
     tapes_.init();
     boxes_.init(scratch, "assets/cars/excel_interact.cfg");
     interact_spawn_zone_pickups(world_, phys_, terrain_, pickups_);
+    stock_fresh_tanks();
 
     disks_.init(perm);
     terminal_.init(perm, disks_);
@@ -188,17 +202,25 @@ void Sim::commit_photo()
     emit(ghost::game::PhotoTaken{saved, disks_.camera_exposures_left(&terminal_.fs()), photo_by_});
 }
 
-void Sim::apply_weather_grip()
+void Sim::apply_surface_grip()
 {
-    if (weather_.wetness() <= 0.002f) {
+    const RigidBody* body = phys_.body(vehicle_.body());
+    if (!body) {
         return;
     }
-    const RigidBody* body = phys_.body(vehicle_.body());
-    const f32 road = body ? terrain_.road_amount(body->pos.x, body->pos.z) : 0.0f;
-    const f32 wet_mul = 1.0f - weather_.wetness() * f_lerp(0.40f, 0.24f, road);
+    VehicleEffects& fx = vehicle_.effects();
+    const f32 wetness = weather_.wetness();
+    const f32 grass = vehicle_.config().tire_grass_grip;
+    f32 road_sum = 0.0f;
     for (u32 i = 0; i < kWheelCount; i++) {
-        vehicle_.effects().tire_grip_mul[i] *= wet_mul;
+        const Wheel& w = vehicle_.wheel(i);
+        const Vec3 at = w.grounded ? w.contact_point : body->pos;
+        const f32 road = terrain_.road_amount(at.x, at.z);
+        fx.surface_road[i] = road;
+        fx.tire_grip_mul[i] *= surface_grip_mul(road, wetness, grass);
+        road_sum += road;
     }
+    fx.rolling_resist_mul = surface_rolling_mul(road_sum * 0.25f, vehicle_.config().offroad_rolling_mul);
 }
 
 bool own_event(const ghost::game::GameEvent& e, PlayerId local)
@@ -239,26 +261,6 @@ void Sim::spawn_debug_ghost(PlayerId id, const PlayerCommand& cmd)
     const Vec3 ahead = frame_forward(m.frame, m.yaw);
     const Vec3 at = s->player.pos() + ahead * kDebugGhostAhead + s->player.up() * 1.5f;
     gameplay_.spawnGhost(types[static_cast<size_t>(cmd.spawn_ghost)].name, to_glm(at));
-}
-
-void Sim::step_physics(f32 dt)
-{
-    RigidBody* car = phys_.body(vehicle_.body());
-    if (car) {
-        if (jolt_.vehicle() == ghost::engine::kNoBody) {
-            jolt_.setVehicle(to_glm(car->prev_pos), to_glm(car->prev_rot), to_glm(car->half_extents),
-                             to_glm(car->box_offset), to_glm(car->vel), to_glm(car->angular_vel),
-                             static_cast<std::uint64_t>(ghost::game::Surface::Steel));
-        }
-        jolt_.moveVehicle(to_glm(car->pos), to_glm(car->rot), dt);
-    }
-    jolt_.step(dt);
-    const std::vector<ghost::engine::VehiclePush> pushes = jolt_.takeVehiclePushes();
-    if (car && role_ != SimRole::Client) {
-        for (const ghost::engine::VehiclePush& push : pushes) {
-            body_apply_impulse_at_point(*car, from_glm(push.impulse) * kVehiclePushShare, from_glm(push.point));
-        }
-    }
 }
 
 void Sim::sync_pickup_transforms()
@@ -381,7 +383,7 @@ PlayerId Sim::add_player(std::string_view name, bool remote)
         s.remote = remote;
         s.color = kSlotColors[id];
         s.interact.init();
-        gameplay_.stockGun(s.gun);
+        kit_gun(s.gun);
         place_player(s, spawn_point(id), spawn_yaw(id));
         commands_[slot_index(id)] = PlayerCommand{};
         roster_.add(id);
@@ -491,6 +493,86 @@ const Entity* Sim::find_pickup(ItemKind kind) const
     return nullptr;
 }
 
+const Entity* Sim::find_pickup(ItemKind kind, i32 aux) const
+{
+    const Pool<Entity>& pool = world_.entities();
+    for (u32 idx : pool.live_indices()) {
+        const Entity* e = pool.at(idx);
+        if (e && e->kind == EntityKind::PartPickup && static_cast<ItemKind>(e->aux_kind) == kind
+            && static_cast<i32>(e->aux_data) == aux) {
+            return e;
+        }
+    }
+    return nullptr;
+}
+
+void Sim::stock_fresh_tanks()
+{
+    if (role_ == SimRole::Client) {
+        return;
+    }
+    const SynthTuning& tuning = vehicle_.config().synth;
+    const ghost::game::AmmoData& ammo = gameplay_.ammo();
+    const Pool<Entity>& pool = world_.entities();
+    for (u32 idx : pool.live_indices()) {
+        Entity* e = world_.entities().at(idx);
+        if (!e || e->kind != EntityKind::PartPickup || static_cast<ItemKind>(e->aux_kind) != ITEM_TANK
+            || carsys_.loose_tank(static_cast<i32>(e->aux_data))) {
+            continue;
+        }
+        const i32 id = carsys_.claim_tank();
+        LooseTank* tank = carsys_.loose_tank(id);
+        if (!tank) {
+            return;
+        }
+        u32 total = 0;
+        for (u32 m = 0; m < kSynthMaterials && m < ammo.materials.size(); m++) {
+            const u32 wanted = ammo.materials[m].propellant ? tuning.start_propellant : tuning.start_each;
+            const u32 room = tuning.tank_capacity > total ? tuning.tank_capacity - total : 0;
+            tank->doses[m] = static_cast<u16>(std::min(wanted, room));
+            total += tank->doses[m];
+        }
+        e->aux_data = static_cast<u32>(id);
+    }
+}
+
+void Sim::release_lost_stores()
+{
+    bool tanks[kLooseTanks] = {};
+    bool printers[kLoosePrinters] = {};
+    const auto keep = [&](ItemKind kind, i32 aux) {
+        if (kind == ITEM_TANK && aux >= 1 && aux <= static_cast<i32>(kLooseTanks)) {
+            tanks[aux - 1] = true;
+        }
+        if (kind == ITEM_PRINTER && aux >= 1 && aux <= static_cast<i32>(kLoosePrinters)) {
+            printers[aux - 1] = true;
+        }
+    };
+    const Pool<Entity>& pool = world_.entities();
+    for (u32 idx : pool.live_indices()) {
+        const Entity* e = pool.at(idx);
+        if (e && e->kind == EntityKind::PartPickup) {
+            keep(static_cast<ItemKind>(e->aux_kind), static_cast<i32>(e->aux_data));
+        }
+    }
+    for (const PlayerSlot& s : slots_) {
+        if (s.active) {
+            keep(s.interact.hands().kind, s.interact.hands().aux);
+        }
+    }
+    for (const CargoItem& cargo : carsys_.cargo) {
+        if (cargo.used) {
+            keep(cargo.item.kind, cargo.item.aux);
+        }
+    }
+    for (u32 i = 0; i < kLooseTanks; i++) {
+        carsys_.loose_tanks[i].used = carsys_.loose_tanks[i].used && tanks[i];
+    }
+    for (u32 i = 0; i < kLoosePrinters; i++) {
+        carsys_.loose_printers[i].used = carsys_.loose_printers[i].used && printers[i];
+    }
+}
+
 void Sim::gather_commands(std::span<const SlotCommand> commands, f32 dt)
 {
     const bool client = role_ == SimRole::Client;
@@ -569,18 +651,35 @@ void Sim::apply_debug(const PlayerCommand& cmd)
 void Sim::apply_car_controls()
 {
     const PlayerId id = driver();
-    const PlayerSlot* s = slot(id);
+    PlayerSlot* s = slot(id);
     if (!s || s->player.state() != PlayerState::Driving) {
         VehicleInput parked;
         parked.handbrake = carsys_.handbrake_latched;
         vehicle_.set_input(parked);
+        carsys_.horn_on = false;
         return;
     }
     const PlayerCommand& cmd = commands_[slot_index(id)];
     if (!cmd.gameplay || terminal_user_ == id) {
         vehicle_.set_input(VehicleInput{});
+        carsys_.horn_on = false;
         return;
     }
+    if (cmd.handbrake_toggle && vehicle_.planar_speed(phys_) < vehicle_.config().park_latch_speed) {
+        carsys_.handbrake_latched = !carsys_.handbrake_latched;
+    }
+    if (cmd.wipers_cycle) {
+        carsys_.wiper_mode = (carsys_.wiper_mode + 1) % 3;
+    }
+    if (cmd.ignition_tap) {
+        if (carsys_.engine_on) {
+            carsys_.stop_engine();
+        } else if (!carsys_.key_inserted && s->interact.has_key()) {
+            carsys_.key_inserted = true;
+            s->interact.set_has_key(false);
+        }
+    }
+    carsys_.horn_on = cmd.horn && carsys_.elec.battery_charge > kHornMinCharge;
     const bool handbrake = cmd.handbrake || carsys_.handbrake_latched;
     vehicle_.driver_input(phys_, cmd.throttle, cmd.reverse, cmd.steer, handbrake);
     if (cmd.headlights_toggle) {
@@ -714,13 +813,18 @@ void Sim::interact_slot(PlayerSlot& s, const PlayerCommand& cmd, PlayerCommand& 
         ctx.seats_taken = taken;
         ctx.preview = role_ == SimRole::Client;
         ctx.gun_drawn = s.player.movement().state().holster < 1.0f;
+        ctx.is_driver = driver() == s.id;
+        ctx.materials = static_cast<u32>(gameplay_.materials().total());
         interact.update(boxes_, ctx, dt);
         if (interact.take_terminal_request() && carsys_.computer_on && terminal_user_ == kNoPlayer) {
             terminal_user_ = s.id;
         }
         update_hands_and_gun(s, cmd, player_cmd, take_now, dt);
         if (interact.take_rounds_request() && role_ != SimRole::Client) {
-            take_tray(s);
+            take_tray(s, interact.rounds_target());
+        }
+        if (interact.pour_request() && role_ != SimRole::Client) {
+            fill_tank(interact.pour_target());
         }
         s.player.set_speed_mul(f_max(1.0f - item_mass(interact.hands().kind) * 0.012f, 0.6f));
         if (cmd.use_pressed) {
@@ -821,7 +925,8 @@ void Sim::tick(std::span<const SlotCommand> commands, f32 dt)
     }
     apply_inbound();
 
-    const CarSnapshot before = snapshot_car(carsys_);
+    const CarSnapshot before = (!client && car_before_valid_) ? car_before_
+                                                             : snapshot_car(carsys_, vehicle_.train());
     if (!client) {
         i32 wanted_scene = -1;
         for (const SlotCommand& in : commands) {
@@ -869,7 +974,7 @@ void Sim::tick(std::span<const SlotCommand> commands, f32 dt)
             continue;
         }
         interact_slot(s, commands_[slot_index(s.id)], player_cmds[slot_index(s.id)], dt);
-        if (commands_[slot_index(s.id)].crank && !client) {
+        if (commands_[slot_index(s.id)].crank && !client && driver() == s.id) {
             carsys_.crank_request = true;
         }
     }
@@ -889,14 +994,14 @@ void Sim::tick(std::span<const SlotCommand> commands, f32 dt)
     carsys_.rain_level = weather_.rain();
     if (has_car()) {
         carsys_.tick(vehicle_, phys_, dt);
-        apply_weather_grip();
+        apply_surface_grip();
         vehicle_.tick(phys_, dt);
+    } else {
+        park_car();
     }
     phys_.tick(dt);
-    step_physics(dt);
     if (!client) {
         gameplay_.tickAfterPhysics(dt, first_event, events_);
-        fill_tank();
     }
     const f32 wind_grip = gameplay_.playerWindGrip();
     for (PlayerSlot& s : slots_) {
@@ -962,6 +1067,8 @@ void Sim::tick(std::span<const SlotCommand> commands, f32 dt)
     guard_against_falling();
     watch_islands(dt);
     emit_car_events(before);
+    car_before_ = snapshot_car(carsys_, vehicle_.train());
+    car_before_valid_ = true;
     tick_count_++;
 }
 
@@ -985,11 +1092,15 @@ void Sim::emit_car_events(const CarSnapshot& before)
     if (carsys_.trunk_target != before.trunk_target) {
         emit(ghost::game::TrunkMoved{carsys_.trunk_target, to_glm(body_point(*body, kTrunkLocal - com))});
     }
+    const glm::vec3 engine_at = to_glm(body_point(*body, kEngineLocal - com));
     if (carsys_.engine_on && !before.engine_on) {
-        emit(ghost::game::EngineStarted{to_glm(body_point(*body, kEngineLocal - com))});
+        emit(ghost::game::EngineStarted{engine_at});
     }
-    if (carsys_.impact_cooldown > before.impact_cooldown + kImpactJump) {
-        emit(ghost::game::CarImpact{carsys_.impact_cooldown, to_glm(body->pos)});
+    if (!carsys_.engine_on && before.engine_on) {
+        emit(ghost::game::EngineStopped{carsys_.stall_notice > 0.0f, engine_at});
+    }
+    if (carsys_.impact_serial != before.impact_serial) {
+        emit(ghost::game::CarImpact{carsys_.last_impact_severity, to_glm(body->pos)});
     }
     for (u32 i = 0; i < PART_COUNT; i++) {
         if (carsys_.parts[i].installed == before.installed[i]) {
@@ -1001,6 +1112,49 @@ void Sim::emit_car_events(const CarSnapshot& before)
         } else {
             emit(ghost::game::PartRemoved{static_cast<int>(i), at});
         }
+    }
+    const glm::vec3 dash_at = to_glm(body_point(*body, boxes_.box(IBOX_HANDBRAKE).center - com));
+    const glm::vec3 cap_at = to_glm(body_point(*body, boxes_.box(IBOX_FUEL).center - com));
+    if (carsys_.handbrake_latched != before.handbrake_latched) {
+        emit(ghost::game::HandbrakeMoved{carsys_.handbrake_latched, dash_at});
+    }
+    if (carsys_.headlight_switch != before.headlight_switch) {
+        emit(ghost::game::HeadlightsSwitched{carsys_.headlight_switch});
+    }
+    if (carsys_.wiper_mode != before.wiper_mode) {
+        emit(ghost::game::WipersSwitched{carsys_.wiper_mode});
+    }
+    if (carsys_.fuel_cap_open != before.fuel_cap_open) {
+        emit(ghost::game::FuelCapMoved{carsys_.fuel_cap_open, cap_at});
+    }
+    if (carsys_.fluids.fuel > before.fuel + kRefuelNotice) {
+        emit(ghost::game::Refuelled{carsys_.fluids.fuel - before.fuel, cap_at});
+    }
+    if (carsys_.fluids.oil > before.oil + kRefuelNotice) {
+        emit(ghost::game::OilFilled{engine_at});
+    }
+    if (carsys_.key_inserted != before.key_inserted) {
+        emit(ghost::game::KeyMoved{carsys_.key_inserted});
+    }
+    if (carsys_.cargo_count() != before.cargo_count) {
+        emit(ghost::game::CargoMoved{carsys_.cargo_count() > before.cargo_count,
+                                     to_glm(body_point(*body, kTrunkLocal - com))});
+    }
+    if ((carsys_.floppy_disk >= 0) != (before.floppy_disk >= 0)) {
+        emit(ghost::game::DiskMoved{carsys_.floppy_disk >= 0});
+    }
+    if ((carsys_.tape_inserted >= 0) != (before.tape_inserted >= 0)) {
+        emit(ghost::game::TapeMoved{carsys_.tape_inserted >= 0});
+    }
+    if (carsys_.deck_play != before.deck_play) {
+        emit(ghost::game::DeckPlay{carsys_.deck_play});
+    }
+    if (vehicle_.train().gear != before.gear) {
+        emit(ghost::game::GearShifted{vehicle_.train().gear, vehicle_.train().manual});
+    }
+    const u32 tank_now = tank_total(carsys_.synth);
+    if (tank_now > before.tank_total) {
+        emit(ghost::game::TankFilled{static_cast<int>(tank_now - before.tank_total)});
     }
 }
 
@@ -1158,6 +1312,13 @@ void Sim::update_cables(f32 dt)
                 }
             } else if (k == CABLE_BUS && carsys_.bus_target == kBusTargetTower) {
                 end = tower_port_pos();
+            } else if (k == CABLE_BUS && carsys_.bus_target == kBusTargetLoosePrinter) {
+                const Entity* printer = find_pickup(ITEM_PRINTER, carsys_.bus_printer);
+                if (!printer) {
+                    drop_cable(k);
+                    continue;
+                }
+                end = printer->pos + rotate(printer->rot, kLoosePrinterJackLocal);
             } else if (k == CABLE_BUS && carsys_.bus_target == kBusTargetPrinter) {
                 if (!carsys_.parts[PART_PRINTER].installed) {
                     drop_cable(k);
@@ -1239,6 +1400,7 @@ void Sim::drop_cable(u32 kind)
     }
     if (kind == CABLE_BUS) {
         carsys_.bus_target = kBusTargetCar;
+        carsys_.bus_printer = 0;
     }
     for (PlayerSlot& s : slots_) {
         if (s.interact.cable_drag() == static_cast<i32>(kind)) {
@@ -1282,7 +1444,8 @@ void Sim::build_term_view(const PlayerCommand& cmd, TermView& out) const
     out.antenna_tier = !out.coax_camera && carsys_.parts[PART_ANTENNA].installed ? carsys_.parts[PART_ANTENNA].variant
                                                                                  : -1;
     out.bus_tower = carsys_.bus_target == kBusTargetTower;
-    out.bus_printer = carsys_.bus_target == kBusTargetPrinter;
+    out.bus_printer = carsys_.bus_target == kBusTargetPrinter || carsys_.bus_target == kBusTargetLoosePrinter;
+    out.synth_bay = carsys_.bus_bay(out.synth_tank, out.synth_printer);
     out.tower_breached = tower_breached_;
     out.tower_pos = tower_pos_;
 }
@@ -1446,7 +1609,11 @@ bool Sim::load_zone(std::string_view dir)
     }
     zone_gravity(world_, gravity_);
     rebuild_islands();
+    car_before_valid_ = false;
     spawn_zone_ghosts();
+    if (role_ != SimRole::Client) {
+        release_lost_stores();
+    }
     zone_dir_.assign(dir);
     apply_scene();
 
@@ -1463,6 +1630,7 @@ bool Sim::load_zone(std::string_view dir)
     }
 
     interact_spawn_zone_pickups(world_, phys_, terrain_, pickups_);
+    stock_fresh_tanks();
     terminal_.mapdata().init(terrain_.heightfield());
     terrain_dirty_ = true;
     tower_breached_ = false;
@@ -1500,7 +1668,6 @@ void Sim::arrive_at_destination()
         body->force_accum = Vec3{};
         body->torque_accum = Vec3{};
         body->asleep = 0;
-        body->sleep_timer = 0.0f;
         vehicle_.reset_contacts();
     }
 

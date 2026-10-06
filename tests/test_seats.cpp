@@ -141,6 +141,106 @@ TEST(seats, a_passenger_rides_in_the_right_seat_while_the_driver_drives)
     CHECK(local.x > 0.2f);
 }
 
+TEST(seats, a_passenger_is_offered_no_driver_controls)
+{
+    SeatRig rig;
+    if (!rig.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    CHECK(rig.enter(0, 0));
+    CHECK(rig.enter(1, 1));
+
+    const Vec3 com = rig.sim->vehicle().config().com_offset;
+    const Vec3 lever = rig.car().pos + rotate(rig.car().rot, rig.sim->boxes().box(IBOX_HANDBRAKE).center - com);
+    SlotCommand c[2];
+    c[0].id = 0;
+    c[0].cmd = rig.look_at(0, lever);
+    c[1].id = 1;
+    c[1].cmd = rig.look_at(1, lever);
+    rig.tick(c, 2);
+
+    CHECK(rig.sim->interact(0).action() == InteractAction::Handbrake);
+    CHECK(rig.sim->interact(1).action() == InteractAction::Info);
+    CHECK(rig.sim->interact(1).prompt() == "driver's controls");
+}
+
+TEST(controls, a_handbrake_tap_toggles_the_latch_and_a_hold_is_momentary)
+{
+    SeatRig rig;
+    if (!rig.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    CHECK(rig.enter(0, 0));
+    CarSys& sys = rig.sim->carsys();
+    sys.handbrake_latched = true;
+
+    SlotCommand c[1];
+    c[0].id = 0;
+    c[0].cmd.gameplay = true;
+    c[0].cmd.handbrake_toggle = true;
+    rig.tick(c, 1);
+    CHECK(!sys.handbrake_latched);
+
+    c[0].cmd.handbrake_toggle = false;
+    c[0].cmd.handbrake = true;
+    rig.tick(c, 30);
+    CHECK(!sys.handbrake_latched);
+    CHECK(rig.sim->vehicle().input().handbrake);
+
+    c[0].cmd.handbrake = false;
+    rig.tick(c, 1);
+    CHECK(!rig.sim->vehicle().input().handbrake);
+
+    c[0].cmd.handbrake_toggle = true;
+    rig.tick(c, 1);
+    CHECK(sys.handbrake_latched);
+    c[0].cmd.handbrake_toggle = false;
+    rig.tick(c, 1);
+    CHECK(rig.sim->vehicle().input().handbrake);
+}
+
+TEST(controls, an_ignition_tap_stops_the_engine_and_inserts_a_held_key)
+{
+    SeatRig rig;
+    if (!rig.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    CHECK(rig.enter(0, 0));
+    rig.sim->interact(0).set_has_key(true);
+    CarSys& sys = rig.sim->carsys();
+    CHECK(!sys.key_inserted);
+
+    SlotCommand c[1];
+    c[0].id = 0;
+    c[0].cmd.gameplay = true;
+    c[0].cmd.ignition_tap = true;
+    rig.tick(c, 1);
+    CHECK(sys.key_inserted);
+    CHECK(!rig.sim->interact(0).has_key());
+
+    c[0].cmd.ignition_tap = false;
+    sys.engine_on = true;
+    sys.fluids.fuel = 0.5f;
+    rig.tick(c, 1);
+    CHECK(sys.engine_on);
+
+    c[0].cmd.ignition_tap = true;
+    rig.tick(c, 1);
+    CHECK(!sys.engine_on);
+    CHECK(sys.stall_notice == 0.0f);
+
+    c[0].cmd.ignition_tap = false;
+    c[0].cmd.horn = true;
+    rig.tick(c, 1);
+    CHECK(sys.horn_on);
+    c[0].cmd.horn = false;
+    rig.tick(c, 1);
+    CHECK(!sys.horn_on);
+}
+
 TEST(seats, the_computer_on_the_passenger_seat_keeps_it_closed)
 {
     SeatRig rig;
@@ -264,4 +364,28 @@ TEST(seats, a_passenger_cannot_aim_while_the_cylinder_is_open)
     rig.tick(c, 90);
     CHECK(rig.sim->slot(1)->gun.mechanism.state().isClosed());
     CHECK(rig.sim->player(1).movement().state().aiming);
+}
+
+TEST(seats, a_handbrake_tap_only_sets_the_parking_brake_when_the_car_is_stopped)
+{
+    SeatRig rig;
+    if (!rig.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    CHECK(rig.enter(0, 0));
+    rig.sim->carsys().handbrake_latched = false;
+    SlotCommand c[1];
+    c[0].id = 0;
+    c[0].cmd.gameplay = true;
+    c[0].cmd.handbrake_toggle = true;
+    rig.tick(c, 1);
+    CHECK(rig.sim->carsys().handbrake_latched);
+    rig.tick(c, 1);
+    CHECK(!rig.sim->carsys().handbrake_latched);
+
+    RigidBody* car = rig.sim->phys().body(rig.sim->vehicle().body());
+    car->vel = rotate(car->rot, Vec3{0.0f, 0.0f, -20.0f});
+    rig.tick(c, 1);
+    CHECK(!rig.sim->carsys().handbrake_latched);
 }

@@ -90,7 +90,8 @@ void Ballistics::tick(float dt, const RaycastFn& raycast, EventList& events, con
         const SurfaceResponse response = surfaceResponse(surface);
 
         const float grazingDeg = glm::degrees(std::asin(std::clamp(-glm::dot(dir, normal), 0.0f, 1.0f)));
-        const bool ricochet = grazingDeg <= response.ricochetMaxAngleDeg && speed >= m_tuning.minRicochetSpeed &&
+        const float bounce = p.round.element < m_ricochet.size() ? m_ricochet[p.round.element] : 1.0f;
+        const bool ricochet = grazingDeg <= response.ricochetMaxAngleDeg * bounce && speed >= m_tuning.minRicochetSpeed &&
                               p.ricochets < m_tuning.maxRicochets;
 
         ProjectileImpact impact;

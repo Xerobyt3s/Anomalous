@@ -117,33 +117,83 @@ TEST(pickups, rebuilding_the_statics_keeps_pickups_and_characters)
 TEST(pickups, the_car_shoves_a_pickup_and_feels_it)
 {
     Yard yard;
-    const glm::vec3 half{1.0f, 0.6f, 2.2f};
-    glm::vec3 car{0.0f, 0.55f, 0.0f};
-    yard.jolt.setVehicle(car, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), half, glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(0.0f),
-                         static_cast<std::uint64_t>(ghost::game::Surface::Steel));
     const EntityHandle h = interact_spawn_pickup(yard.world, yard.phys, Item{ITEM_BATTERY}, Vec3{0.0f, 0.3f, -3.0f},
                                                  0.0f, Vec3{});
     yard.run(60);
     const f32 before = yard.state(h).pos.z;
-    glm::vec3 total{0.0f};
+
+    ghost::engine::DynamicBodyDesc desc;
+    desc.center = glm::vec3(0.0f, 0.65f, 0.0f);
+    desc.halfExtents = glm::vec3(1.0f, 0.6f, 2.2f);
+    desc.mass = 1130.0f;
+    desc.friction = 0.5f;
+    desc.allowSleeping = false;
+    desc.velocity = glm::vec3(0.0f, 0.0f, -6.0f);
+    desc.userData = static_cast<std::uint64_t>(ghost::game::Surface::Steel);
+    const auto car = yard.jolt.addDynamicBody(desc);
+    CHECK(car != ghost::engine::kNoBody);
+    f32 felt = 0.0f;
     for (i32 i = 0; i < 90; i++) {
-        car.z -= 6.0f * kDt;
-        yard.jolt.moveVehicle(car, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), kDt);
+        yard.jolt.setVelocities(car, glm::vec3(0.0f, yard.jolt.state(car).velocity.y, -6.0f), glm::vec3(0.0f));
         yard.jolt.step(kDt);
-        for (const ghost::engine::VehiclePush& push : yard.jolt.takeVehiclePushes()) {
-            total += push.impulse;
-        }
+        felt = f_max(felt, yard.jolt.state(car).velocity.z + 6.0f);
     }
     CHECK(yard.state(h).pos.z < before - 1.0f);
-    CHECK(total.z > 1.0f);
+    CHECK(felt > 0.01f);
+}
+
+TEST(pickups, a_body_with_provided_inertia_spins_about_its_own_origin)
+{
+    Yard yard;
+    ghost::engine::DynamicBodyDesc desc;
+    desc.center = glm::vec3(0.0f, 5.0f, 0.0f);
+    desc.halfExtents = glm::vec3(0.5f, 0.3f, 0.5f);
+    desc.shapeOffset = glm::vec3(0.0f, -0.2f, 0.0f);
+    desc.mass = 10.0f;
+    desc.inertiaDiagonal = glm::vec3(50.0f, 50.0f, 50.0f);
+    desc.angularDamping = 0.0f;
+    desc.linearDamping = 0.0f;
+    const auto body = yard.jolt.addDynamicBody(desc);
+    CHECK(body != ghost::engine::kNoBody);
+    CHECK(yard.jolt.dynamicCount() == 1);
+
+    for (i32 i = 0; i < 60; i++) {
+        yard.jolt.addTorque(body, glm::vec3(0.0f, 100.0f, 0.0f));
+        yard.jolt.step(kDt);
+    }
+    const ghost::engine::BodyState s = yard.jolt.state(body);
+    CHECK(std::fabs(s.position.x) < 1e-4f);
+    CHECK(std::fabs(s.position.z) < 1e-4f);
+    CHECK(s.position.y < 5.0f);
+    CHECK_NEAR(s.angularVelocity.y, 1.0f, 0.02f);
+}
+
+TEST(pickups, add_force_wakes_a_sleeping_body)
+{
+    Yard yard;
+    ghost::engine::DynamicBodyDesc desc;
+    desc.center = glm::vec3(0.0f, 0.5f, 0.0f);
+    desc.halfExtents = glm::vec3(0.5f);
+    desc.mass = 1.0f;
+    const auto body = yard.jolt.addDynamicBody(desc);
+    yard.run(240);
+    CHECK(!yard.jolt.isActive(body));
+
+    yard.jolt.addForce(body, glm::vec3(0.0f, 0.0f, 50.0f));
+    yard.jolt.step(kDt);
+    CHECK(yard.jolt.isActive(body));
+    CHECK(yard.jolt.state(body).velocity.z > 0.1f);
 }
 
 TEST(pickups, rays_hit_pickups_and_the_car_unless_only_statics_are_wanted)
 {
     Yard yard;
-    yard.jolt.setVehicle(glm::vec3(5.0f, 0.8f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.6f, 2.2f),
-                         glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(0.0f),
-                         static_cast<std::uint64_t>(ghost::game::Surface::Steel));
+    ghost::engine::DynamicBodyDesc car;
+    car.center = glm::vec3(5.0f, 0.8f, 0.0f);
+    car.halfExtents = glm::vec3(1.0f, 0.6f, 2.2f);
+    car.mass = 1130.0f;
+    car.userData = static_cast<std::uint64_t>(ghost::game::Surface::Steel);
+    CHECK(yard.jolt.addDynamicBody(car) != ghost::engine::kNoBody);
     interact_spawn_pickup(yard.world, yard.phys, Item{ITEM_BATTERY}, Vec3{0.0f, 2.0f, 0.0f}, 0.0f, Vec3{});
     const auto on_pickup = yard.jolt.raycast(glm::vec3(0.0f, 10.0f, 0.0f), glm::vec3(0.0f, -10.0f, 0.0f));
     CHECK(on_pickup.has_value());

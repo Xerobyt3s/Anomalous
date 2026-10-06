@@ -328,6 +328,7 @@ struct ChaseRig {
     Arena arena{megabytes(64)};
     Heightfield hf;
     PhysWorld world;
+    ghost::engine::PhysicsWorld jolt;
     Vehicle veh;
     Player player;
     PlayerView view;
@@ -336,6 +337,7 @@ struct ChaseRig {
     {
         hf.init_procedural(arena, 128, 2.0f, 1u, 0.0f);
         world.init(arena, &hf);
+        world.set_jolt(&jolt);
         if (!veh.init(world, arena, "assets/cars/excel.cfg", Vec3{0.0f, 0.9f, 0.0f}, 0.0f)) {
             return false;
         }
@@ -364,6 +366,60 @@ struct ChaseRig {
     }
 };
 
+}
+
+TEST(chase_cam, the_fov_widens_with_speed)
+{
+    ChaseRig rig;
+    CHECK(rig.setup());
+    const Camera slow = rig.settle(Vec3{0.0f, 0.0f, 0.0f}, 200);
+    CHECK_NEAR(slow.fov_y, 70.0f * kDegToRad, 1e-3);
+    const Camera fast = rig.settle(Vec3{0.0f, 0.0f, -35.0f}, 400);
+    CHECK(fast.fov_y > 78.0f * kDegToRad);
+    CHECK(fast.fov_y < 83.0f * kDegToRad);
+}
+
+TEST(chase_cam, an_impact_kick_decays_to_nothing)
+{
+    ChaseRig rig;
+    CHECK(rig.setup());
+    const Camera before = rig.settle(Vec3{0.0f, 0.0f, 0.0f}, 200);
+    rig.view.kick(1.0f);
+    const Camera kicked = rig.settle(Vec3{0.0f, 0.0f, 0.0f}, 3);
+    CHECK(f_abs(kicked.yaw - before.yaw) + f_abs(kicked.pitch - before.pitch) + f_abs(kicked.roll - before.roll) > 1e-3f);
+    const Camera after = rig.settle(Vec3{0.0f, 0.0f, 0.0f}, 80);
+    CHECK_NEAR(after.yaw, before.yaw, 1e-3);
+    CHECK_NEAR(after.pitch, before.pitch, 1e-3);
+    CHECK_NEAR(after.roll, before.roll, 1e-3);
+}
+
+TEST(chase_cam, look_behind_turns_the_camera_around)
+{
+    ChaseRig rig;
+    CHECK(rig.setup());
+    const Camera ahead = rig.settle(Vec3{0.0f, 0.0f, 0.0f}, 200);
+    rig.view.set_look_behind(true);
+    const Camera behind = rig.settle(Vec3{0.0f, 0.0f, 0.0f}, 120);
+    CHECK_NEAR(f_abs(f_wrap_angle(behind.yaw - ahead.yaw)), kPi, 1e-2);
+    rig.view.set_look_behind(false);
+    const Camera back = rig.settle(Vec3{0.0f, 0.0f, 0.0f}, 120);
+    CHECK_NEAR(f_wrap_angle(back.yaw - ahead.yaw), 0.0f, 1e-2);
+}
+
+TEST(chase_cam, the_cockpit_takes_a_fraction_of_the_roll)
+{
+    ChaseRig rig;
+    CHECK(rig.setup());
+    Camera cam;
+    for (i32 i = 0; i < 60; i++) {
+        rig.view.camera(rig.player, rig.world, &rig.veh, 1.0f, kDt, false, 0.0f, 0.0f, cam);
+    }
+    CHECK_NEAR(cam.roll, 0.0f, 1e-3);
+    RigidBody* body = rig.world.body(rig.veh.body());
+    body->rot = normalize(quat_from_axis_angle(Vec3{0.0f, 0.0f, 1.0f}, 0.3f) * body->rot);
+    body->prev_rot = body->rot;
+    rig.view.camera(rig.player, rig.world, &rig.veh, 1.0f, kDt, false, 0.0f, 0.0f, cam);
+    CHECK_NEAR(f_abs(cam.roll), 0.35f * 0.3f, 0.02);
 }
 
 TEST(chase_cam, the_boom_sits_behind_a_stationary_car)

@@ -11,7 +11,7 @@
 
 namespace ghost::game {
 struct FogStyle {
-    float density = 1.7f;
+    float density = 5.0f;
     int steps = 48;
     float noiseScale = 0.55f;
     float churn = 1.0f;

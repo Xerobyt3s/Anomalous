@@ -35,7 +35,27 @@ namespace anom {
 inline constexpr f32 kFixedDt = 1.0f / 120.0f;
 inline constexpr u32 kStaleSnapshotTicks = 1200;
 
-struct CarSnapshot;
+struct CarSnapshot {
+    bool door_target[2];
+    bool hood_target;
+    bool trunk_target;
+    bool engine_on;
+    u32 impact_serial;
+    bool installed[PART_COUNT];
+    bool handbrake_latched;
+    bool headlight_switch;
+    i32 wiper_mode;
+    bool fuel_cap_open;
+    bool key_inserted;
+    f32 fuel;
+    f32 oil;
+    u32 cargo_count;
+    i32 floppy_disk;
+    i32 tape_inserted;
+    bool deck_play;
+    i32 gear;
+    u32 tank_total;
+};
 
 bool own_event(const ghost::game::GameEvent& e, PlayerId local);
 bool echo_of_mine(const ghost::game::GameEvent& e, PlayerId local);
@@ -77,10 +97,12 @@ public:
     void apply_scene();
     void park_car();
     void respawn_owned(PlayerId id);
+    void kit_gun(ghost::game::PlayerGun& gun) const;
     void tick_bench(PlayerSlot& s, f32 dt);
     void queue_print(const u8* doses, u32 dose_count, u32 count);
-    void fill_tank();
-    void take_tray(PlayerSlot& s);
+    void fill_tank(i32 target);
+    u16* tank_doses(i32 target);
+    void take_tray(PlayerSlot& s, i32 target);
     void update_hands_and_gun(PlayerSlot& s, const PlayerCommand& cmd, PlayerCommand& player_cmd, bool took, f32 dt);
     void poll_hot_reload(Arena& scratch, f64 now);
     void queue_photo(const u8* rgb, PlayerId by = 0);
@@ -160,6 +182,9 @@ public:
     u64 tick_count() const { return tick_count_; }
     bool take_terrain_dirty();
     const Entity* find_pickup(ItemKind kind) const;
+    const Entity* find_pickup(ItemKind kind, i32 aux) const;
+    void release_lost_stores();
+    void stock_fresh_tanks();
     Vec3 hands_pos(PlayerId id) const;
     Vec3 hands_eye(PlayerId id) const;
     const PlayerSlot* holding(ItemKind kind) const;
@@ -198,9 +223,8 @@ private:
     Vec3 spawn_point(PlayerId id) const;
     PlayerId spawn_dummy();
     void place_player(PlayerSlot& slot, Vec3 feet, f32 yaw);
-    void apply_weather_grip();
+    void apply_surface_grip();
     void sync_pickup_transforms();
-    void step_physics(f32 dt);
     bool default_gravity_at(Vec3 p) const;
     void update_cables(f32 dt);
     void drop_cable(u32 kind);
@@ -301,6 +325,8 @@ private:
     std::vector<u8> photo_;
     bool photo_pending_ = false;
     u64 tick_count_ = 0;
+    CarSnapshot car_before_{};
+    bool car_before_valid_ = false;
 };
 
 }

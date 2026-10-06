@@ -32,6 +32,12 @@ enum SfxKind : u32 {
 };
 
 void engine_crossfade(std::span<const f32> base_rpm, f32 rpm, std::span<f32> out);
+f32 skid_intensity(f32 slide_lat, f32 slide_long);
+f32 engine_load_lowpass(f32 load);
+f32 cabin_lowpass(f32 occlusion);
+f32 wind_volume(f32 speed, bool seated);
+f32 wind_lowpass(f32 speed);
+void fill_noise_loop(std::span<f32> out, u32 seed);
 
 class Audio {
 public:
@@ -53,11 +59,13 @@ public:
     void play(SfxKind kind, f32 volume, f32 pitch);
     void play_at(SfxKind kind, f32 volume, f32 pitch, Vec3 pos);
 
-    void set_engine(f32 rpm, f32 load, bool running, bool cranking, f32 dt);
+    void set_engine(f32 rpm, f32 load, bool running, bool cranking, f32 dt, bool shifting = false);
     void set_rolling(f32 speed, f32 road_amount, bool grounded, f32 wetness, f32 dt);
     void set_rain(f32 exterior, f32 roof, f32 dt);
     void set_skid(f32 intensity, f32 dt);
+    void set_skid_surface(f32 squeal, f32 grass, f32 dt);
     void set_horn(bool on, f32 dt);
+    void set_wind(f32 speed, bool seated, f32 dt);
 
     bool tape_play(std::string_view path);
     void tape_stop();

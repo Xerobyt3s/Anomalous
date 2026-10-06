@@ -184,3 +184,20 @@ TEST_CASE("An ethereal round goes through a wall but is stopped by a player in i
     CHECK(hit->surface == Surface::Player);
     CHECK(hit->point.z == doctest::Approx(-3.0f).epsilon(0.02));
 }
+
+TEST_CASE("A round with a low ricochet scale buries itself where a plain round would skip") {
+    const auto skips = [](float scale) {
+        Ballistics b;
+        b.setRicochet({1.0f, scale});
+        EventList events;
+        const glm::vec3 shallow = glm::normalize(glm::vec3(0.0f, -std::sin(glm::radians(15.0f)), -1.0f));
+        b.fire({0.0f, 1.0f, 0.0f}, shallow, Round{1});
+        const RaycastFn steelFloor = plane({0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, Surface::Steel);
+        for (int i = 0; i < 120 && events.empty(); ++i) {
+            b.tick(kDt, steelFloor, events);
+        }
+        return !events.empty() && std::get<ProjectileImpact>(events[0]).ricochet;
+    };
+    CHECK(skips(1.0f));
+    CHECK_FALSE(skips(0.35f));
+}

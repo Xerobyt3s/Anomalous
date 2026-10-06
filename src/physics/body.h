@@ -6,7 +6,7 @@
 
 namespace anom {
 
-inline constexpr u32 kMaxSpheresPerBody = 8;
+inline constexpr u32 kNoJoltBody = 0xFFFFFFFFu;
 
 struct RigidBody {
     Vec3 pos;
@@ -20,15 +20,17 @@ struct RigidBody {
     f32 inv_mass;
     Mat3 inv_inertia_local;
     Vec3 half_extents;
-    Vec3 sphere_offsets[kMaxSpheresPerBody];
-    u32 sphere_count;
-    f32 sphere_radius;
     f32 restitution;
     f32 friction;
     Vec3 box_offset;
-    f32 sleep_timer;
     b32 asleep;
     Vec3 gravity;
+    u32 jolt_id;
+    b32 wake_request;
+    Vec3 read_pos;
+    Quat read_rot;
+    Vec3 read_vel;
+    Vec3 read_angular_vel;
 };
 
 using BodyHandle = Handle<RigidBody>;
@@ -40,6 +42,5 @@ void body_apply_torque(RigidBody& body, Vec3 torque);
 void body_apply_impulse_at_point(RigidBody& body, Vec3 impulse, Vec3 point);
 void body_wake(RigidBody& body);
 bool body_state_valid(const RigidBody& body);
-Vec3 body_sphere_center(const RigidBody& body, u32 index);
 
 } // namespace anom

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include <vector>
 
 #include "core/pool.h"
@@ -22,18 +24,6 @@ class Arena;
 class Heightfield;
 class GravityField;
 
-struct PhysContact {
-    u64 key;
-    u32 body_a;
-    u32 body_b;
-    Vec3 point;
-    Vec3 normal;
-    Vec3 tangent[2];
-    f32 depth;
-    f32 normal_impulse;
-    f32 tangent_impulse[2];
-};
-
 struct PhysRayHit {
     f32 t;
     Vec3 point;
@@ -44,28 +34,36 @@ struct PhysTuning {
     f32 gravity = -9.81f;
     f32 linear_damping = 0.02f;
     f32 angular_damping = 0.08f;
-    f32 restitution_min_speed = 1.0f;
-    f32 baumgarte = 0.20f;
-    f32 slop = 0.005f;
-    f32 max_correction_speed = 3.0f;
-    u32 iterations = 8;
-    bool warm_start = true;
-    f32 sleep_linear = 0.006f;
-    f32 sleep_angular = 0.05f;
-    f32 sleep_time = 0.5f;
 };
 
-struct PhysStats {
-    u32 live_bodies = 0;
-    u32 contacts = 0;
-    u32 warm_started = 0;
+inline constexpr u32 kBodyHullPoints = 16;
+
+struct BodyDesc {
+    Vec3 half_extents{0.5f, 0.5f, 0.5f};
+    Vec3 box_offset{0.0f, 0.0f, 0.0f};
+    f32 mass = 1.0f;
+    Vec3 inertia_diag{1.0f, 1.0f, 1.0f};
+    f32 friction = 0.6f;
+    f32 restitution = 0.15f;
+    bool linear_cast = false;
+    bool allow_sleeping = true;
+    std::array<Vec3, kBodyHullPoints> hull{};
+    u32 hull_count = 0;
 };
+
+inline bool body_desc_equal(const BodyDesc& a, const BodyDesc& b)
+{
+    return a.half_extents == b.half_extents && a.box_offset == b.box_offset && a.mass == b.mass
+        && a.inertia_diag == b.inertia_diag && a.friction == b.friction
+        && a.restitution == b.restitution && a.linear_cast == b.linear_cast
+        && a.allow_sleeping == b.allow_sleeping && a.hull_count == b.hull_count && a.hull == b.hull;
+}
+
+Vec3 solid_box_inertia(Vec3 half_extents, f32 mass);
 
 class PhysWorld {
 public:
     static constexpr u32 kMaxBodies = 256;
-    static constexpr u32 kMaxContacts = 2048;
-    static constexpr u32 kStaticBody = 0xFFFFFFFFu;
 
     void init(Arena& arena, const Heightfield* hf);
 
@@ -91,6 +89,8 @@ public:
     const Heightfield* heightfield() const { return hf_; }
 
     BodyHandle body_create_box(Vec3 pos, Quat rot, Vec3 half_extents, f32 mass);
+    BodyHandle body_create_box(Vec3 pos, Quat rot, const BodyDesc& desc);
+    void body_reshape(BodyHandle handle, const BodyDesc& desc);
     void body_destroy(BodyHandle handle);
     RigidBody* body(BodyHandle handle) { return bodies_.get(handle); }
     const RigidBody* body(BodyHandle handle) const { return bodies_.get(handle); }
@@ -102,34 +102,27 @@ public:
     void tick(f32 dt);
     bool raycast(Ray ray, f32 max_t, PhysRayHit* out_hit) const;
 
-    std::span<const PhysContact> contacts() const { return {contacts_, contact_count_}; }
-    const PhysStats& stats() const { return stats_; }
-
     PhysTuning& tuning() { return tuning_; }
     const PhysTuning& tuning() const { return tuning_; }
 
     Vec3 gravity() const { return Vec3{0.0f, tuning_.gravity, 0.0f}; }
     Vec3 gravity_at(Vec3 p) const;
     Vec3 up_at(Vec3 p) const;
-    void set_gravity_field(const GravityField* field) { field_ = field; }
-    const GravityField* gravity_field() const { return field_; }
-    void set_jolt(ghost::engine::PhysicsWorld* jolt)
+    void set_gravity_field(const GravityField* field)
     {
-        jolt_ = jolt;
-        sync_jolt();
+        field_ = field;
+        install_gravity();
     }
+    const GravityField* gravity_field() const { return field_; }
+    void set_jolt(ghost::engine::PhysicsWorld* jolt);
     ghost::engine::PhysicsWorld* jolt() const { return jolt_; }
     void sync_jolt();
 
 private:
-    void integrate_velocities(f32 dt);
-    void integrate_positions(f32 dt);
-    void collect_contacts();
-    void collect_static_contacts(u32 slot);
-    void warm_start();
-    void solve(f32 dt);
-    void update_sleep(f32 dt);
-    void add_contact(const PhysContact& contact);
+    void install_gravity();
+    void ensure_jolt_bodies();
+    u32 create_jolt_body(const RigidBody& body, const BodyDesc& desc) const;
+    void apply_desc(RigidBody& body, const BodyDesc& desc) const;
 
     Pool<RigidBody> bodies_;
     struct StaticBox {
@@ -138,18 +131,14 @@ private:
         u8 surface;
     };
     std::vector<StaticBox> static_boxes_;
+    std::vector<BodyDesc> descs_;
     StaticGrid statics_;
     const Heightfield* hf_ = nullptr;
     const GravityField* field_ = nullptr;
     ghost::engine::PhysicsWorld* jolt_ = nullptr;
-
-    PhysContact* contacts_ = nullptr;
-    PhysContact* previous_ = nullptr;
-    u32 contact_count_ = 0;
-    u32 previous_count_ = 0;
+    bool warned_no_jolt_ = false;
 
     PhysTuning tuning_;
-    PhysStats stats_;
 };
 
 }

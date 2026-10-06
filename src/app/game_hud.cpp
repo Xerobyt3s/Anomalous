@@ -17,6 +17,8 @@ constexpr f32 kPromptSize = 20.0f;
 constexpr f32 kHoldingSize = 18.0f;
 constexpr f32 kNoteSize = 17.0f;
 constexpr f32 kHoldBarWidth = 160.0f;
+constexpr f32 kFuelBarWidth = 120.0f;
+constexpr u64 kControlsCardTicks = 720;
 constexpr f32 kCrosshair = 6.0f;
 constexpr f32 kNameLift = 0.25f;
 
@@ -93,14 +95,73 @@ void Game::draw_play_hud()
         draw->AddLine({cx, cy - kCrosshair}, {cx, cy + kCrosshair}, kDdWhite);
     }
 
-    if (sim_.player(local_).driving()) {
-        const f32 speed = f_abs(sim_.vehicle().forward_speed(sim_.phys())) * 3.6f;
-        const i32 gear = sim_.vehicle().train().gear;
+    const bool driving_now = sim_.player(local_).driving();
+    if (driving_now && !was_driving_) {
+        seat_tick_ = sim_.tick_count();
+    }
+    was_driving_ = driving_now;
+    if (driving_now) {
+        const Vehicle& veh = sim_.vehicle();
+        const CarSys& cs = sim_.carsys();
+        const f32 speed = f_abs(veh.forward_speed(sim_.phys())) * 3.6f;
+        const i32 gear = veh.train().gear;
         std::snprintf(line, sizeof(line), "%3.0f km/h", static_cast<f64>(speed));
-        text_at(draw, kSpeedSize, {24.0f, size.y - 96.0f - kSpeedSize}, kDdWhite, line);
-        std::snprintf(line, sizeof(line), "%4.0f rpm  gear %s%s", static_cast<f64>(drivetrain_rpm(sim_.vehicle().train())),
-                      gear < 0 ? "R" : (gear == 0 ? "N" : "D"), sim_.vehicle().train().manual ? " [M]" : "");
-        text_at(draw, kReadoutSize, {24.0f, size.y - 64.0f - kReadoutSize}, kDdWhite, line);
+        text_at(draw, kSpeedSize, {24.0f, size.y - 120.0f - kSpeedSize}, kDdWhite, line);
+        char gear_text[8];
+        if (gear < 0) {
+            std::snprintf(gear_text, sizeof(gear_text), "R");
+        } else if (gear == 0) {
+            std::snprintf(gear_text, sizeof(gear_text), "N");
+        } else {
+            std::snprintf(gear_text, sizeof(gear_text), "%d", gear);
+        }
+        std::snprintf(line, sizeof(line), "%4.0f rpm  gear %s %s", static_cast<f64>(drivetrain_rpm(veh.train())), gear_text,
+                      veh.train().manual ? "[M]" : "[A]");
+        text_at(draw, kReadoutSize, {24.0f, size.y - 88.0f - kReadoutSize}, kDdWhite, line);
+
+        const char* state = "OFF";
+        u32 state_color = kDdGray;
+        const StartBlocker blocker = cs.start_blocker();
+        if (cs.engine_on) {
+            state = "RUNNING";
+            state_color = kDdWhite;
+        } else if (cs.crank_active) {
+            state = "CRANKING";
+            state_color = kDdYellow;
+        } else if (cs.stall_notice > 0.0f) {
+            state = "STALLED";
+            state_color = kDdOrange;
+        } else if (cs.crank_request && blocker != StartBlocker::None) {
+            state = start_blocker_text(blocker).data();
+            state_color = kDdOrange;
+        }
+        std::snprintf(line, sizeof(line), "engine %s", state);
+        text_at(draw, kReadoutSize, {24.0f, size.y - 60.0f - kReadoutSize}, state_color, line);
+
+        const f32 fuel = f_clamp01(cs.fluids.fuel);
+        const f32 bx = 24.0f;
+        const f32 by = size.y - 44.0f;
+        draw->AddRect({bx, by}, {bx + kFuelBarWidth, by + 6.0f}, kDdGray);
+        draw->AddRectFilled({bx, by}, {bx + kFuelBarWidth * fuel, by + 6.0f}, fuel < 0.15f ? kDdOrange : kDdWhite);
+        f32 gx = bx + kFuelBarWidth + 12.0f;
+        if (cs.handbrake_latched) {
+            text_at(draw, kReadoutSize, {gx, by - 6.0f}, kDdOrange, "(P)");
+            gx += 46.0f;
+        }
+        if (cs.key_inserted) {
+            text_at(draw, kReadoutSize, {gx, by - 6.0f}, kDdWhite, "KEY");
+            gx += 52.0f;
+        }
+        if (veh.effects().headlights_on) {
+            text_at(draw, kReadoutSize, {gx, by - 6.0f}, kDdWhite, "LIGHTS");
+        }
+
+        if (!controls_card_done_ && sim_.tick_count() - seat_tick_ < kControlsCardTicks) {
+            text_centered(draw, kNoteSize, cx, size.y * 0.80f, kDdGray,
+                          "[I] ignition  [Space] handbrake  [L] lights  [H] horn  [X] wipers  [C] camera  [V] look back");
+        } else if (sim_.tick_count() - seat_tick_ >= kControlsCardTicks) {
+            controls_card_done_ = true;
+        }
     }
 
     const Interact& interact = sim_.interact(local_);
@@ -152,7 +213,7 @@ void Game::draw_debug_panels()
         ImGui::SetNextWindowPos({16.0f, ImGui::GetIO().DisplaySize.y - 260.0f}, ImGuiCond_FirstUseEver);
         ImGui::Begin("CarSys");
         ImGui::Text("engine %s", sim_.carsys().engine_on ? "running" : "off");
-        ImGui::Text("fuel %.1f L", static_cast<f64>(sim_.carsys().fluids.fuel));
+        ImGui::Text("fuel %.0f %%", static_cast<f64>(sim_.carsys().fluids.fuel * 100.0f));
         ImGui::Text("oil %.2f", static_cast<f64>(sim_.carsys().fluids.oil));
         ImGui::Text("coolant %.0f C", static_cast<f64>(sim_.carsys().fluids.coolant_temp));
         ImGui::Text("battery %.2f", static_cast<f64>(sim_.carsys().elec.battery_charge));

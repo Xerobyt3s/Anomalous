@@ -26,6 +26,66 @@ f32 weight_sum_sq(std::span<const f32> w)
 
 } // namespace
 
+TEST(audio, skid_intensity_counts_longitudinal_slide)
+{
+    CHECK(skid_intensity(0.0f, 0.0f) == 0.0f);
+    CHECK(skid_intensity(1.0f, 1.5f) == 0.0f);
+    CHECK_NEAR(skid_intensity(7.5f, 0.0f), 1.0f, 1e-5);
+    CHECK_NEAR(skid_intensity(0.0f, 9.0f), 1.0f, 1e-5);
+    CHECK(skid_intensity(0.0f, 5.0f) > 0.3f);
+    CHECK(skid_intensity(0.0f, 5.0f) < 0.6f);
+    CHECK_NEAR(skid_intensity(-4.5f, 0.0f), skid_intensity(4.5f, 0.0f), 1e-6);
+}
+
+TEST(audio, engine_lowpass_opens_with_load)
+{
+    CHECK_NEAR(engine_load_lowpass(0.0f), 1500.0f, 1e-3);
+    CHECK(engine_load_lowpass(0.5f) > 1500.0f);
+    CHECK(engine_load_lowpass(0.5f) < 9000.0f);
+    CHECK(engine_load_lowpass(1.0f) == 0.0f);
+}
+
+TEST(audio, the_cabin_lowpass_is_off_outside_the_car)
+{
+    CHECK(cabin_lowpass(1.0f) == 0.0f);
+    CHECK_NEAR(cabin_lowpass(0.55f), 1300.0f, 1e-3);
+    CHECK(cabin_lowpass(0.77f) > 1300.0f);
+    CHECK(cabin_lowpass(0.77f) < 6000.0f);
+}
+
+TEST(audio, wind_is_silent_at_walking_pace_and_grows_with_speed)
+{
+    CHECK(wind_volume(2.0f, false) == 0.0f);
+    CHECK(wind_volume(8.0f, false) == 0.0f);
+    const f32 mid = wind_volume(25.0f, false);
+    const f32 fast = wind_volume(40.0f, false);
+    CHECK(mid > 0.0f);
+    CHECK(fast > mid);
+    CHECK_NEAR(wind_volume(40.0f, true), fast * 0.5f, 1e-6);
+    CHECK(wind_lowpass(0.0f) < wind_lowpass(40.0f));
+}
+
+TEST(audio, a_noise_loop_has_a_flat_rms)
+{
+    std::vector<f32> samples(9600);
+    fill_noise_loop(samples, 7u);
+    f32 sum_sq = 0.0f;
+    f32 peak = 0.0f;
+    for (f32 s : samples) {
+        sum_sq += s * s;
+        peak = std::fmax(peak, std::fabs(s));
+    }
+    const f32 rms = std::sqrt(sum_sq / static_cast<f32>(samples.size()));
+    CHECK(rms > 0.1f);
+    CHECK(rms < 0.3f);
+    CHECK(peak <= 1.0f);
+    CHECK(samples.front() == 0.0f);
+    CHECK(std::fabs(samples.back()) < 1e-3f);
+    std::vector<f32> again(9600);
+    fill_noise_loop(again, 7u);
+    CHECK(again[4000] == samples[4000]);
+}
+
 TEST(audio, crossfade_pins_to_the_lowest_layer_below_its_rpm)
 {
     const f32 base[] = {800.0f, 2000.0f, 4500.0f};

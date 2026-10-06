@@ -14,6 +14,31 @@ void Input::begin_frame()
     scroll_dy_ = 0.0f;
     prev_mouse_x_ = mouse_x_;
     prev_mouse_y_ = mouse_y_;
+    std::memset(pad_pressed_, 0, sizeof(pad_pressed_));
+    std::memset(pad_released_, 0, sizeof(pad_released_));
+}
+
+void Input::set_pad(bool connected, const f32* axes, const u8* buttons)
+{
+    if (!connected || !axes || !buttons) {
+        for (i32 i = 0; i < kPadButtonCount; i++) {
+            pad_released_[i] = pad_down_[i];
+            pad_down_[i] = 0;
+        }
+        std::memset(pad_axes_, 0, sizeof(pad_axes_));
+        pad_connected_ = false;
+        return;
+    }
+    pad_connected_ = true;
+    for (i32 i = 0; i < kPadAxisCount; i++) {
+        pad_axes_[i] = axes[i];
+    }
+    for (i32 i = 0; i < kPadButtonCount; i++) {
+        const u8 now = buttons[i] ? 1 : 0;
+        pad_pressed_[i] = now && !pad_down_[i];
+        pad_released_[i] = !now && pad_down_[i];
+        pad_down_[i] = now;
+    }
 }
 
 void Input::set_key(i32 key, bool is_down)

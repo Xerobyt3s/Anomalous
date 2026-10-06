@@ -4,6 +4,7 @@
 #include "math/glm_bridge.h"
 #include "assets/mesh_data.h"
 #include "carsys/items.h"
+#include "carsys/car_lights.h"
 #include "core/arena.h"
 #include "core/config.h"
 #include "core/log.h"
@@ -25,8 +26,10 @@
 
 #include <imgui.h>
 
+#include <chrono>
 #include <exception>
 #include <limits>
+#include <random>
 
 namespace anom {
 namespace {
@@ -37,6 +40,7 @@ constexpr f32 kHasteFovDeg = 6.0f;
 constexpr f32 kWeatherSliceDistance = 0.01f;
 constexpr f32 kTankFloor = -0.11f;
 constexpr f32 kTankInner = 0.22f;
+constexpr Vec3 kPrinterTankOffset{0.0f, 0.28f, 0.0f};
 constexpr f32 kTankRadius = 0.1f;
 constexpr u32 kMaxGrassPatches = 16;
 constexpr f32 kPressUprightY = 0.995f;
@@ -51,6 +55,10 @@ constexpr f32 kHazeShimmer = 1.0f;
 constexpr Vec3 kHazeTint{0.42f, 0.44f, 0.72f};
 constexpr f32 kEngineAudioLocal[3] = {0.0f, 0.10f, -1.55f};
 constexpr f32 kDashAudioLocal[3] = {0.0f, 0.35f, -0.35f};
+constexpr f32 kSteerKeyRateIn = 4.0f;
+constexpr f32 kSteerKeyRateOut = 9.0f;
+constexpr f32 kThrottleKeyRate = 4.0f;
+constexpr f32 kTapTime = 0.3f;
 constexpr Vec3 kCarPressLocal{0.0f, 0.60f, 0.0f};
 constexpr Vec3 kCarPressHalf{1.02f, 1.00f, 2.20f};
 constexpr f32 kGrassPressRange = 90.0f;
@@ -84,6 +92,8 @@ bool Game::init(RenderDevice& device, FontChain& fonts, Arena& perm, Arena& scra
     if (!sim_.init(perm, scratch, zone_dir)) {
         return false;
     }
+    sim_.weather().init(static_cast<u64>(std::random_device{}())
+                        ^ static_cast<u64>(std::chrono::steady_clock::now().time_since_epoch().count()));
     if (!term_render_.init(fonts, scratch)) {
         log_error("game: terminal renderer init failed");
         return false;
@@ -161,6 +171,9 @@ void Game::clear_pending_edges()
     pending_.take_key = false;
     pending_.recover = false;
     pending_.reset_car = false;
+    pending_.handbrake_toggle = false;
+    pending_.ignition_tap = false;
+    pending_.wipers_cycle = false;
     pending_.throw_power = -1.0f;
     pending_.place_commit = false;
     pending_.stow_cable = false;
@@ -183,12 +196,81 @@ void Game::clear_pending_edges()
     pending_.quick_fill_element = -1;
 }
 
-void Game::drive_input(const Input& input)
+void Game::drive_input(const Input& input, f32 frame_dt)
 {
-    pending_.throttle = input.down(Key::W) ? 1.0f : 0.0f;
+    const f32 steer_target = (input.down(Key::D) ? 1.0f : 0.0f) - (input.down(Key::A) ? 1.0f : 0.0f);
+    if (steer_target * steer_key_ < 0.0f) {
+        steer_key_ = 0.0f;
+    }
+    steer_key_ = f_move_toward(steer_key_, steer_target,
+                               (steer_target != 0.0f ? kSteerKeyRateIn : kSteerKeyRateOut) * frame_dt);
+    throttle_key_ = input.down(Key::W) ? f_move_toward(throttle_key_, 1.0f, kThrottleKeyRate * frame_dt) : 0.0f;
+    pending_.throttle = throttle_key_;
     pending_.reverse = input.down(Key::S) ? 1.0f : 0.0f;
-    pending_.steer = (input.down(Key::D) ? 1.0f : 0.0f) - (input.down(Key::A) ? 1.0f : 0.0f);
+    pending_.steer = steer_key_;
+
+    if (input.pressed(Key::Space)) {
+        handbrake_held_ = 0.0f;
+    }
+    if (input.down(Key::Space)) {
+        handbrake_held_ += frame_dt;
+    }
     pending_.handbrake = input.down(Key::Space);
+    if (input.released(Key::Space) && handbrake_held_ < kTapTime) {
+        pending_.handbrake_toggle = true;
+    }
+
+    if (input.pressed(Key::I)) {
+        ignition_held_ = 0.0f;
+    }
+    if (input.down(Key::I)) {
+        ignition_held_ += frame_dt;
+    }
+    pending_.crank = input.down(Key::I);
+    if (input.released(Key::I) && ignition_held_ < kTapTime) {
+        pending_.ignition_tap = true;
+    }
+
+    pending_.horn = input.down(Key::H);
+    if (input.pressed(Key::X)) {
+        pending_.wipers_cycle = true;
+    }
+    look_behind_ = input.down(Key::V);
+
+    DriveIntent pad;
+    drive_intent_from_pad(input, frame_dt, pad_taps_, pad);
+    if (steer_key_ == 0.0f) {
+        pending_.steer = pad.steer;
+    }
+    pending_.throttle = f_max(pending_.throttle, pad.throttle);
+    pending_.reverse = f_max(pending_.reverse, pad.reverse);
+    pending_.handbrake = pending_.handbrake || pad.handbrake;
+    pending_.handbrake_toggle = pending_.handbrake_toggle || pad.handbrake_tap;
+    pending_.crank = pending_.crank || pad.crank;
+    pending_.ignition_tap = pending_.ignition_tap || pad.ignition_tap;
+    pending_.horn = pending_.horn || pad.horn;
+    look_behind_ = look_behind_ || pad.look_behind;
+    pad_use_down_ = pad.use_down;
+    pad_use_pressed_ = pad.use_pressed;
+    pad_look_ = pad.look;
+    if (pad.headlights) {
+        pending_.headlights_toggle = !pending_.headlights_toggle;
+    }
+    if (pad.manual) {
+        pending_.manual_toggle = !pending_.manual_toggle;
+    }
+    if (pad.shift_up) {
+        pending_.shift++;
+    }
+    if (pad.shift_down) {
+        pending_.shift--;
+    }
+    if (pad.chase) {
+        toggles_.chase_cam = !toggles_.chase_cam;
+    }
+    if (pad.menu) {
+        menu_open_ = !menu_open_;
+    }
     if (input.pressed(Key::L)) {
         pending_.headlights_toggle = !pending_.headlights_toggle;
     }
@@ -209,6 +291,8 @@ void Game::drive_input(const Input& input)
 void Game::foot_input(const Input& input, f32 frame_dt)
 {
     Interact& interact = sim_.interact(local_);
+    steer_key_ = 0.0f;
+    throttle_key_ = 0.0f;
     pending_.move_x = (input.down(Key::D) ? 1.0f : 0.0f) - (input.down(Key::A) ? 1.0f : 0.0f);
     pending_.move_z = (input.down(Key::W) ? 1.0f : 0.0f) - (input.down(Key::S) ? 1.0f : 0.0f);
     const bool moving = pending_.move_x != 0.0f || pending_.move_z != 0.0f;
@@ -229,6 +313,22 @@ void Game::foot_input(const Input& input, f32 frame_dt)
     }
     if (input.pressed(Key::X)) {
         pending_.crawl = true;
+    }
+    FootIntent pad;
+    foot_intent_from_pad(input, frame_dt, pad);
+    if (pending_.move_x == 0.0f && pending_.move_z == 0.0f) {
+        pending_.move_x = pad.move.x;
+        pending_.move_z = pad.move.y;
+    }
+    pending_.run = pending_.run || pad.sprint;
+    pending_.crouch = pending_.crouch || pad.crouch;
+    pending_.jump = pending_.jump || pad.jump;
+    pad_use_down_ = pad.use_down;
+    pad_use_pressed_ = pad.use_pressed;
+    pad_look_ = pad.look;
+    look_behind_ = false;
+    if (pad.menu) {
+        menu_open_ = !menu_open_;
     }
     if (play_) {
         play_->readInput(input, true, frame_dt, play_frame(), pending_);
@@ -434,12 +534,22 @@ void Game::handle_input(Window& window, const Input& input, f32 frame_dt)
 
     pending_.gameplay = true;
     if (sim_.player(local_).driving()) {
-        drive_input(input);
+        drive_input(input, frame_dt);
     } else {
         foot_input(input, frame_dt);
     }
-    pending_.use_down = input.down(Key::E);
-    if (input.pressed(Key::E)) {
+    if (window.cursor_captured() && (pad_look_.x != 0.0f || pad_look_.y != 0.0f)) {
+        const f32 dx = pad_look_.x / kLookSensitivity;
+        const f32 dy = pad_look_.y / kLookSensitivity;
+        if (sim_.player(local_).driving() && toggles_.chase_cam) {
+            view_.chase_look(dx, dy);
+        } else if (!play_ || !play_->radialOpen()) {
+            pending_.look_dx += dx;
+            pending_.look_dy += dy;
+        }
+    }
+    pending_.use_down = input.down(Key::E) || pad_use_down_;
+    if (input.pressed(Key::E) || pad_use_pressed_) {
         pending_.use_pressed = true;
     }
 }
@@ -455,6 +565,7 @@ void Game::update_camera(f32 frame_dt)
         }
         return;
     }
+    view_.set_look_behind(look_behind_);
     view_.camera(sim_.player(local_), sim_.phys(), &sim_.vehicle(), alpha_, frame_dt, toggles_.chase_cam, pending_.look_dx,
                  pending_.look_dy, camera_);
     if (play_) {
@@ -573,6 +684,15 @@ f32 Game::look_zoom() const
     return std::tan(fov * kDegToRad * 0.5f) / std::tan(t.fovHip * kDegToRad * 0.5f);
 }
 
+Vec3 Game::car_dash_pos() const
+{
+    const RigidBody* body = sim_.phys().body(sim_.vehicle().body());
+    if (!body) {
+        return Vec3{};
+    }
+    return body_point(*body, Vec3{kDashAudioLocal[0], kDashAudioLocal[1], kDashAudioLocal[2]});
+}
+
 void Game::consume_events()
 {
     using namespace ghost::game;
@@ -625,7 +745,43 @@ void Game::consume_events()
         } else if (const auto* started = std::get_if<EngineStarted>(&event)) {
             audio_.play_at(SFX_ENGINE_START, 0.6f, 1.0f, from_glm(started->position));
         } else if (const auto* impact = std::get_if<CarImpact>(&event)) {
-            audio_.play_at(SFX_IMPACT, f_clamp(impact->strength, 0.2f, 1.0f), 1.0f, from_glm(impact->position));
+            audio_.play_at(SFX_IMPACT, f_clamp(0.25f + impact->strength, 0.25f, 1.0f),
+                           1.1f - 0.4f * f_clamp01(impact->strength), from_glm(impact->position));
+            if (sim_.player(local_).driving()) {
+                view_.kick(impact->strength);
+            }
+            if (impact->strength > 0.3f) {
+                car_render_.spawn_sparks(from_glm(impact->position),
+                                         6u + static_cast<u32>(20.0f * f_clamp01(impact->strength)));
+            }
+        } else if (const auto* stopped = std::get_if<EngineStopped>(&event)) {
+            if (stopped->stalled) {
+                audio_.play_at(SFX_THUMP, 0.5f, 0.5f, from_glm(stopped->position));
+            }
+        } else if (const auto* lever = std::get_if<HandbrakeMoved>(&event)) {
+            audio_.play_at(SFX_RATCHET, 0.45f, lever->set ? 1.3f : 0.9f, from_glm(lever->position));
+        } else if (std::holds_alternative<HeadlightsSwitched>(event)) {
+            audio_.play_at(SFX_THUMP, 0.12f, 3.0f, car_dash_pos());
+        } else if (std::holds_alternative<WipersSwitched>(event)) {
+            audio_.play_at(SFX_THUMP, 0.12f, 2.6f, car_dash_pos());
+        } else if (std::holds_alternative<KeyMoved>(event)) {
+            audio_.play_at(SFX_THUMP, 0.12f, 2.4f, car_dash_pos());
+        } else if (const auto* cap = std::get_if<FuelCapMoved>(&event)) {
+            audio_.play_at(SFX_FLAP, 0.3f, 1.0f, from_glm(cap->position));
+        } else if (std::holds_alternative<DiskMoved>(event)) {
+            audio_.play_at(SFX_FLAP, 0.3f, 1.6f, car_dash_pos());
+        } else if (std::holds_alternative<TapeMoved>(event)) {
+            audio_.play_at(SFX_FLAP, 0.3f, 1.5f, car_dash_pos());
+        } else if (const auto* fuel = std::get_if<Refuelled>(&event)) {
+            audio_.play_at(SFX_WHIR, 0.4f, 1.0f, from_glm(fuel->position));
+        } else if (const auto* oil = std::get_if<OilFilled>(&event)) {
+            audio_.play_at(SFX_WHIR, 0.4f, 1.1f, from_glm(oil->position));
+        } else if (std::holds_alternative<TankFilled>(event)) {
+            audio_.play_at(SFX_WHIR, 0.4f, 0.9f, car_dash_pos());
+        } else if (const auto* cargo = std::get_if<CargoMoved>(&event)) {
+            audio_.play_at(SFX_THUMP, 0.4f, cargo->placed ? 1.0f : 1.2f, from_glm(cargo->position));
+        } else if (std::holds_alternative<GearShifted>(event)) {
+            audio_.play_at(SFX_THUMP, 0.18f, 1.8f, car_dash_pos());
         } else if (const auto* installed = std::get_if<PartInstalled>(&event)) {
             audio_.play_at(SFX_RATCHET, 0.5f, 1.0f, from_glm(installed->position));
         } else if (const auto* removed = std::get_if<PartRemoved>(&event)) {
@@ -730,26 +886,52 @@ void Game::update_audio(f32 frame_dt)
     audio_.set_car(engine_pos, body->pos, dash_pos, body->vel);
     audio_.set_occlusion(sim_.player(local_).driving() ? 0.55f : 1.0f, frame_dt);
 
+    const CarSys& cs = sim_.carsys();
+    const bool seated = sim_.player(local_).driving();
+    const bool car_here = sim_.has_car();
     audio_.set_engine(drivetrain_rpm(sim_.vehicle().train()),
-                      f_clamp01(sim_.vehicle().input().throttle), sim_.carsys().engine_on,
-                      sim_.carsys().crank_active, frame_dt);
+                      f_clamp01(sim_.vehicle().input().throttle), car_here && cs.engine_on,
+                      car_here && cs.crank_active, frame_dt, sim_.vehicle().train().shifting);
 
     const f32 speed = f_abs(sim_.vehicle().forward_speed(sim_.phys()));
     u32 grounded = 0;
-    f32 skid = 0.0f;
+    f32 squeal = 0.0f;
+    f32 grass_skid = 0.0f;
+    const VehicleEffects& fx = sim_.vehicle().effects();
     for (u32 i = 0; i < kWheelCount; i++) {
         const Wheel& w = sim_.vehicle().wheel(i);
-        if (w.grounded) {
-            grounded++;
+        if (!w.grounded) {
+            continue;
         }
-        skid = f_max(skid, f_clamp01((f_abs(w.slide_lat) - 1.5f) / 6.0f));
+        grounded++;
+        const f32 skid = skid_intensity(w.slide_lat, w.slide_long);
+        squeal = f_max(squeal, skid * f_lerp(0.35f, 1.0f, fx.surface_road[i]));
+        grass_skid = f_max(grass_skid, skid * (1.0f - fx.surface_road[i]));
     }
     const f32 road = sim_.terrain().road_amount(body->pos.x, body->pos.z);
-    audio_.set_rolling(speed, road, grounded > 0, sim_.weather().wetness(), frame_dt);
-    audio_.set_skid(skid, frame_dt);
-    audio_.set_horn(false, frame_dt);
-    audio_.set_rain(sim_.weather().rain() * (sim_.player(local_).driving() ? 0.35f : 1.0f),
-                    sim_.player(local_).driving() ? sim_.weather().rain() : 0.0f, frame_dt);
+    audio_.set_skid_surface(car_here ? squeal : 0.0f, car_here ? grass_skid : 0.0f, frame_dt);
+    audio_.set_rolling(car_here ? speed : 0.0f, road, car_here && grounded > 0, sim_.weather().wetness(), frame_dt);
+    audio_.set_horn(car_here && cs.horn_on, frame_dt);
+    audio_.set_wind(length(sim_.player(local_).vel()), seated, frame_dt);
+    audio_.set_rain(sim_.weather().rain() * (seated ? 0.35f : 1.0f), seated ? sim_.weather().rain() : 0.0f, frame_dt);
+
+    const bool tape_wanted = cs.deck_play && cs.tape_inserted >= 0;
+    if (tape_wanted && !audio_.tape_playing()) {
+        audio_.tape_play(sim_.tapes().path(cs.tape_inserted));
+    } else if (!tape_wanted && audio_.tape_playing()) {
+        audio_.tape_stop();
+    }
+    audio_.set_tape(cs.elec.powered[CONSUMER_DECK] ? 1.0f : 0.0f, cs.tape_cond, 0.55f, frame_dt);
+
+    const f32 sweep_delta = cs.wiper_sweep - wiper_prev_sweep_;
+    if (cs.wiper_mode > 0 && f_abs(sweep_delta) > 1e-4f && f_abs(wiper_prev_delta_) > 1e-4f
+        && (sweep_delta > 0.0f) != (wiper_prev_delta_ > 0.0f)) {
+        audio_.play_at(SFX_WIPER, seated ? 0.28f : 0.10f, 0.95f + 0.1f * static_cast<f32>(cs.wiper_mode), car_dash_pos());
+    }
+    if (f_abs(sweep_delta) > 1e-4f) {
+        wiper_prev_delta_ = sweep_delta;
+    }
+    wiper_prev_sweep_ = cs.wiper_sweep;
 }
 
 static Vec3 snap_to_hull(Vec3 local, Vec3 half)
@@ -924,6 +1106,26 @@ void Game::draw_debug_overlays(DebugDraw& debug)
 void Game::bind_entity_meshes(RenderDevice& device)
 {
     meshes_.bind(device.assets(), sim_.world());
+}
+
+void Game::push_tank_fill(const glm::mat4& base, const glm::vec3& center, const u16* doses)
+{
+    if (!doses) {
+        return;
+    }
+    const ghost::game::AmmoData& ammo = sim_.gameplay().ammo();
+    const f32 capacity = f_max(static_cast<f32>(sim_.vehicle().config().synth.tank_capacity), 1.0f);
+    f32 level = kTankFloor;
+    for (u32 m = 0; m < kSynthMaterials && m < ammo.materials.size(); m++) {
+        if (doses[m] == 0) {
+            continue;
+        }
+        const f32 height = f_min(static_cast<f32>(doses[m]) / capacity, 1.0f) * kTankInner;
+        const glm::mat4 model = base * glm::translate(glm::mat4(1.0f), center + glm::vec3(0.0f, level, 0.0f))
+                              * glm::scale(glm::mat4(1.0f), glm::vec3(kTankRadius, f_max(height, 0.002f), kTankRadius));
+        tank_fill_.push_back({model, ammo.materials[m].color});
+        level += height;
+    }
 }
 
 void Game::draw_entities(RenderDevice& device)
@@ -1113,7 +1315,9 @@ void Game::draw_vehicle(RenderDevice& device)
     }
     const GpuMesh* wheel_mesh = device.assets().mesh(cfg.wheel_mesh.view());
     for (u32 i = 0; i < kWheelCount; i++) {
-        const Wheel& w = sim_.vehicle().wheel(i);
+        Wheel w = sim_.vehicle().wheel(i);
+        w.compression = f_lerp(w.prev_compression, w.compression, alpha_);
+        w.spin_angle = f_wrap_angle(w.prev_spin_angle + f_wrap_angle(w.spin_angle - w.prev_spin_angle) * alpha_);
         const f32 drop = cfg.wheels[i].travel - w.compression;
         const f32 radius_mul = sim_.vehicle().effects().tire_radius_mul[i];
         const f32 wobble = radius_mul < 0.95f ? std::sin(w.spin_angle) * (1.0f - radius_mul) * 0.10f
@@ -1361,6 +1565,29 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
 
     collect_trees();
 
+    {
+        PointLight lights[kCarLightMax];
+        u32 light_count = 0;
+        const RigidBody* car = sim_.phys().body(sim_.vehicle().body());
+        if (car && sim_.has_car()) {
+            light_count = car_lights(lerp(car->prev_pos, car->pos, alpha_), slerp(car->prev_rot, car->rot, alpha_),
+                                     sim_.vehicle(), sim_.carsys(), lights);
+        }
+        device.set_point_lights(lights, light_count);
+    }
+
+    props_.clear();
+    for (u32 idx : sim_.world().entities().live_indices()) {
+        const Entity* e = sim_.world().entities().at(idx);
+        if (e && e->kind == EntityKind::Prop) {
+            const glm::vec3 color{static_cast<f32>((e->aux_data >> 16) & 0xFFu) / 255.0f,
+                                  static_cast<f32>((e->aux_data >> 8) & 0xFFu) / 255.0f, static_cast<f32>(e->aux_data & 0xFFu) / 255.0f};
+            props_.push_back({to_glm(e->pos), to_glm(e->half), color, static_cast<ghost::game::Surface>(e->aux_kind)});
+        } else if (e && e->kind == EntityKind::Bench) {
+            props_.push_back({to_glm(e->pos - Vec3{0.0f, kBenchHalf.y, 0.0f}), to_glm(kBenchHalf), glm::vec3(0.36f, 0.24f, 0.13f),
+                              ghost::game::Surface::Wood});
+        }
+    }
     if (device.shadow_begin(camera_.pos)) {
         terrain_renderer.draw(device);
         draw_entities(device);
@@ -1368,6 +1595,11 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
         tree_render_.draw(device);
         draw_vehicle(device);
         car_render_.draw(device, sim_.carsys(), sim_.vehicle(), sim_.phys(), alpha_, 0.0f, 0);
+        if (play_) {
+            device.flush_meshes();
+            play_->renderPropShadows(props_, to_glm(device.shadow_matrix()), device.shaders().program("shadow"));
+            device.reset_state_cache();
+        }
         device.shadow_end();
     }
 
@@ -1399,25 +1631,37 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
         device.draw_rain(sim_.weather().rain(), sim_.weather().wind(), cam_vel_, time);
         device.draw_snow(sim_.weather().snow(), sim_.weather().wind(), time);
     };
+    loose_tanks_.clear();
+    for (u32 idx : sim_.world().entities().live_indices()) {
+        const Entity* e = sim_.world().entities().at(idx);
+        if (!e || e->kind != EntityKind::PartPickup) {
+            continue;
+        }
+        const ItemKind kind = static_cast<ItemKind>(e->aux_kind);
+        const i32 id = static_cast<i32>(e->aux_data);
+        const Vec3 scale{e->scale, e->scale, e->scale};
+        if (kind == ITEM_TANK) {
+            const LooseTank* tank = sim_.carsys().loose_tank(id);
+            loose_tanks_.push_back({mat4_trs(e->pos, e->rot, scale), tank ? tank->doses : nullptr});
+        } else if (kind == ITEM_PRINTER) {
+            const LoosePrinter* printer = sim_.carsys().loose_printer(id);
+            if (printer && printer->has_tank) {
+                const Mat4 model = mat4_trs(e->pos + rotate(e->rot, kPrinterTankOffset * e->scale), e->rot, scale);
+                device.draw_mesh(device.assets().mesh("part_tank"), model);
+                loose_tanks_.push_back({model, printer->bay.tank});
+            }
+        }
+    }
     const auto draw_glass = [&]() {
         device.reset_state_cache();
         car_render_.draw_glass(device, sim_.carsys(), sim_.vehicle(), sim_.phys(), alpha_, time);
+        for (const LooseTankView& tank : loose_tanks_) {
+            device.draw_glass(device.assets().mesh("part_tank_glass"), tank.model, time);
+        }
     };
     const auto draw_arcs = [&]() { draw_coil_arcs(device, debug); };
     const bool sliced = play_ && !editor_.active() && !toggles_.free_cam;
     if (play_) {
-        props_.clear();
-        for (u32 idx : sim_.world().entities().live_indices()) {
-            const Entity* e = sim_.world().entities().at(idx);
-            if (e && e->kind == EntityKind::Prop) {
-                const glm::vec3 color{static_cast<f32>((e->aux_data >> 16) & 0xFFu) / 255.0f,
-                                      static_cast<f32>((e->aux_data >> 8) & 0xFFu) / 255.0f, static_cast<f32>(e->aux_data & 0xFFu) / 255.0f};
-                props_.push_back({to_glm(e->pos), to_glm(e->half), color, static_cast<ghost::game::Surface>(e->aux_kind)});
-            } else if (e && e->kind == EntityKind::Bench) {
-                props_.push_back({to_glm(e->pos - Vec3{0.0f, kBenchHalf.y, 0.0f}), to_glm(kBenchHalf), glm::vec3(0.36f, 0.24f, 0.13f),
-                                  ghost::game::Surface::Wood});
-            }
-        }
         FrameLights prop_lights;
         prop_lights.sunDirection = to_glm(-env_.sun_dir);
         play_->renderProps(props_, to_glm(device.view_proj()), to_glm(camera_.pos), prop_lights);
@@ -1426,21 +1670,11 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
         if (car && sim_.has_car() && sim_.carsys().parts[PART_TANK].installed) {
             const glm::mat4 base = to_glm(mat4_trs(lerp(car->prev_pos, car->pos, alpha_), slerp(car->prev_rot, car->rot, alpha_),
                                                    Vec3{1.0f, 1.0f, 1.0f}));
-            const glm::vec3 center = to_glm(part_def(PART_TANK).socket_pos - sim_.vehicle().config().com_offset);
-            const ghost::game::AmmoData& ammo = sim_.gameplay().ammo();
-            const SynthBay& bay = sim_.carsys().synth;
-            const f32 capacity = static_cast<f32>(f_max(static_cast<f32>(sim_.vehicle().config().synth.tank_capacity), 1.0f));
-            f32 level = kTankFloor;
-            for (u32 m = 0; m < kSynthMaterials && m < ammo.materials.size(); m++) {
-                if (bay.tank[m] == 0) {
-                    continue;
-                }
-                const f32 height = f_min(static_cast<f32>(bay.tank[m]) / capacity, 1.0f) * kTankInner;
-                const glm::mat4 model = base * glm::translate(glm::mat4(1.0f), center + glm::vec3(0.0f, level, 0.0f))
-                                      * glm::scale(glm::mat4(1.0f), glm::vec3(kTankRadius, f_max(height, 0.002f), kTankRadius));
-                tank_fill_.push_back({model, ammo.materials[m].color});
-                level += height;
-            }
+            push_tank_fill(base, to_glm(part_def(PART_TANK).socket_pos - sim_.vehicle().config().com_offset),
+                           sim_.carsys().synth.tank);
+        }
+        for (const LooseTankView& tank : loose_tanks_) {
+            push_tank_fill(to_glm(tank.model), glm::vec3(0.0f), tank.doses);
         }
         play_->renderCylinders(tank_fill_, to_glm(device.view_proj()), to_glm(camera_.pos), prop_lights);
     }

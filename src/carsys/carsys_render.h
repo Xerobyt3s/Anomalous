@@ -34,11 +34,14 @@ private:
     f32 rand01();
     void spawn_puff(Vec3 pos, Vec3 vel, f32 life, f32 size, bool spark);
     void draw_effects(RenderDevice& device, const CarSys& sys, const Vehicle& veh,
-                      const Mat4& base, Vec3 gravity, f32 dt);
+                      const Mat4& base, Vec3 gravity, Vec3 car_vel, f32 dt);
 
     Puff puffs_[kMaxPuffs];
     u32 puff_next_ = 0;
     f32 smoke_accum_ = 0.0f;
+    f32 puff_accum_[4] = {};
+    f32 dial_sm_[4] = {};
+    bool dial_valid_ = false;
     u32 rng_ = 0x9E3779B9u;
 };
 

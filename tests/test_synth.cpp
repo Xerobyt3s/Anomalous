@@ -104,7 +104,7 @@ TEST(synth, the_preview_follows_the_mortar_rules)
     }
 }
 
-TEST(synth, carried_materials_go_into_the_tank_near_the_car)
+TEST(synth, carried_materials_go_into_the_tank_when_poured_at_the_car)
 {
     Bay bay;
     if (!bay.setup()) {
@@ -114,11 +114,11 @@ TEST(synth, carried_materials_go_into_the_tank_near_the_car)
     const ghost::game::MaterialId ember = bay.material("ember_ash");
     bay.sim->gameplay().materials().add(ember, 5);
     const RigidBody* car = bay.sim->phys().body(bay.sim->vehicle().body());
-    bay.sim->player(0).init(car->pos + Vec3{30.0f, 0.0f, 0.0f}, 0.0f);
-    bay.run(5);
-    CHECK(bay.sim->carsys().synth.tank[ember] == 0);
     bay.sim->player(0).init(car->pos + Vec3{-2.4f, -0.4f, 0.0f}, 0.0f);
     bay.run(5);
+    CHECK(bay.sim->carsys().synth.tank[ember] == 0);
+    CHECK(bay.sim->gameplay().materials().count(ember) == 5);
+    bay.sim->fill_tank(0);
     CHECK(bay.sim->carsys().synth.tank[ember] == 5);
     CHECK(bay.sim->gameplay().materials().count(ember) == 0);
 }
@@ -209,7 +209,7 @@ TEST(synth, taking_the_tray_puts_the_rounds_in_your_own_pouch)
     s.tray[fire] = 7;
     PlayerSlot& me = *bay.sim->slot(0);
     const int before = me.gun.pouch.count(fire);
-    bay.sim->take_tray(me);
+    bay.sim->take_tray(me, 0);
     CHECK(me.gun.pouch.count(fire) == before + 7);
     CHECK(s.tray_total() == 0u);
 }
@@ -230,6 +230,9 @@ TEST(synth, the_program_composes_a_recipe_and_asks_for_a_bulk_print)
     ctx.request = &request;
     TermView view;
     view.sys = &bay.sim->carsys();
+    view.synth_bay = &bay.sim->carsys().synth;
+    view.synth_tank = true;
+    view.synth_printer = true;
     view.ammo = &bay.ammo();
     bay.sim->carsys().synth.tank[bay.material("gunpowder")] = 9;
     bay.sim->carsys().synth.tank[bay.material("ember_ash")] = 9;
@@ -337,4 +340,277 @@ TEST(synth, the_bus_cable_can_plug_straight_into_the_printer)
     bay.run(2);
     CHECK(sys.cables[CABLE_BUS].state == CableState::Stowed);
     CHECK(sys.bus_target == kBusTargetCar);
+}
+
+namespace {
+
+struct Hands {
+    Bay& bay;
+
+    void face(Vec3 target, bool down, bool pressed)
+    {
+        PlayerCommand c;
+        c.gameplay = true;
+        const Player& p = bay.sim->player(0);
+        c.view_origin = p.pos() + p.up() * kPlayerEyeHeight;
+        c.view_dir = normalize(target - c.view_origin);
+        c.use_down = down;
+        c.use_pressed = pressed;
+        bay.sim->tick(c, kFixedDt);
+        bay.sim->events().clear();
+    }
+    void look(Vec3 target)
+    {
+        for (u32 i = 0; i < 4; i++) {
+            face(target, false, false);
+        }
+    }
+    void tap(Vec3 target)
+    {
+        face(target, true, true);
+        face(target, true, false);
+        face(target, false, false);
+    }
+    void hold(Vec3 target)
+    {
+        face(target, true, true);
+        for (u32 i = 0; i < static_cast<u32>((kInteractHoldTime + 0.2f) / kFixedDt); i++) {
+            face(target, true, false);
+        }
+        face(target, false, false);
+    }
+};
+
+void drop_beside_car(Bay& bay, Item item)
+{
+    const RigidBody* car = bay.sim->phys().body(bay.sim->vehicle().body());
+    const Vec3 side = rotate(car->rot, Vec3{-1.0f, 0.0f, 0.0f});
+    Vec3 at = car->pos + side * 4.0f;
+    at.y = bay.sim->terrain().heightfield().sample(at.x, at.z) + 0.3f;
+    interact_spawn_pickup(bay.sim->world(), bay.sim->phys(), item, at, 0.0f, Vec3{});
+}
+
+const Entity* pickup_of(Bay& bay, ItemKind kind)
+{
+    const Entity* found = nullptr;
+    for (u32 idx : bay.sim->world().entities().live_indices()) {
+        const Entity* e = bay.sim->world().entities().at(idx);
+        if (e && e->kind == EntityKind::PartPickup && static_cast<ItemKind>(e->aux_kind) == kind) {
+            found = e;
+        }
+    }
+    return found;
+}
+
+void hold_at_part(Bay& bay, PartKind kind)
+{
+    const u32 ticks = static_cast<u32>((kInteractHoldTime + 0.2f) / kFixedDt);
+    for (u32 i = 0; i <= ticks + 1; i++) {
+        const RigidBody* car = bay.sim->phys().body(bay.sim->vehicle().body());
+        const Vec3 target = socket_world(*bay.sim, kind);
+        const Vec3 side = rotate(car->rot, Vec3{1.0f, 0.0f, 0.0f});
+        bay.sim->player(0).init(Vec3{target.x, car->pos.y - 0.6f, target.z} + side * 1.4f, 0.0f);
+        Hands{bay}.face(target, i <= ticks, i == 0);
+    }
+}
+
+void stand_by(Bay& bay, Vec3 target)
+{
+    const RigidBody* car = bay.sim->phys().body(bay.sim->vehicle().body());
+    const Vec3 side = rotate(car->rot, Vec3{-1.0f, 0.0f, 0.0f});
+    Vec3 at = target + side * 1.3f;
+    at.y = bay.sim->terrain().heightfield().sample(at.x, at.z) + 0.05f;
+    bay.sim->player(0).init(at, 0.0f);
+}
+
+}
+
+TEST(synth, a_tank_keeps_its_materials_when_taken_off_the_car_and_put_back)
+{
+    Bay bay;
+    if (!bay.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    CarSys& sys = bay.sim->carsys();
+    const u8 ember = bay.material("ember_ash");
+    sys.synth.tank[ember] = 7;
+    Hands hands{bay};
+    look_at_part(bay, PART_TANK);
+    CHECK(bay.sim->interact(0).action() == InteractAction::RemovePart);
+    hold_at_part(bay, PART_TANK);
+    const Item held = bay.sim->interact(0).hands();
+    CHECK(held.kind == ITEM_TANK);
+    CHECK(!sys.parts[PART_TANK].installed);
+    CHECK(sys.synth.tank_total() == 0u);
+    const LooseTank* loose = sys.loose_tank(held.aux);
+    CHECK(loose && loose->doses[ember] == 7);
+
+    look_at_part(bay, PART_TANK);
+    CHECK(bay.sim->interact(0).action() == InteractAction::InstallPart);
+    hold_at_part(bay, PART_TANK);
+    CHECK(sys.parts[PART_TANK].installed);
+    CHECK(sys.synth.tank[ember] == 7);
+    CHECK(!sys.loose_tank(held.aux));
+}
+
+TEST(synth, looking_at_a_tank_offers_to_pour_and_a_tap_pours)
+{
+    Bay bay;
+    if (!bay.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    CarSys& sys = bay.sim->carsys();
+    const u8 ember = bay.material("ember_ash");
+    bay.sim->gameplay().materials().add(ember, 4);
+    Hands hands{bay};
+
+    look_at_part(bay, PART_TANK);
+    CHECK(bay.sim->interact(0).prompt().find("pour 4") != std::string_view::npos);
+    hands.tap(socket_world(*bay.sim, PART_TANK));
+    CHECK(sys.synth.tank[ember] == 4);
+    CHECK(sys.parts[PART_TANK].installed);
+
+    bay.sim->gameplay().materials().add(ember, 3);
+    drop_beside_car(bay, Item{ITEM_TANK});
+    bay.run(60);
+    const Entity* tank = pickup_of(bay, ITEM_TANK);
+    CHECK(tank != nullptr);
+    if (!tank) {
+        return;
+    }
+    const Vec3 aim = tank->pos + Vec3{0.0f, 0.15f, 0.0f};
+    stand_by(bay, tank->pos);
+    hands.look(aim);
+    CHECK(bay.sim->interact(0).prompt().find("pour 3") != std::string_view::npos);
+    hands.tap(aim);
+    tank = pickup_of(bay, ITEM_TANK);
+    const LooseTank* store = tank ? sys.loose_tank(static_cast<i32>(tank->aux_data)) : nullptr;
+    CHECK(store && store->doses[ember] == 3);
+    CHECK(bay.sim->gameplay().materials().count(ember) == 0);
+}
+
+TEST(synth, a_tank_on_a_loose_printer_is_filled_and_prints_over_the_cable)
+{
+    Bay bay;
+    if (!bay.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    CarSys& sys = bay.sim->carsys();
+    sys.parts[PART_TANK].installed = false;
+    sys.parts[PART_PRINTER].installed = false;
+    sys.parts[PART_COMPUTER].installed = true;
+    drop_beside_car(bay, Item{ITEM_PRINTER});
+    bay.run(60);
+    const Entity* printer = pickup_of(bay, ITEM_PRINTER);
+    CHECK(printer != nullptr);
+    if (!printer) {
+        return;
+    }
+    const Vec3 aim = printer->pos + Vec3{0.0f, 0.1f, 0.0f};
+    stand_by(bay, printer->pos);
+    bay.sim->interact(0).hands() = Item{ITEM_TANK};
+    Hands hands{bay};
+    hands.look(aim);
+    CHECK(bay.sim->interact(0).action() == InteractAction::PlaceTankOnPrinter);
+    hands.tap(aim);
+    CHECK(bay.sim->interact(0).hands().kind == ITEM_NONE);
+    printer = pickup_of(bay, ITEM_PRINTER);
+    const i32 id = printer ? static_cast<i32>(printer->aux_data) : 0;
+    const LoosePrinter* loose = sys.loose_printer(id);
+    CHECK(loose && loose->has_tank);
+    if (!loose) {
+        return;
+    }
+
+    const u8 powder = bay.material("gunpowder");
+    const u8 ember = bay.material("ember_ash");
+    bay.sim->gameplay().materials().add(powder, 4);
+    bay.sim->gameplay().materials().add(ember, 4);
+    hands.look(aim);
+    CHECK(bay.sim->interact(0).action() == InteractAction::TakeTankOffPrinter);
+    hands.tap(aim);
+    CHECK(loose->bay.tank[powder] == 4);
+    CHECK(loose->bay.tank[ember] == 4);
+
+    sys.cables[CABLE_BUS].state = CableState::Plugged;
+    sys.bus_target = kBusTargetLoosePrinter;
+    sys.bus_printer = id;
+    bay.run(30);
+    CHECK(sys.cables[CABLE_BUS].state == CableState::Plugged);
+    printer = pickup_of(bay, ITEM_PRINTER);
+    CHECK(printer && length(sys.cables[CABLE_BUS].p[kCablePoints - 1]
+                            - (printer->pos + rotate(printer->rot, kLoosePrinterJackLocal))) < 0.1f);
+    bay.print({powder, ember}, 2);
+    CHECK(loose->bay.job_left == 2);
+    CHECK(sys.synth.job_left == 0);
+    bay.run(static_cast<u32>(8.0f / kFixedDt));
+    CHECK(loose->bay.tray_total() == 2u);
+
+    hands.look(aim);
+    CHECK(bay.sim->interact(0).action() == InteractAction::TakeRounds);
+    const i32 before = bay.sim->slot(0)->gun.pouch.count(bay.element("fire"));
+    hands.tap(aim);
+    CHECK(bay.sim->slot(0)->gun.pouch.count(bay.element("fire")) == before + 2);
+
+    hands.look(aim);
+    hands.hold(aim);
+    CHECK(bay.sim->interact(0).hands().kind == ITEM_TANK);
+    CHECK(!loose->has_tank);
+}
+
+TEST(synth, a_printer_carrying_a_tank_installs_both_into_the_car)
+{
+    Bay bay;
+    if (!bay.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    CarSys& sys = bay.sim->carsys();
+    sys.parts[PART_TANK].installed = false;
+    sys.parts[PART_PRINTER].installed = false;
+    const i32 id = sys.claim_printer();
+    LoosePrinter* printer = sys.loose_printer(id);
+    CHECK(printer != nullptr);
+    if (!printer) {
+        return;
+    }
+    printer->has_tank = true;
+    printer->bay.tank[bay.material("ember_ash")] = 6;
+    printer->bay.tray[0] = 3;
+    bay.sim->interact(0).hands() = Item{ITEM_PRINTER, 1.0f, id};
+    look_at_part(bay, PART_PRINTER);
+    CHECK(bay.sim->interact(0).action() == InteractAction::InstallPart);
+    hold_at_part(bay, PART_PRINTER);
+    CHECK(sys.parts[PART_PRINTER].installed);
+    CHECK(sys.parts[PART_TANK].installed);
+    CHECK(sys.synth.tank[bay.material("ember_ash")] == 6);
+    CHECK(sys.synth.tray[0] == 3);
+    CHECK(!sys.loose_printer(id));
+}
+
+TEST(synth, a_tank_found_in_the_zone_starts_stocked)
+{
+    Bay bay;
+    if (!bay.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    const Entity* tank = pickup_of(bay, ITEM_TANK);
+    CHECK(tank != nullptr);
+    if (!tank) {
+        return;
+    }
+    const LooseTank* store = bay.sim->carsys().loose_tank(static_cast<i32>(tank->aux_data));
+    CHECK(store != nullptr);
+    if (!store) {
+        return;
+    }
+    for (u8 m = 0; m < bay.ammo().materials.size(); m++) {
+        CHECK(store->doses[m] == (bay.ammo().materials[m].propellant ? 40 : 10));
+    }
+    CHECK(store->doses[bay.material("gunpowder")] == 40);
+    CHECK(store->total() <= bay.sim->vehicle().config().synth.tank_capacity);
 }

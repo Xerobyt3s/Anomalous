@@ -6,19 +6,21 @@
 namespace anom {
 namespace {
 
-constexpr f32 kTankReach = 6.0f;
 constexpr u32 kMaxBatch = 99;
 
 }
 
 void Sim::queue_print(const u8* doses, u32 dose_count, u32 count)
 {
-    SynthBay& bay = carsys_.synth;
+    bool has_tank = false;
+    bool has_printer = false;
+    SynthBay* found = carsys_.bus_bay(has_tank, has_printer);
+    SynthBay& bay = found ? *found : carsys_.synth;
     const auto answer = [&](SynthResult result) {
         bay.result = result;
         bay.result_serial++;
     };
-    if (!carsys_.parts[PART_TANK].installed || !carsys_.parts[PART_PRINTER].installed) {
+    if (!found || !has_tank || !has_printer) {
         answer(SynthResult::NoHardware);
         return;
     }
@@ -74,37 +76,48 @@ void Sim::queue_print(const u8* doses, u32 dose_count, u32 count)
     answer(SynthResult::Queued);
 }
 
-void Sim::fill_tank()
+u16* Sim::tank_doses(i32 target)
 {
-    if (!has_car() || !carsys_.parts[PART_TANK].installed) {
-        return;
+    if (target == 0) {
+        return has_car() && carsys_.parts[PART_TANK].installed ? carsys_.synth.tank : nullptr;
     }
-    const RigidBody* car = phys_.body(vehicle_.body());
+    if (target > 0) {
+        LooseTank* tank = carsys_.loose_tank(target);
+        return tank ? tank->doses : nullptr;
+    }
+    LoosePrinter* printer = carsys_.loose_printer(-target);
+    return printer && printer->has_tank ? printer->bay.tank : nullptr;
+}
+
+void Sim::fill_tank(i32 target)
+{
+    u16* doses = tank_doses(target);
     ghost::game::MaterialInventory& carried = gameplay_.materials();
-    if (!car || carried.total() == 0) {
+    if (!doses || carried.total() == 0) {
         return;
     }
-    bool near = false;
-    for (const PlayerSlot& s : slots_) {
-        near = near || (s.active && s.zombie_of == kNoPlayer && length(s.player.pos() - car->pos) < kTankReach);
-    }
-    if (!near) {
-        return;
-    }
-    SynthBay& bay = carsys_.synth;
     const u32 capacity = vehicle_.config().synth.tank_capacity;
+    u32 total = 0;
+    for (u32 m = 0; m < kSynthMaterials; m++) {
+        total += doses[m];
+    }
     for (std::size_t m = 0; m < carried.kinds() && m < kSynthMaterials; m++) {
         const auto id = static_cast<ghost::game::MaterialId>(m);
-        while (carried.count(id) > 0 && bay.tank_total() < capacity) {
+        while (carried.count(id) > 0 && total < capacity) {
             carried.take(id);
-            bay.tank[m]++;
+            doses[m]++;
+            total++;
         }
     }
 }
 
-void Sim::take_tray(PlayerSlot& s)
+void Sim::take_tray(PlayerSlot& s, i32 target)
 {
-    SynthBay& bay = carsys_.synth;
+    LoosePrinter* loose = target < 0 ? carsys_.loose_printer(-target) : nullptr;
+    if (target < 0 && !loose) {
+        return;
+    }
+    SynthBay& bay = loose ? loose->bay : carsys_.synth;
     for (u32 e = 0; e < kSynthElements; e++) {
         for (u16 k = 0; k < bay.tray[e]; k++) {
             const ghost::game::Round round{static_cast<ghost::game::ElementId>(e)};

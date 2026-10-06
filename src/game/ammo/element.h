@@ -62,6 +62,7 @@ struct ElementDef {
     bool ethereal = false;
     float etherealDrag = 1.1f;
     float gravityScale = 1.0f;
+    float ricochet = 1.0f;
     float fadeSpeed = 0.0f;
     bool stealthy = false;
 

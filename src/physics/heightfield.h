@@ -23,7 +23,6 @@ public:
     f32 sample(f32 x, f32 z) const;
     Vec3 normal(f32 x, f32 z) const;
     void cell_triangles(u32 ix, u32 iz, Vec3 out[6]) const;
-    bool raycast(Ray ray, f32 max_t, f32* out_t, Vec3* out_normal) const;
 
     Aabb bounds() const;
     f32 span_x() const { return static_cast<f32>(size_x_ - 1) * cell_size_; }

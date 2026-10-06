@@ -18,7 +18,7 @@ Vec3 body_velocity_at_point(const RigidBody& body, Vec3 point)
 void body_wake(RigidBody& body)
 {
     body.asleep = 0;
-    body.sleep_timer = 0.0f;
+    body.wake_request = 1;
 }
 
 void body_apply_force_at_point(RigidBody& body, Vec3 force, Vec3 point)
@@ -36,6 +36,7 @@ void body_apply_torque(RigidBody& body, Vec3 torque)
 
 void body_apply_impulse_at_point(RigidBody& body, Vec3 impulse, Vec3 point)
 {
+    body_wake(body);
     body.vel += impulse * body.inv_mass;
     body.angular_vel += body_inv_inertia_world(body) * cross(point - body.pos, impulse);
 }
@@ -52,11 +53,6 @@ bool body_state_valid(const RigidBody& body)
         }
     }
     return true;
-}
-
-Vec3 body_sphere_center(const RigidBody& body, u32 index)
-{
-    return body.pos + quat_to_mat3(body.rot) * body.sphere_offsets[index];
 }
 
 } // namespace anom

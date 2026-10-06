@@ -54,10 +54,23 @@ FogReach measureFogReach(const glm::vec3& center, float radius, float height,
     return reach;
 }
 
+bool fogGroundward(std::size_t direction) { return fogDirection(direction).y < -0.1f; }
+
+float fogFloorFade(const FogReach& reach, float below) {
+    if (reach[3] >= kFogUnlimited * 0.5f) {
+        return 1.0f;
+    }
+    const float floor = reach[3] - kSpill;
+    return 1.0f - glm::smoothstep(floor, floor + kSpill, below);
+}
+
 float fogReachToward(const FogReach& reach, const glm::vec3& direction) {
     float weights = 0.0f;
     float inverse = 0.0f;
     for (std::size_t i = 0; i < kFogDirections; ++i) {
+        if (fogGroundward(i)) {
+            continue;
+        }
         const float a = std::max(glm::dot(direction, fogDirection(i)), 0.0f);
         const float a2 = a * a;
         const float w = a2 * a2 * a2 * a2;
@@ -84,7 +97,7 @@ float fogCloudDensity(const FogCloud& cloud, const glm::vec3& point) {
     const float rx = glm::length(glm::vec2(local.x, local.z)) / (cloud.radius * size);
     const float ry = std::abs(local.y) / (cloud.height * size);
     const float e = std::sqrt(rx * rx + ry * ry);
-    float density = (1.0f - glm::smoothstep(0.55f, 1.0f, e)) * presence;
+    float density = (1.0f - glm::smoothstep(0.55f, 1.0f, e)) * presence * fogFloorFade(cloud.reach, -local.y);
 
     const float distance = glm::length(local);
     if (density > 0.0f && distance > 1e-4f) {

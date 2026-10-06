@@ -169,6 +169,17 @@ void Window::poll()
 {
     input_.begin_frame();
     glfwPollEvents();
+    bool pad = false;
+    for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_4 && !pad; jid++) {
+        GLFWgamepadstate state;
+        if (glfwJoystickIsGamepad(jid) && glfwGetGamepadState(jid, &state)) {
+            input_.set_pad(true, state.axes, state.buttons);
+            pad = true;
+        }
+    }
+    if (!pad) {
+        input_.set_pad(false, nullptr, nullptr);
+    }
     input_.finish_frame();
 }
 

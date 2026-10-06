@@ -98,15 +98,14 @@ void SynthProgram::update(const ProgramContext& ctx, const TermView& view, f32 d
     Screen& s = *ctx.screen;
     s.grid_clear();
     s.grid_title("SYNTH 1.2  ROUND PRINTER");
-    if (!view.sys || !view.ammo) {
+    if (!view.synth_bay || !view.ammo) {
         s.grid_text(2, 2, TC_RED, "NO SYNTH HARDWARE ON THE BUS.");
         return;
     }
-    const CarSys& sys = *view.sys;
-    const SynthBay& bay = sys.synth;
+    const SynthBay& bay = *view.synth_bay;
     const ghost::game::AmmoData& ammo = *view.ammo;
-    const bool tank = sys.parts[PART_TANK].installed;
-    const bool printer = sys.parts[PART_PRINTER].installed;
+    const bool tank = view.synth_tank;
+    const bool printer = view.synth_printer;
 
     s.grid_text(kTankRow - 1, 2, TC_BRIGHT, "MATERIAL TANK%s", tank ? "" : "  -- NOT INSTALLED");
     const u32 shown = std::min<u32>(static_cast<u32>(ammo.materials.size()), 8);
@@ -161,7 +160,7 @@ void SynthProgram::update(const ProgramContext& ctx, const TermView& view, f32 d
     if (bay.result != SynthResult::None) {
         s.grid_text(kResultRow, 2, bay.result == SynthResult::Queued ? TC_BRIGHT : TC_RED, "%s", result_text(bay.result));
     }
-    s.grid_text(22, 2, TC_DIM, "1-8 ADD DOSE  BKSP REMOVE  LEFT/RIGHT COUNT  ENTER PRINT  ESC QUIT");
+    s.grid_text(22, 2, TC_DIM, "1-8 ADD DOSE  BKSP REMOVE  LEFT/RIGHT COUNT  ENTER PRINT  [Q] BACK");
 }
 
 bool SynthProgram::key(const ProgramContext& ctx, const TermView& view, TermKey key)

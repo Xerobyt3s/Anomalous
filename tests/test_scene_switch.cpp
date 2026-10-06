@@ -293,3 +293,20 @@ TEST(scene_switch, ghosts_over_island_craters_keep_their_height_through_zone_sav
     }
     CHECK(matched == before.size());
 }
+
+TEST(scene_switch, the_parked_car_stays_put_in_a_scene_without_a_car)
+{
+    Stage stage;
+    if (!stage.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    stage.go("yard");
+    CHECK(!stage.sim->has_car());
+    const RigidBody* car = stage.sim->phys().body(stage.sim->vehicle().body());
+    const Vec3 parked = car->pos;
+    stage.run(PlayerCommand{}, 1200);
+    car = stage.sim->phys().body(stage.sim->vehicle().body());
+    CHECK(length(car->vel) < 0.5f);
+    CHECK(length(car->pos - parked) < 0.5f);
+}

@@ -1,5 +1,7 @@
 #include "test.h"
 
+#include "engine/physics/physics_world.h"
+
 #include "audio/tapes.h"
 #include "carsys/carsys.h"
 #include "core/arena.h"
@@ -25,6 +27,7 @@ struct Rig {
     TapeLibrary tapes;
     Terrain terrain;
     PhysWorld world;
+    ghost::engine::PhysicsWorld jolt;
     Vehicle car;
     CarSys sys;
     Terminal term{tapes};
@@ -41,6 +44,7 @@ struct Rig {
         }
         hf.recompute_extents();
         world.init(arena, &hf);
+        world.set_jolt(&jolt);
         sys.init();
         sys.parts[PART_COMPUTER].installed = true;
         if (!car.init(world, arena, "assets/cars/excel.cfg", Vec3{0.0f, 1.0f, 0.0f}, 0.0f)) {
@@ -53,6 +57,7 @@ struct Rig {
         term.power(true);
 
         view.sys = &sys;
+        view.synth_bay = &sys.synth;
         view.veh = &car;
         view.phys = &world;
         view.terrain = &terrain;
@@ -787,6 +792,8 @@ TEST(terminal, synth_needs_a_bus_link_to_the_car_or_the_printer)
     rig.boot();
     rig.sys.parts[PART_PRINTER].installed = true;
     rig.sys.parts[PART_TANK].installed = true;
+    rig.view.synth_printer = true;
+    rig.view.synth_tank = true;
     rig.command("synth");
     CHECK(rig.said("NO BUS LINK"));
     CHECK(rig.term.mode() != TermMode::Synth);
@@ -805,6 +812,7 @@ TEST(terminal, synth_needs_a_bus_link_to_the_car_or_the_printer)
     rig.view.bus_state = PORT_LINKED;
     rig.view.bus_printer = false;
     rig.sys.parts[PART_TANK].installed = false;
+    rig.view.synth_tank = false;
     rig.command("synth");
     CHECK(rig.said("NO MATERIAL TANK ON THE PRINTER"));
     CHECK(rig.term.mode() != TermMode::Synth);

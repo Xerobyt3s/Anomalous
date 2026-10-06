@@ -84,6 +84,10 @@ enum class InteractAction : u32 {
     Wipers,
     TakeRounds,
     CablePlugPrinter,
+    PourMaterials,
+    PlaceTankOnPrinter,
+    TakeTankOffPrinter,
+    CablePlugLoosePrinter,
 };
 
 class InteractBoxes {
@@ -117,6 +121,8 @@ struct InteractContext {
     u32 seats_taken = 0;
     bool preview = false;
     bool gun_drawn = false;
+    bool is_driver = true;
+    u32 materials = 0;
 };
 
 class Interact {
@@ -144,6 +150,9 @@ public:
     bool take_terminal_request();
     bool take_holster_request();
     bool take_rounds_request();
+    bool pour_request();
+    i32 pour_target() const { return pour_target_; }
+    i32 rounds_target() const { return rounds_target_; }
     void adopt_holdings(const Interact& other);
     void set_tower(bool present, Vec3 port);
 
@@ -184,8 +193,11 @@ private:
     bool crank_latch_ = false;
     bool press_latch_ = false;
     bool use_terminal_request_ = false;
+    bool pour_request_ = false;
     bool holster_request_ = false;
     bool rounds_request_ = false;
+    i32 pour_target_ = 0;
+    i32 rounds_target_ = 0;
     i32 target_cable_ = -1;
     i32 cable_drag_ = -1;
     bool tower_present_ = false;

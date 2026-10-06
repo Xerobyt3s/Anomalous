@@ -103,6 +103,8 @@ struct GameplaySnapshot {
     std::vector<std::int32_t> materials;
 };
 
+std::vector<float> ricochetScales(const AmmoData& ammo);
+
 class Gameplay {
 public:
     Gameplay(Roster& roster, const PlayerRules& rules, engine::PhysicsWorld& physics);
@@ -110,6 +112,7 @@ public:
     void setHooks(GameplayHooks hooks) {
         m_hooks = std::move(hooks);
         m_ballistics.setFields(m_hooks.gravity, m_hooks.wind);
+        m_ballistics.setRicochet(ricochetScales(m_ammo));
     }
     void setBodies(std::vector<PlayerBody> bodies) { m_bodies = std::move(bodies); }
     void setLoose(std::vector<LooseBody> loose) { m_loose = std::move(loose); }

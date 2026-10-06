@@ -24,6 +24,17 @@ constexpr f32 kChaseMinDist = 0.9f;
 constexpr f32 kChaseLookHold = 1.4f;
 constexpr f32 kChaseLookReturn = 2.4f;
 constexpr f32 kChaseLookPitchLimit = 1.15f;
+constexpr f32 kFovBaseDeg = 70.0f;
+constexpr f32 kFovSpeedDeg = 12.0f;
+constexpr f32 kFovSpeedFull = 40.0f;
+constexpr f32 kFovRate = 4.0f;
+constexpr f32 kCockpitRollFrac = 0.35f;
+constexpr f32 kChaseLateral = 0.5f;
+constexpr f32 kChaseRoll = 0.05f;
+constexpr f32 kLatGRate = 5.0f;
+constexpr f32 kShakeTime = 0.35f;
+constexpr f32 kShakeDeg = 2.5f;
+constexpr f32 kBehindRate = 12.0f;
 
 f32 smooth01(f32 t)
 {
@@ -54,8 +65,36 @@ void PlayerView::chase_look(f32 dx, f32 dy)
                                 kChaseLookPitchLimit);
 }
 
+void PlayerView::kick(f32 strength)
+{
+    shake_t_ = kShakeTime;
+    shake_amp_ = kShakeDeg * kDegToRad * f_clamp01(strength);
+}
+
+void PlayerView::seated_feel(const RigidBody& body, Quat body_rot, f32 speed_plan, f32 dt, Camera& out)
+{
+    (void)body;
+    (void)body_rot;
+    const f32 fov_target = kFovBaseDeg + kFovSpeedDeg * f_clamp01(speed_plan / kFovSpeedFull);
+    fov_sm_ = fov_sm_ <= 0.0f ? fov_target : f_approach_exp(fov_sm_, fov_target, kFovRate, dt);
+    out.fov_y = fov_sm_ * kDegToRad;
+
+    behind_ = f_approach_exp(behind_, look_behind_ ? 1.0f : 0.0f, kBehindRate, dt);
+    out.yaw = f_wrap_angle(out.yaw + behind_ * kPi);
+
+    if (shake_t_ > 0.0f) {
+        shake_t_ = f_max(shake_t_ - dt, 0.0f);
+        shake_phase_ += dt;
+        const f32 s = f_clamp01(shake_t_ / kShakeTime);
+        const f32 amp = shake_amp_ * s * s;
+        out.yaw += std::sin(shake_phase_ * 91.0f) * amp;
+        out.pitch += std::sin(shake_phase_ * 77.0f + 1.3f) * amp;
+        out.roll += std::sin(shake_phase_ * 103.0f + 2.1f) * amp * 0.6f;
+    }
+}
+
 void PlayerView::chase_camera(const Player& player, PhysWorld& phys, const RigidBody& body, Vec3 body_pos,
-                              Quat body_rot, f32 car_yaw, f32 dt, Camera& out)
+                              Quat body_rot, f32 car_yaw, f32 speed_plan, f32 dt, Camera& out)
 {
     const Quat car_frame = player.car_frame();
     const Quat to_local = conjugate(car_frame);
@@ -94,7 +133,11 @@ void PlayerView::chase_camera(const Player& player, PhysWorld& phys, const Rigid
     const f32 pitch = f_clamp(-kChasePitch + chase_look_pitch_, -kPitchLimit, kPitchLimit);
     const Vec3 dir = frame_view(car_frame, yaw, pitch);
 
-    const Vec3 pivot = body_pos + frame_up(car_frame) * kChasePivotHeight;
+    const Vec3 up_f = frame_up(car_frame);
+    const f32 yaw_rate = dot(body.angular_vel, up_f);
+    lat_g_ = f_approach_exp(lat_g_, f_clamp(yaw_rate * speed_plan / 9.81f, -1.0f, 1.0f), kLatGRate, dt);
+    const Vec3 right = normalize(cross(dir, up_f));
+    const Vec3 pivot = body_pos + up_f * kChasePivotHeight - right * (kChaseLateral * lat_g_);
     f32 want = f_lerp(kChaseNearDist, kChaseFarDist, f_clamp01(speed / kChaseSpeedFull));
 
     PhysRayHit hit;
@@ -107,8 +150,9 @@ void PlayerView::chase_camera(const Player& player, PhysWorld& phys, const Rigid
     out.frame = car_frame;
     out.yaw = yaw;
     out.pitch = pitch;
-    out.roll = 0.0f;
+    out.roll = kChaseRoll * lat_g_;
     cockpit_eye_valid_ = false;
+    seated_feel(body, body_rot, speed_plan, dt, out);
 }
 
 void PlayerView::camera(const Player& player, PhysWorld& phys, const Vehicle* veh, f32 alpha, f32 dt, bool chase,
@@ -125,6 +169,9 @@ void PlayerView::camera(const Player& player, PhysWorld& phys, const Vehicle* ve
         out.yaw = f_wrap_angle(now.yaw + pending_dx * kLookSensitivity);
         out.pitch = f_clamp(now.pitch - pending_dy * kLookSensitivity, -kPitchLimit, kPitchLimit);
         out.roll = now.tilt;
+        out.fov_y = kFovBaseDeg * kDegToRad;
+        fov_sm_ = 0.0f;
+        behind_ = 0.0f;
         cockpit_eye_valid_ = false;
         chase_valid_ = false;
         return;
@@ -160,8 +207,10 @@ void PlayerView::camera(const Player& player, PhysWorld& phys, const Vehicle* ve
         return;
     }
 
+    const Vec3 v_local = rotate(conjugate(body_rot), body->vel);
+    const f32 speed_plan = std::sqrt(v_local.x * v_local.x + v_local.z * v_local.z);
     if (chase) {
-        chase_camera(player, phys, *body, body_pos, body_rot, car_yaw, dt, out);
+        chase_camera(player, phys, *body, body_pos, body_rot, car_yaw, speed_plan, dt, out);
         return;
     }
     chase_valid_ = false;
@@ -188,6 +237,9 @@ void PlayerView::camera(const Player& player, PhysWorld& phys, const Vehicle* ve
     out.frame = car_frame;
     out.yaw = f_wrap_angle(car_yaw + look_yaw);
     out.pitch = f_clamp(car_pitch + look_pitch, -kPitchLimit, kPitchLimit);
+    const Vec3 body_right = rotate(body_rot, Vec3{1.0f, 0.0f, 0.0f});
+    out.roll = kCockpitRollFrac * std::asin(f_clamp(dot(body_right, frame_up(car_frame)), -1.0f, 1.0f));
+    seated_feel(*body, body_rot, speed_plan, dt, out);
 }
 
 }

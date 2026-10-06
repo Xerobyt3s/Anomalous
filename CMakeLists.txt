@@ -160,6 +160,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/world/tree_gen.cpp
     src/world/pickup_body.cpp
     src/app/player_view.cpp
+    src/app/drive_controls.cpp
     src/sim/sim.cpp
     src/sim/dummy.cpp
     src/sim/sim_net.cpp
@@ -185,6 +186,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/carsys/cables.h
     src/carsys/carsys.h
     src/carsys/carsys_render.h
+    src/carsys/car_lights.h
     src/carsys/electrics.h
     src/carsys/fluids.h
     src/carsys/items.h
@@ -257,6 +259,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/vehicle/tire.h
     src/vehicle/vehicle.h
     src/vehicle/vehicle_config.h
+    src/vehicle/surface.h
     src/world/destination.h
     src/world/entity.h
     src/world/islands/island_field.h
@@ -269,6 +272,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/world/tree_gen.h
     src/world/pickup_body.h
     src/app/player_view.h
+    src/app/drive_controls.h
     src/sim/sim.h
     src/sim/player_slot.h
     src/sim/wire.h

@@ -70,6 +70,8 @@ void drawWithModel(const engine::Shader& shader, const engine::Mesh& mesh, const
     mesh.draw();
 }
 
+constexpr int kShadowModelSlot = 0;
+constexpr int kShadowLightSlot = 4;
 constexpr float kScorchDepth = 0.35f;
 constexpr float kHoleSize = 0.022f;
 constexpr float kHoleDepth = 0.06f;
@@ -1666,7 +1668,7 @@ void PlayView::drawFog(const glm::mat4& viewProj, const glm::vec3& cameraPos, co
     }
     if (!storms.empty()) {
         FogStyle storm;
-        storm.density = 2.6f;
+        storm.density = 3.4f;
         storm.steps = 28;
         storm.noiseScale = 0.8f;
         storm.churn = 2.5f;
@@ -1697,7 +1699,7 @@ void PlayView::drawFog(const glm::mat4& viewProj, const glm::vec3& cameraPos, co
     }
     if (!steamClouds.empty()) {
         FogStyle steamStyle;
-        steamStyle.density = 1.1f;
+        steamStyle.density = 1.5f;
         steamStyle.steps = 36;
         steamStyle.noiseScale = 0.45f;
         steamStyle.churn = 5.0f;
@@ -1728,7 +1730,7 @@ void PlayView::drawFog(const glm::mat4& viewProj, const glm::vec3& cameraPos, co
     }
     if (!apparitions.empty()) {
         FogStyle green;
-        green.density = 5.0f;
+        green.density = 6.5f;
         green.steps = 28;
         green.noiseScale = 2.4f;
         green.churn = 2.0f;
@@ -2407,8 +2409,6 @@ void PlayView::drawFlashAxes(const glm::mat4& viewProj, const glm::vec3& center,
 }
 void PlayView::setFrameLights(const glm::vec3& muzzleWorld) {
     m_litShader.use();
-    m_litShader.set("uLightDir", glm::normalize(m_lightDir));
-    m_litShader.set("uSunColor", glm::vec3(3.0f, 2.9f, 2.7f));
 
     struct Light {
         glm::vec3 position;
@@ -3511,6 +3511,18 @@ void PlayView::drawHud(const HudFrame& hud) {
     }
 }
 
+void PlayView::renderPropShadows(const std::vector<PropView>& props, const glm::mat4& lightViewProj, unsigned program) {
+    if (props.empty() || program == 0) {
+        return;
+    }
+    glUseProgram(program);
+    glProgramUniformMatrix4fv(program, kShadowLightSlot, 1, GL_FALSE, &lightViewProj[0][0]);
+    for (const PropView& prop : props) {
+        const glm::mat4 model = glm::scale(glm::translate(glm::mat4(1.0f), prop.center), prop.half);
+        glProgramUniformMatrix4fv(program, kShadowModelSlot, 1, GL_FALSE, &model[0][0]);
+        m_unitBox.draw();
+    }
+}
 void PlayView::renderProps(const std::vector<PropView>& props, const glm::mat4& viewProj, const glm::vec3& cameraPos,
                            const FrameLights& lights) {
     if (props.empty()) {

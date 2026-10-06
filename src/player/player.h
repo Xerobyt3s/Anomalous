@@ -57,6 +57,10 @@ struct PlayerCommand {
     bool crank = false;
     bool recover = false;
     bool reset_car = false;
+    bool handbrake_toggle = false;
+    bool ignition_tap = false;
+    bool wipers_cycle = false;
+    bool horn = false;
 
     f32 throw_power = -1.0f;
     bool place_commit = false;
@@ -134,7 +138,7 @@ public:
     void set_exit_pref(i32 pref) { exit_pref_ = pref; }
 
 private:
-    void sync_jolt(PhysWorld& phys, const RigidBody* car);
+    void sync_jolt(PhysWorld& phys);
     bool probe_exit(PhysWorld& phys, const Vehicle& veh, Vec3* out_foot) const;
     void update_car_frame(PhysWorld& phys, Vec3 body_pos, f32 dt);
 

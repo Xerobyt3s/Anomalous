@@ -1,5 +1,7 @@
 #include "test.h"
 
+#include "engine/physics/physics_world.h"
+
 #include "carsys/carsys.h"
 #include "core/arena.h"
 #include "physics/heightfield.h"
@@ -8,6 +10,7 @@
 #include "player/player.h"
 #include "vehicle/vehicle.h"
 #include "world/entity.h"
+#include "world/pickup_body.h"
 #include "world/terrain.h"
 #include "world/zone.h"
 
@@ -21,6 +24,7 @@ struct Bay {
     Arena arena{megabytes(64)};
     Heightfield hf;
     PhysWorld world;
+    ghost::engine::PhysicsWorld jolt;
     World entities;
     Vehicle car;
     CarSys sys;
@@ -38,6 +42,7 @@ struct Bay {
         }
         hf.recompute_extents();
         world.init(arena, &hf);
+        world.set_jolt(&jolt);
         entities.init(arena);
         sys.init();
         it.init();
@@ -103,6 +108,69 @@ struct Bay {
 };
 
 } // namespace
+
+TEST(interact, a_client_preview_does_not_power_a_loose_terminal)
+{
+    Bay bay;
+    CHECK(bay.setup());
+    const EntityHandle h = interact_spawn_pickup(bay.entities, bay.world, Item{ITEM_COMPUTER},
+                                                 Vec3{3.0f, 0.4f, 1.0f}, 0.0f, Vec3{});
+    bay.settle(60);
+    PickupState s;
+    CHECK(pickup_body_state(bay.world, *bay.entities.entity(h), s));
+
+    Ray ray;
+    ray.origin = s.pos + Vec3{0.8f, 1.0f, 0.0f};
+    ray.dir = normalize(s.pos - ray.origin);
+
+    InteractContext preview = bay.ctx(ray, true, true);
+    preview.preview = true;
+    bay.it.update(bay.boxes, preview, kDt);
+    CHECK(bay.it.action() == InteractAction::Pickup);
+    preview = bay.ctx(ray, false, false);
+    preview.preview = true;
+    bay.it.update(bay.boxes, preview, kDt);
+    CHECK(!bay.sys.computer_on);
+
+    bay.tap(ray);
+    CHECK(bay.sys.computer_on);
+}
+
+TEST(interact, the_trunk_offers_to_pour_carried_materials)
+{
+    Bay bay;
+    CHECK(bay.setup());
+    bay.sys.trunk_target = true;
+    bay.sys.trunk_open = 1.0f;
+    bay.sys.parts[PART_TANK].installed = true;
+
+    const RigidBody* body = bay.world.body(bay.car.body());
+    const Vec3 edge = body->pos
+                    + rotate(body->rot, bay.boxes.box(IBOX_TRUNK_EDGE).center - bay.car.config().com_offset);
+    Ray ray;
+    ray.origin = edge + Vec3{0.0f, 0.8f, 1.6f};
+    ray.dir = normalize(edge - ray.origin);
+
+    InteractContext empty = bay.ctx(ray, false, false);
+    empty.materials = 0;
+    bay.it.update(bay.boxes, empty, kDt);
+    CHECK(bay.it.action() != InteractAction::PourMaterials);
+
+    InteractContext carrying = bay.ctx(ray, false, false);
+    carrying.materials = 7;
+    bay.it.update(bay.boxes, carrying, kDt);
+    CHECK(bay.it.action() == InteractAction::PourMaterials);
+    CHECK(bay.it.prompt() == "[E] pour 7 materials into tank");
+
+    carrying = bay.ctx(ray, true, true);
+    carrying.materials = 7;
+    bay.it.update(bay.boxes, carrying, kDt);
+    carrying = bay.ctx(ray, false, false);
+    carrying.materials = 7;
+    bay.it.update(bay.boxes, carrying, kDt);
+    CHECK(bay.it.pour_request());
+    CHECK(!bay.it.pour_request());
+}
 
 TEST(interact, aiming_at_the_hood_latch_offers_to_open_it)
 {

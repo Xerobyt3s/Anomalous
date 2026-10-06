@@ -76,6 +76,68 @@ struct PartRemoved {
     glm::vec3 position{0.0f};
 };
 
+struct HandbrakeMoved {
+    bool set = false;
+    glm::vec3 position{0.0f};
+};
+
+struct HeadlightsSwitched {
+    bool on = false;
+};
+
+struct WipersSwitched {
+    int mode = 0;
+};
+
+struct FuelCapMoved {
+    bool open = false;
+    glm::vec3 position{0.0f};
+};
+
+struct Refuelled {
+    float amount = 0.0f;
+    glm::vec3 position{0.0f};
+};
+
+struct OilFilled {
+    glm::vec3 position{0.0f};
+};
+
+struct KeyMoved {
+    bool inserted = false;
+};
+
+struct CargoMoved {
+    bool placed = false;
+    glm::vec3 position{0.0f};
+};
+
+struct DiskMoved {
+    bool inserted = false;
+};
+
+struct TapeMoved {
+    bool inserted = false;
+};
+
+struct DeckPlay {
+    bool on = false;
+};
+
+struct GearShifted {
+    int gear = 0;
+    bool manual = false;
+};
+
+struct EngineStopped {
+    bool stalled = false;
+    glm::vec3 position{0.0f};
+};
+
+struct TankFilled {
+    int count = 0;
+};
+
 struct ZoneLoaded {
     int scene = -1;
 };

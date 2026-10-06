@@ -10,6 +10,7 @@ set(ANOMALOUS_TEST_SOURCES
     test_camera.cpp
     test_physics.cpp
     test_vehicle.cpp
+    test_controls.cpp
     test_carsys.cpp
     test_player.cpp
     test_interact.cpp
