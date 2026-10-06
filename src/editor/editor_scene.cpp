@@ -8,6 +8,7 @@
 #include "platform/input.h"
 #include "player/interact.h"
 #include "render/camera.h"
+#include "world/zone.h"
 #include "render/debug_draw.h"
 #include "terminal/disks.h"
 #include "ui/ui.h"
@@ -24,6 +25,8 @@ namespace {
 constexpr f32 kPlaceRange = 500.0f;
 constexpr f32 kTriggerDistance = 8.0f;
 constexpr f32 kGravityDistance = 14.0f;
+constexpr f32 kGhostSpawnDistance = 10.0f;
+constexpr f32 kGhostSpawnLift = 1.5f;
 constexpr f32 kIslandDistance = 40.0f;
 constexpr f32 kIslandLift = 14.0f;
 constexpr f32 kIslandRadius = 10.0f;
@@ -154,6 +157,52 @@ EntityHandle EditorScene::add_gravity(Editor& editor, const Camera& cam, World& 
         e->half = Vec3{6.0f, 4.0f, 6.0f};
         e->aux_value = kDefaultGravity;
         e->aux_data = 90;
+    }
+    editor.select(world, handle);
+    editor.push_create(world, phys, handle);
+    return handle;
+}
+
+EntityHandle EditorScene::add_ghost_spawn(Editor& editor, const Camera& cam, World& world, PhysWorld& phys,
+                                          const Terrain& terrain)
+{
+    Vec3 pos = cam.pos + cam.forward() * kGhostSpawnDistance;
+    pos.y = terrain.heightfield().sample(pos.x, pos.z) + kGhostSpawnLift;
+    const EntityHandle handle = world.spawn(EntityKind::GhostSpawn, pos, quat_identity(), 1.0f, "", 0);
+    if (Entity* e = world.entity(handle)) {
+        e->mesh_name.assign(ghost_types_.empty() ? std::string_view("wisp") : std::string_view(ghost_types_.front()));
+        e->half = kGhostSpawnHalf;
+        e->aux_kind = 1;
+    }
+    editor.select(world, handle);
+    editor.push_create(world, phys, handle);
+    return handle;
+}
+
+EntityHandle EditorScene::add_scene_thing(Editor& editor, const Camera& cam, World& world, PhysWorld& phys,
+                                          const Terrain& terrain, EntityKind kind)
+{
+    Vec3 pos = cam.pos + cam.forward() * kGhostSpawnDistance;
+    pos.y = terrain.heightfield().sample(pos.x, pos.z);
+    u32 order = 0;
+    for (u32 idx : world.entities().live_indices()) {
+        const Entity* e = world.entities().at(idx);
+        order += e && e->kind == EntityKind::SpawnPoint ? 1u : 0u;
+    }
+    const EntityHandle handle = world.spawn(kind, pos, quat_identity(), 1.0f, "", 0);
+    if (Entity* e = world.entity(handle)) {
+        if (kind == EntityKind::Prop) {
+            e->half = Vec3{0.5f, 0.5f, 0.5f};
+            e->pos.y += e->half.y;
+            e->aux_data = 0x6B6966u;
+            e->aux_kind = surface_from_name("concrete");
+        } else if (kind == EntityKind::Bench) {
+            e->half = kBenchHalf;
+            e->pos.y += kBenchHalf.y * 2.0f;
+        } else {
+            e->half = kSpawnPointHalf;
+            e->aux_kind = order;
+        }
     }
     editor.select(world, handle);
     editor.push_create(world, phys, handle);
@@ -469,6 +518,18 @@ void EditorScene::palette_panel(Editor& editor, Ui& ui, const Camera& cam, World
     if (ui.button("add gravity")) {
         add_gravity(editor, cam, world, phys);
     }
+    if (ui.button("add ghost")) {
+        add_ghost_spawn(editor, cam, world, phys, terrain);
+    }
+    if (ui.button("add prop")) {
+        add_scene_thing(editor, cam, world, phys, terrain, EntityKind::Prop);
+    }
+    if (ui.button("add spawn point")) {
+        add_scene_thing(editor, cam, world, phys, terrain, EntityKind::SpawnPoint);
+    }
+    if (ui.button("add bench")) {
+        add_scene_thing(editor, cam, world, phys, terrain, EntityKind::Bench);
+    }
     if (ui.button("add island")) {
         add_island(editor, cam, world, phys, terrain);
     }
@@ -510,6 +571,15 @@ void EditorScene::outliner_panel(Editor& editor, Ui& ui, World& world, f32 px)
             label.format("%u grav %s", idx, e->mesh_name.c_str());
         } else if (e->kind == EntityKind::Island) {
             label.format("%u isle %s", idx, e->mesh_name.c_str());
+        } else if (e->kind == EntityKind::GhostSpawn) {
+            label.format("%u ghost %s x%u", idx, e->mesh_name.c_str(), e->aux_kind);
+        } else if (e->kind == EntityKind::Prop) {
+            const std::string_view surface = surface_name(static_cast<u8>(e->aux_kind));
+            label.format("%u prop %.*s", idx, static_cast<int>(surface.size()), surface.data());
+        } else if (e->kind == EntityKind::SpawnPoint) {
+            label.format("%u spawn %u", idx, e->aux_kind + 1);
+        } else if (e->kind == EntityKind::Bench) {
+            label.format("%u bench", idx);
         } else if (e->kind == EntityKind::IslandLink) {
             label.format("%u link %s", idx, e->mesh_name.c_str());
         } else {
@@ -534,6 +604,9 @@ void EditorScene::detail_panel(Editor& editor, Ui& ui, World& world, PhysWorld& 
                        || (sel && (sel->kind == EntityKind::PartPickup
                                    || sel->kind == EntityKind::Trigger
                                    || sel->kind == EntityKind::Gravity
+                                   || sel->kind == EntityKind::GhostSpawn
+                                   || sel->kind == EntityKind::Prop
+                                   || sel->kind == EntityKind::SpawnPoint
                                    || sel->kind == EntityKind::Island
                                    || sel->kind == EntityKind::IslandLink));
 
@@ -665,6 +738,49 @@ void EditorScene::detail_panel(Editor& editor, Ui& ui, World& world, PhysWorld& 
         f32 sector = static_cast<f32>(sel->aux_data ? sel->aux_data : 90u);
         if (ui.slider("curl sector", sector, 1.0f, 180.0f)) {
             sel->aux_data = static_cast<u32>(sector + 0.5f);
+            editor.mark_dirty();
+        }
+    }
+
+    if (sel && sel->kind == EntityKind::Prop) {
+        if (ui.slider("half x", sel->half.x, 0.02f, 30.0f) || ui.slider("half y", sel->half.y, 0.02f, 10.0f)
+            || ui.slider("half z", sel->half.z, 0.02f, 30.0f)) {
+            editor.mark_dirty();
+        }
+        for (const char* surface : {"concrete", "wood", "steel", "ground"}) {
+            if (ui.list_item(surface, surface_name(static_cast<u8>(sel->aux_kind)) == surface)) {
+                sel->aux_kind = surface_from_name(surface);
+                editor.mark_dirty();
+            }
+        }
+        f32 rgb[3] = {static_cast<f32>((sel->aux_data >> 16) & 0xFFu) / 255.0f, static_cast<f32>((sel->aux_data >> 8) & 0xFFu) / 255.0f,
+                      static_cast<f32>(sel->aux_data & 0xFFu) / 255.0f};
+        if (ui.slider("red", rgb[0], 0.0f, 1.0f) || ui.slider("green", rgb[1], 0.0f, 1.0f) || ui.slider("blue", rgb[2], 0.0f, 1.0f)) {
+            const auto byte = [](f32 v) { return static_cast<u32>(f_clamp01(v) * 255.0f + 0.5f); };
+            sel->aux_data = (byte(rgb[0]) << 16) | (byte(rgb[1]) << 8) | byte(rgb[2]);
+            editor.mark_dirty();
+        }
+    }
+
+    if (sel && sel->kind == EntityKind::SpawnPoint) {
+        f32 order = static_cast<f32>(sel->aux_kind);
+        if (ui.slider("player", order, 0.0f, 7.0f)) {
+            sel->aux_kind = static_cast<u32>(order + 0.5f);
+            editor.mark_dirty();
+        }
+    }
+
+    if (sel && sel->kind == EntityKind::GhostSpawn) {
+        ui.label("ghost: %s", sel->mesh_name.c_str());
+        for (const std::string& type : ghost_types_) {
+            if (ui.list_item(type, sel->mesh_name.view() == type)) {
+                sel->mesh_name.assign(type);
+                editor.mark_dirty();
+            }
+        }
+        f32 count = static_cast<f32>(sel->aux_kind);
+        if (ui.slider("count", count, 1.0f, static_cast<f32>(kZoneMaxGhostsPerSpawn))) {
+            sel->aux_kind = static_cast<u32>(count + 0.5f);
             editor.mark_dirty();
         }
     }

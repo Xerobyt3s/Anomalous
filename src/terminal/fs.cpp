@@ -16,6 +16,7 @@ constexpr ExeName kExeNames[] = {
     {FsExe::Comms, "comms"},   {FsExe::Av, "av"},         {FsExe::Toy, "toy"},
     {FsExe::Video, "video"},   {FsExe::Breach, "breach"}, {FsExe::Gate, "gate"},
     {FsExe::Tapes, "tapes"},   {FsExe::Dev, "dev"},      {FsExe::Travel, "travel"},
+    {FsExe::Synth, "synth"},
 };
 
 bool is_separator(char c)

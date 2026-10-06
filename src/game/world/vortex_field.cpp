@@ -15,12 +15,13 @@ glm::vec3 airVelocity(const WindVortex& vortex, const glm::vec3& position) {
     if (p.radius <= 0.0f || vortex.strength <= 0.0f) {
         return glm::vec3(0.0f);
     }
-    const float h = position.y - vortex.base.y;
+    const glm::vec3 axis = vortex.axis;
+    const glm::vec3 offset = position - vortex.base;
+    const float h = glm::dot(offset, axis);
     if (h < -0.5f || h > p.height * 1.1f) {
         return glm::vec3(0.0f);
     }
-    glm::vec3 radial = position - vortex.base;
-    radial.y = 0.0f;
+    const glm::vec3 radial = offset - axis * h;
     const float d = glm::length(radial);
     if (d >= p.radius) {
         return glm::vec3(0.0f);
@@ -35,7 +36,7 @@ glm::vec3 airVelocity(const WindVortex& vortex, const glm::vec3& position) {
     glm::vec3 velocity{0.0f};
     if (d > 1e-4f) {
         const glm::vec3 outward = radial / d;
-        const glm::vec3 around{outward.z, 0.0f, -outward.x};
+        const glm::vec3 around = glm::cross(axis, outward);
         velocity += around * (p.swirlSpeed * reach * outsideCore);
 
         const float upper = glm::smoothstep(p.height * 0.5f, p.height * 0.85f, h);
@@ -43,7 +44,7 @@ glm::vec3 airVelocity(const WindVortex& vortex, const glm::vec3& position) {
         velocity += outward * (p.outflowSpeed * upper * (1.0f - glm::smoothstep(core, core * 3.0f, d)));
     }
 
-    velocity.y += p.liftSpeed * (1.0f - glm::smoothstep(core, core * 1.5f, d));
+    velocity += axis * (p.liftSpeed * (1.0f - glm::smoothstep(core, core * 1.5f, d)));
     return velocity * (top * vortex.strength);
 }
 

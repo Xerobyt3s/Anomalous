@@ -5,7 +5,6 @@
 
 namespace ghost::game {
 namespace {
-constexpr glm::vec3 kUp{0.0f, 1.0f, 0.0f};
 constexpr float kReach = 40.0f;
 
 void enter(Ghost& ghost, GhostState state) {
@@ -39,8 +38,9 @@ void tickNecromite(Ghost& ghost, const GhostDef& def, const GhostContext& contex
     }
     ghost.quarryId = ghost.prefers;
 
-    if (const auto ground = castSurface(context, ghost.position + kUp * 0.6f, ghost.position - kUp * 2.0f)) {
-        ghost.position.y = ground->point.y + def.radius;
+    const glm::vec3 up = ghost.up;
+    if (const auto ground = castSurface(context, ghost.position + up * 0.6f, ghost.position - up * 2.0f)) {
+        ghost.position = ground->point + ground->normal * def.radius;
     }
 
     switch (ghost.state) {
@@ -50,7 +50,7 @@ void tickNecromite(Ghost& ghost, const GhostDef& def, const GhostContext& contex
             ghost.velocity = glm::vec3(0.0f);
             break;
         }
-        const glm::vec3 to{body->eye.x - ghost.position.x, 0.0f, body->eye.z - ghost.position.z};
+        const glm::vec3 to = across(body->eye - ghost.position, up);
         const float distance = glm::length(to);
         if (distance < p.enterRange) {
             enter(ghost, GhostState::Bore);
@@ -63,7 +63,7 @@ void tickNecromite(Ghost& ghost, const GhostDef& def, const GhostContext& contex
     }
     case GhostState::Bore:
         ghost.velocity = glm::vec3(0.0f);
-        if (!body || glm::distance(glm::vec2(body->eye.x, body->eye.z), glm::vec2(ghost.position.x, ghost.position.z)) > p.enterRange * 2.0f) {
+        if (!body || glm::length(across(body->eye - ghost.position, up)) > p.enterRange * 2.0f) {
             enter(ghost, GhostState::Squirm);
             break;
         }

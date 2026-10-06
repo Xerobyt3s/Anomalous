@@ -1,4 +1,6 @@
 #include "render/device.h"
+#include "render/haze.h"
+#include "world/weather.h"
 #include "math/glm_bridge.h"
 #include "assets/watcher.h"
 #include "core/arena.h"
@@ -14,8 +16,8 @@ namespace anom {
 namespace {
 
 constexpr f32 kSnowFlakes = 60000.0f;
-constexpr f32 kSnowWindSpeed = 7.0f;
-constexpr Vec2 kSnowWindDir{0.86f, 0.51f};
+constexpr f32 kSnowWindSpeed = kWindSpeed;
+constexpr Vec2 kSnowWindDir{kWindDir.x, kWindDir.z};
 constexpr f32 kOvercastSunBlock = 0.7f;
 constexpr f32 kSceneNear = 0.05f;
 constexpr f32 kSceneFar = 2000.0f;
@@ -487,6 +489,58 @@ void RenderDevice::shadow_end()
     reset_state_cache();
 }
 
+u32 RenderDevice::copy_scene_depth()
+{
+    flush_meshes();
+    return post_ ? post_->copySceneDepth() : 0u;
+}
+
+void RenderDevice::draw_island_haze(f32 near_d, f32 far_d, u32 depth_texture)
+{
+    const u32 count = static_cast<u32>(haze_params_.x);
+    if (count == 0 || depth_texture == 0 || !post_) {
+        return;
+    }
+    const HazeSpan span = haze_window_span(haze_, count, cam_pos_, near_d, far_d);
+    if (span.empty()) {
+        return;
+    }
+    bool touches = false;
+    for (u32 i = 0; i < count; i++) {
+        touches = touches || haze_sphere_touches(haze_[i], cam_pos_, span);
+    }
+    if (!touches) {
+        return;
+    }
+    const ghost::engine::Shader* haze = shaders_.get("island_haze", "post/fullscreen");
+    if (!haze) {
+        return;
+    }
+    flush_meshes();
+    reset_state_cache();
+    const bool culled = glIsEnabled(GL_CULL_FACE) == GL_TRUE;
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+    haze->use();
+    glBindTextureUnit(0, depth_texture);
+    haze->set("uDepth", 0);
+    haze->set("uSplit", ghost::engine::PostProcess::depthSplit());
+    haze->set("uSpan", glm::vec2(span.start, span.end));
+    bind_vao(quad_vao_);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    stats_.draw_calls++;
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+    if (culled) {
+        glEnable(GL_CULL_FACE);
+    }
+    reset_state_cache();
+}
+
 bool RenderDevice::render_clouds()
 {
     if (video_active_ || !post_) {
@@ -800,8 +854,8 @@ void RenderDevice::post_process(f32 time)
     st.screenChroma = glm::vec2(chroma_, chroma_seed_);
     st.hazeChroma = haze_params_.z * kHazeChromaPixels;
     st.hazeShimmer = haze_params_.w * kHazeShimmerScreen * viewport_.y;
-    post_->setDistortion({}, time);
     post_->finish();
+    post_->setDistortion({}, time);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     reset_state_cache();
 }

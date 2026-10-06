@@ -1,91 +1,69 @@
 #include "audio/audio.h"
 
-#include "audio/ma.h"
 #include "core/arena.h"
 #include "core/config.h"
 #include "core/log.h"
+#include "engine/assets/asset_path.h"
+#include "engine/audio/audio_engine.h"
+#include "game/audio/game_audio.h"
+#include "math/glm_bridge.h"
 #include "platform/filesystem.h"
 
-#include <atomic>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <new>
+#include <optional>
+#include <string>
 
 namespace anom {
 
 namespace {
 
-constexpr u32 kSfxVoices = 4;
-constexpr u32 kEnginePulses = 12;
-constexpr u32 kTapeLpfOrder = 4;
-constexpr u32 kTapeHpfOrder = 2;
+namespace engine = ghost::engine;
 
-constexpr const char* kSfxPaths[SFX_KIND_COUNT] = {
-    "assets/audio/door_open.wav",
-    "assets/audio/door_close.wav",
-    "assets/audio/hood.wav",
-    "assets/audio/ratchet.wav",
-    "assets/audio/impact.wav",
-    "assets/audio/thump.wav",
-    "assets/audio/flap.wav",
-    "assets/audio/engine_start.wav",
-    "assets/audio/whir.wav",
-    "assets/audio/wiper.wav",
+constexpr f32 kTapeLow = 210.0f;
+constexpr f32 kSpeedOfSound = 343.0f;
+constexpr f32 kDopplerMin = 0.5f;
+constexpr f32 kDopplerMax = 2.0f;
+constexpr int kCarGroup = static_cast<int>(ghost::game::SoundGroup::World);
+
+constexpr const char* kSfxFiles[SFX_KIND_COUNT] = {
+    "door_open.wav", "door_close.wav", "hood.wav",         "ratchet.wav", "impact.wav",
+    "thump.wav",     "flap.wav",       "engine_start.wav", "whir.wav",    "wiper.wav",
 };
 
-} // namespace
+engine::SoundRef load_sound(const std::string& file)
+{
+    const std::optional<std::string> bytes = engine::readAsset(engine::assetPath("audio/" + file));
+    std::optional<engine::SoundBuffer> buffer = bytes ? engine::decodeSound(*bytes) : std::nullopt;
+    if (!buffer) {
+        log_warn("audio: failed to load %s", file.c_str());
+        return nullptr;
+    }
+    return std::make_shared<const engine::SoundBuffer>(std::move(*buffer));
+}
+
+}
 
 struct AudioBackend {
-    struct Pulse {
-        f32 amp;
-        f32 decay_mul;
-        f32 phase;
-        f32 phase_inc;
-    };
-
-    struct Synth {
-        ma_data_source_base ds;
-        std::atomic<f32> rpm;
-        std::atomic<f32> load;
-        std::atomic<bool> running;
-        std::atomic<bool> cranking;
-        f32 fire_phase;
-        u32 rng_state;
-        Pulse pulses[kEnginePulses];
-        u32 pulse_next;
-        u32 fire_count;
-        f32 noise_lp;
-        f32 out_lp;
-        u32 sample_rate;
-    };
-
-    struct Bank {
-        ma_sound voices[kSfxVoices];
-        u32 next;
-        u32 loaded;
-    };
-
     struct Loop {
-        ma_sound sound;
-        bool loaded;
+        engine::SoundRef sound;
+        engine::VoiceId voice = 0;
+        f32 volume = 0.0f;
+        f32 pitch = 1.0f;
+        bool positional = true;
+        Vec3 pos{};
     };
 
-    struct EngineSet {
-        ma_sound loops[kEngineLayerMax];
-        f32 base_rpm[kEngineLayerMax];
-        f32 vol[kEngineLayerMax];
-        u32 count;
-        bool loaded;
-        f32 master;
-    };
+    engine::AudioEngine* engine = nullptr;
+    engine::SoundRef sfx[SFX_KIND_COUNT];
 
-    ma_engine engine;
-    Bank sfx[SFX_KIND_COUNT];
-
-    Synth synth;
-    ma_sound synth_sound;
-    bool synth_ok;
-    EngineSet set;
+    Loop layers[kEngineLayerMax];
+    f32 base_rpm[kEngineLayerMax] = {};
+    f32 layer_vol[kEngineLayerMax] = {};
+    u32 layer_count = 0;
+    f32 master = 0.0f;
+    f32 rpm_pitch = 1.0f;
 
     Loop starter;
     Loop skid;
@@ -96,207 +74,84 @@ struct AudioBackend {
     Loop rain_light;
     Loop rain_heavy;
     Loop rain_roof;
+    Loop tape;
 
-    f32 horn_vol;
-    f32 skid_vol;
-    f32 roll_road_vol;
-    f32 roll_grass_vol;
-    f32 roll_wet_vol;
-    f32 rain_light_vol;
-    f32 rain_heavy_vol;
-    f32 rain_roof_vol;
+    f32 horn_vol = 0.0f;
+    f32 skid_vol = 0.0f;
+    f32 roll_road_vol = 0.0f;
+    f32 roll_grass_vol = 0.0f;
+    f32 roll_wet_vol = 0.0f;
+    f32 rain_light_vol = 0.0f;
+    f32 rain_heavy_vol = 0.0f;
+    f32 rain_roof_vol = 0.0f;
 
-    Vec3 dash_pos;
-    Vec3 car_vel;
-    f32 occ;
+    Vec3 listener{};
+    Vec3 listener_vel{};
+    Vec3 dash_pos{};
+    Vec3 car_vel{};
+    f32 occ = 1.0f;
 
-    ma_sound tape;
-    ma_hpf_node tape_hpf;
-    ma_lpf_node tape_lpf;
-    bool tape_active;
-    bool tape_chain;
-    f32 tape_speed_sm;
-    f32 tape_wobble_t;
-    f32 tape_cutoff;
+    bool tape_active = false;
+    f32 tape_speed_sm = 1.0f;
+    f32 tape_wobble_t = 0.0f;
+
+    f32 doppler(Vec3 source, Vec3 source_vel) const
+    {
+        const Vec3 to = source - listener;
+        const f32 distance = length(to);
+        if (distance < 1e-3f) {
+            return 1.0f;
+        }
+        const Vec3 dir = to / distance;
+        const f32 f = (kSpeedOfSound + dot(listener_vel, dir)) / f_max(kSpeedOfSound + dot(source_vel, dir), 1.0f);
+        return f_clamp(f, kDopplerMin, kDopplerMax);
+    }
+
+    void start(Loop& loop, engine::SoundRef sound, bool positional)
+    {
+        loop.sound = std::move(sound);
+        loop.positional = positional;
+        if (!loop.sound) {
+            return;
+        }
+        engine::PlayParams params;
+        params.volume = 0.0f;
+        params.loop = true;
+        params.group = kCarGroup;
+        params.minDistance = 3.0f;
+        params.maxDistance = 120.0f;
+        if (positional) {
+            params.position = glm::vec3(0.0f);
+        }
+        loop.voice = engine->play(loop.sound, params);
+    }
+
+    void push(Loop& loop, f32 volume, f32 pitch_scale = 1.0f)
+    {
+        loop.volume = volume;
+        if (!loop.voice) {
+            return;
+        }
+        const f32 shift = loop.positional ? doppler(loop.pos, car_vel) : 1.0f;
+        const std::optional<glm::vec3> at = loop.positional ? std::optional<glm::vec3>(to_glm(loop.pos)) : std::nullopt;
+        engine->set(loop.voice, volume, loop.pitch * pitch_scale * shift, at);
+    }
+
+    void release(Loop& loop)
+    {
+        if (loop.voice) {
+            engine->stop(loop.voice);
+            loop.voice = 0;
+        }
+    }
 };
 
 namespace {
 
-f32 synth_rand01(AudioBackend::Synth* s)
+void load_engine_set(AudioBackend& be)
 {
-    s->rng_state ^= s->rng_state << 13;
-    s->rng_state ^= s->rng_state >> 17;
-    s->rng_state ^= s->rng_state << 5;
-    return static_cast<f32>(s->rng_state >> 8) / 16777216.0f;
-}
-
-ma_result synth_read(ma_data_source* ds, void* out, ma_uint64 frame_count, ma_uint64* frames_read)
-{
-    auto* s = reinterpret_cast<AudioBackend::Synth*>(ds);
-    f32* dst = static_cast<f32*>(out);
-    const f32 rate = static_cast<f32>(s->sample_rate);
-    const f32 rpm = s->rpm.load(std::memory_order_relaxed);
-    const f32 load = s->load.load(std::memory_order_relaxed);
-    const bool running = s->running.load(std::memory_order_relaxed);
-    const bool cranking = s->cranking.load(std::memory_order_relaxed);
-    const f32 fire_hz = f_max(rpm, 0.0f) / 60.0f * 2.0f;
-    const f32 base_amp = running ? 0.24f + 0.50f * load : (cranking ? 0.16f : 0.0f);
-    const f32 rpm_norm = f_clamp01(rpm / 6500.0f);
-
-    for (ma_uint64 i = 0; i < frame_count; i++) {
-        s->fire_phase += fire_hz / rate;
-        if (s->fire_phase >= 1.0f) {
-            s->fire_phase -= 1.0f;
-            if (base_amp > 0.0f) {
-                AudioBackend::Pulse* p = &s->pulses[s->pulse_next];
-                s->pulse_next = (s->pulse_next + 1) % kEnginePulses;
-                const f32 jitter = 0.72f + 0.56f * synth_rand01(s);
-                const f32 accent = (s->fire_count++ & 3u) == 0 ? 1.35f : 1.0f;
-                const f32 freq = 82.0f + 55.0f * load + rpm * 0.006f + synth_rand01(s) * 14.0f;
-                const f32 decay = 42.0f + 195.0f * rpm_norm;
-                p->amp = base_amp * jitter * accent;
-                p->decay_mul = std::exp(-decay / rate);
-                p->phase = 0.0f;
-                p->phase_inc = freq / rate;
-            }
-        }
-
-        f32 sample = 0.0f;
-        for (u32 k = 0; k < kEnginePulses; k++) {
-            AudioBackend::Pulse* p = &s->pulses[k];
-            if (p->amp < 0.002f) {
-                continue;
-            }
-            sample += p->amp * std::sin(kTau * p->phase);
-            p->amp *= p->decay_mul;
-            p->phase += p->phase_inc;
-        }
-
-        const f32 white = synth_rand01(s) * 2.0f - 1.0f;
-        s->noise_lp += 0.22f * (white - s->noise_lp);
-        sample += s->noise_lp * (0.015f + 0.12f * load) * rpm_norm * 2.2f;
-
-        sample = sample * 1.7f / (1.0f + f_abs(sample * 1.7f));
-        s->out_lp += 0.5f * (sample - s->out_lp);
-        dst[i] = s->out_lp;
-    }
-
-    if (frames_read) {
-        *frames_read = frame_count;
-    }
-    return MA_SUCCESS;
-}
-
-ma_result synth_seek(ma_data_source* ds, ma_uint64 frame)
-{
-    (void)ds;
-    (void)frame;
-    return MA_SUCCESS;
-}
-
-ma_result synth_format(ma_data_source* ds, ma_format* format, ma_uint32* channels,
-                       ma_uint32* sample_rate, ma_channel* channel_map, size_t channel_map_cap)
-{
-    (void)channel_map;
-    (void)channel_map_cap;
-    auto* s = reinterpret_cast<AudioBackend::Synth*>(ds);
-    *format = ma_format_f32;
-    *channels = 1;
-    *sample_rate = s->sample_rate;
-    return MA_SUCCESS;
-}
-
-ma_result synth_cursor(ma_data_source* ds, ma_uint64* cursor)
-{
-    (void)ds;
-    *cursor = 0;
-    return MA_SUCCESS;
-}
-
-ma_result synth_length(ma_data_source* ds, ma_uint64* length)
-{
-    (void)ds;
-    *length = 0;
-    return MA_SUCCESS;
-}
-
-ma_data_source_vtable g_synth_vtable = {
-    synth_read, synth_seek, synth_format, synth_cursor, synth_length, nullptr, 0,
-};
-
-void sound_spatial(ma_sound* sound, f32 min_dist, f32 max_dist)
-{
-    ma_sound_set_spatialization_enabled(sound, MA_TRUE);
-    ma_sound_set_attenuation_model(sound, ma_attenuation_model_inverse);
-    ma_sound_set_min_distance(sound, min_dist);
-    ma_sound_set_max_distance(sound, max_dist);
-    ma_sound_set_rolloff(sound, 1.0f);
-}
-
-void sound_place(ma_sound* sound, Vec3 pos, Vec3 vel)
-{
-    ma_sound_set_position(sound, pos.x, pos.y, pos.z);
-    ma_sound_set_velocity(sound, vel.x, vel.y, vel.z);
-}
-
-bool load_loop(ma_engine& engine, AudioBackend::Loop& loop, const char* path, f32 min_dist,
-               f32 max_dist)
-{
-    if (ma_sound_init_from_file(&engine, path, MA_SOUND_FLAG_DECODE, nullptr, nullptr,
-                                &loop.sound)
-        != MA_SUCCESS) {
-        log_warn("audio: failed to load %s", path);
-        return false;
-    }
-    ma_sound_set_looping(&loop.sound, MA_TRUE);
-    ma_sound_set_volume(&loop.sound, 0.0f);
-    sound_spatial(&loop.sound, min_dist, max_dist);
-    ma_sound_start(&loop.sound);
-    loop.loaded = true;
-    return true;
-}
-
-void unload_loop(AudioBackend::Loop& loop)
-{
-    if (loop.loaded) {
-        ma_sound_uninit(&loop.sound);
-        loop.loaded = false;
-    }
-}
-
-void set_loop(AudioBackend::Loop& loop, f32 volume)
-{
-    if (loop.loaded) {
-        ma_sound_set_volume(&loop.sound, volume);
-    }
-}
-
-void place_loop(AudioBackend::Loop& loop, Vec3 pos, Vec3 vel)
-{
-    if (loop.loaded) {
-        sound_place(&loop.sound, pos, vel);
-    }
-}
-
-void pitch_loop(AudioBackend::Loop& loop, f32 pitch)
-{
-    if (loop.loaded) {
-        ma_sound_set_pitch(&loop.sound, pitch);
-    }
-}
-
-void tape_release(AudioBackend& be)
-{
-    if (be.tape_active) {
-        ma_sound_uninit(&be.tape);
-        be.tape_active = false;
-    }
-}
-
-void load_engine_set(AudioBackend& be, Arena& arena)
-{
-    ArenaScope scope(arena);
-    const fs::FileData file = fs::read_entire_file(arena, "assets/audio/engine_set.cfg");
+    Arena arena(megabytes(1));
+    const fs::FileData file = fs::read_entire_file(arena, engine::assetPath("audio/engine_set.cfg").string());
     if (!file.valid()) {
         return;
     }
@@ -304,18 +159,15 @@ void load_engine_set(AudioBackend& be, Arena& arena)
     if (!cfg.parse(arena, file.text())) {
         return;
     }
-
     const i32 declared = cfg.get_i32("engine_set.count", 0);
-    u32 count = declared <= 0 ? 0u : static_cast<u32>(declared);
-    count = count > kEngineLayerMax ? kEngineLayerMax : count;
+    const u32 count = declared <= 0 ? 0u : std::min(static_cast<u32>(declared), kEngineLayerMax);
 
     struct Layer {
         f32 rpm;
-        char path[192];
+        std::string file;
     };
     Layer layers[kEngineLayerMax];
     u32 layer_count = 0;
-
     for (u32 i = 0; i < count; i++) {
         char key[64];
         std::snprintf(key, sizeof(key), "engine_set.loop%u_rpm", i);
@@ -328,7 +180,6 @@ void load_engine_set(AudioBackend& be, Arena& arena)
         if (name.empty()) {
             continue;
         }
-
         u32 slot = layer_count;
         while (slot > 0 && layers[slot - 1].rpm > rpm) {
             slot--;
@@ -340,43 +191,21 @@ void load_engine_set(AudioBackend& be, Arena& arena)
         for (u32 m = layer_count; m > slot; m--) {
             layers[m] = layers[m - 1];
         }
-        layers[slot].rpm = rpm;
-        std::snprintf(layers[slot].path, sizeof(layers[slot].path), "assets/audio/%.*s",
-                      static_cast<int>(name.size()), name.data());
+        layers[slot] = {rpm, std::string(name)};
         layer_count++;
     }
-
     for (u32 i = 0; i < layer_count; i++) {
-        const u32 slot = be.set.count;
-        if (ma_sound_init_from_file(&be.engine, layers[i].path, MA_SOUND_FLAG_DECODE, nullptr,
-                                    nullptr, &be.set.loops[slot])
-            != MA_SUCCESS) {
-            log_warn("audio: failed to load %s", layers[i].path);
+        engine::SoundRef sound = load_sound(layers[i].file);
+        if (!sound) {
             continue;
         }
-        be.set.base_rpm[slot] = layers[i].rpm;
-        be.set.count++;
-
-        ma_sound_set_looping(&be.set.loops[slot], MA_TRUE);
-        ma_sound_set_volume(&be.set.loops[slot], 0.0f);
-        sound_spatial(&be.set.loops[slot], 3.0f, 160.0f);
-        ma_sound_start(&be.set.loops[slot]);
+        be.base_rpm[be.layer_count] = layers[i].rpm;
+        be.start(be.layers[be.layer_count], std::move(sound), true);
+        be.layer_count++;
     }
-    be.set.loaded = be.set.count >= 2;
 }
 
-ma_sound* pick_voice(AudioBackend::Bank& bank, f32 volume, f32 pitch)
-{
-    ma_sound* voice = &bank.voices[bank.next];
-    bank.next = (bank.next + 1) % bank.loaded;
-    ma_sound_stop(voice);
-    ma_sound_seek_to_pcm_frame(voice, 0);
-    ma_sound_set_volume(voice, volume);
-    ma_sound_set_pitch(voice, f_max(pitch, 0.02f));
-    return voice;
 }
-
-} // namespace
 
 void engine_crossfade(std::span<const f32> base_rpm, f32 rpm, std::span<f32> out)
 {
@@ -409,94 +238,35 @@ void engine_crossfade(std::span<const f32> base_rpm, f32 rpm, std::span<f32> out
     }
 }
 
-bool Audio::init(Arena& arena)
+Audio::Audio() = default;
+
+Audio::~Audio()
+{
+    shutdown();
+}
+
+bool Audio::init(ghost::engine::AudioEngine& audio_engine)
 {
     if (backend_) {
         return true;
     }
-
-    void* mem = arena.push_bytes(sizeof(AudioBackend), alignof(AudioBackend));
-    if (!mem) {
-        log_warn("audio: no arena space, running silent");
-        return false;
-    }
-    auto* be = new (mem) AudioBackend{};
-    be->occ = 1.0f;
-    be->tape_speed_sm = 1.0f;
-
-    if (ma_engine_init(nullptr, &be->engine) != MA_SUCCESS) {
-        log_warn("audio: device init failed, running silent");
-        return false;
-    }
-    backend_ = be;
-
+    backend_ = std::make_unique<AudioBackend>();
+    AudioBackend& be = *backend_;
+    be.engine = &audio_engine;
     for (u32 k = 0; k < SFX_KIND_COUNT; k++) {
-        AudioBackend::Bank& bank = be->sfx[k];
-        for (u32 v = 0; v < kSfxVoices; v++) {
-            if (ma_sound_init_from_file(&be->engine, kSfxPaths[k], MA_SOUND_FLAG_DECODE, nullptr,
-                                        nullptr, &bank.voices[v])
-                != MA_SUCCESS) {
-                log_warn("audio: failed to load %s", kSfxPaths[k]);
-                break;
-            }
-            sound_spatial(&bank.voices[v], 2.0f, 90.0f);
-            bank.loaded++;
-        }
+        be.sfx[k] = load_sound(kSfxFiles[k]);
     }
-
-    load_loop(be->engine, be->starter, "assets/audio/starter.wav", 3.0f, 120.0f);
-    load_loop(be->engine, be->skid, "assets/audio/skid.wav", 3.0f, 120.0f);
-    load_loop(be->engine, be->roll_road, "assets/audio/roll_road.wav", 3.0f, 120.0f);
-    load_loop(be->engine, be->roll_grass, "assets/audio/roll_grass.wav", 3.0f, 120.0f);
-    load_loop(be->engine, be->horn, "assets/audio/horn.wav", 3.0f, 120.0f);
-    load_loop(be->engine, be->roll_wet, "assets/audio/roll_road_wet.wav", 3.0f, 120.0f);
-
-    AudioBackend::Loop* rain[] = {&be->rain_light, &be->rain_heavy, &be->rain_roof};
-    const char* rain_paths[] = {"assets/audio/rain_light.wav", "assets/audio/rain_heavy.wav",
-                                "assets/audio/rain_roof.wav"};
-    for (u32 i = 0; i < array_count(rain); i++) {
-        if (load_loop(be->engine, *rain[i], rain_paths[i], 3.0f, 120.0f)) {
-            ma_sound_set_spatialization_enabled(&rain[i]->sound, MA_FALSE);
-        }
-    }
-
-    load_engine_set(*be, arena);
-
-    if (!be->set.loaded) {
-        ma_data_source_config ds_config = ma_data_source_config_init();
-        ds_config.vtable = &g_synth_vtable;
-        be->synth.sample_rate = ma_engine_get_sample_rate(&be->engine);
-        be->synth.rng_state = 0x2545F491u;
-        be->synth_ok = ma_data_source_init(&ds_config, &be->synth.ds) == MA_SUCCESS
-                       && ma_sound_init_from_data_source(&be->engine, &be->synth.ds, 0, nullptr,
-                                                         &be->synth_sound)
-                              == MA_SUCCESS;
-        if (be->synth_ok) {
-            ma_sound_set_volume(&be->synth_sound, 0.85f);
-            sound_spatial(&be->synth_sound, 3.0f, 160.0f);
-            ma_sound_start(&be->synth_sound);
-        } else {
-            log_warn("audio: engine synth init failed");
-        }
-    }
-
-    ma_node_graph* graph = ma_engine_get_node_graph(&be->engine);
-    const ma_uint32 channels = ma_engine_get_channels(&be->engine);
-    const ma_uint32 rate = ma_engine_get_sample_rate(&be->engine);
-    be->tape_cutoff = 4200.0f;
-    ma_hpf_node_config hc = ma_hpf_node_config_init(channels, rate, 210.0, kTapeHpfOrder);
-    ma_lpf_node_config lc = ma_lpf_node_config_init(channels, rate,
-                                                    static_cast<f64>(be->tape_cutoff),
-                                                    kTapeLpfOrder);
-    be->tape_chain = ma_hpf_node_init(graph, &hc, nullptr, &be->tape_hpf) == MA_SUCCESS
-                     && ma_lpf_node_init(graph, &lc, nullptr, &be->tape_lpf) == MA_SUCCESS;
-    if (be->tape_chain) {
-        ma_node_attach_output_bus(&be->tape_hpf, 0, &be->tape_lpf, 0);
-        ma_node_attach_output_bus(&be->tape_lpf, 0, ma_engine_get_endpoint(&be->engine), 0);
-    }
-
-    log_info("audio: initialized (engine %s, %u layers)",
-             be->set.loaded ? "sample set" : (be->synth_ok ? "synth" : "off"), be->set.count);
+    be.start(be.starter, load_sound("starter.wav"), true);
+    be.start(be.skid, load_sound("skid.wav"), true);
+    be.start(be.roll_road, load_sound("roll_road.wav"), true);
+    be.start(be.roll_grass, load_sound("roll_grass.wav"), true);
+    be.start(be.horn, load_sound("horn.wav"), true);
+    be.start(be.roll_wet, load_sound("roll_road_wet.wav"), true);
+    be.start(be.rain_light, load_sound("rain_light.wav"), false);
+    be.start(be.rain_heavy, load_sound("rain_heavy.wav"), false);
+    be.start(be.rain_roof, load_sound("rain_roof.wav"), false);
+    load_engine_set(be);
+    log_info("audio: car audio on the shared engine (%u engine layers)", be.layer_count);
     return true;
 }
 
@@ -505,53 +275,27 @@ void Audio::shutdown()
     if (!backend_) {
         return;
     }
-    AudioBackend* be = backend_;
-    backend_ = nullptr;
-
-    tape_release(*be);
-    if (be->tape_chain) {
-        ma_lpf_node_uninit(&be->tape_lpf, nullptr);
-        ma_hpf_node_uninit(&be->tape_hpf, nullptr);
-        be->tape_chain = false;
+    AudioBackend& be = *backend_;
+    for (u32 i = 0; i < be.layer_count; i++) {
+        be.release(be.layers[i]);
     }
-    for (u32 i = 0; i < be->set.count; i++) {
-        ma_sound_uninit(&be->set.loops[i]);
+    AudioBackend::Loop* loops[] = {&be.starter,   &be.skid,       &be.roll_road,  &be.roll_grass, &be.roll_wet,
+                                   &be.horn,      &be.rain_light, &be.rain_heavy, &be.rain_roof,  &be.tape};
+    for (AudioBackend::Loop* loop : loops) {
+        be.release(*loop);
     }
-    be->set.count = 0;
-    be->set.loaded = false;
-    if (be->synth_ok) {
-        ma_sound_uninit(&be->synth_sound);
-        ma_data_source_uninit(&be->synth.ds);
-        be->synth_ok = false;
-    }
-    unload_loop(be->starter);
-    unload_loop(be->skid);
-    unload_loop(be->roll_road);
-    unload_loop(be->roll_grass);
-    unload_loop(be->horn);
-    unload_loop(be->roll_wet);
-    unload_loop(be->rain_light);
-    unload_loop(be->rain_heavy);
-    unload_loop(be->rain_roof);
-    for (u32 k = 0; k < SFX_KIND_COUNT; k++) {
-        for (u32 v = 0; v < be->sfx[k].loaded; v++) {
-            ma_sound_uninit(&be->sfx[k].voices[v]);
-        }
-        be->sfx[k].loaded = 0;
-    }
-    ma_engine_uninit(&be->engine);
+    backend_.reset();
 }
 
 void Audio::set_listener(Vec3 pos, Vec3 forward, Vec3 up, Vec3 vel)
 {
+    (void)forward;
+    (void)up;
     if (!backend_) {
         return;
     }
-    ma_engine& engine = backend_->engine;
-    ma_engine_listener_set_position(&engine, 0, pos.x, pos.y, pos.z);
-    ma_engine_listener_set_direction(&engine, 0, forward.x, forward.y, forward.z);
-    ma_engine_listener_set_world_up(&engine, 0, up.x, up.y, up.z);
-    ma_engine_listener_set_velocity(&engine, 0, vel.x, vel.y, vel.z);
+    backend_->listener = pos;
+    backend_->listener_vel = vel;
 }
 
 void Audio::set_occlusion(f32 factor, f32 dt)
@@ -575,27 +319,21 @@ void Audio::set_car(Vec3 engine_pos, Vec3 center_pos, Vec3 dash_pos, Vec3 vel)
     AudioBackend& be = *backend_;
     be.dash_pos = dash_pos;
     be.car_vel = vel;
-
-    for (u32 i = 0; i < be.set.count; i++) {
-        sound_place(&be.set.loops[i], engine_pos, vel);
+    for (u32 i = 0; i < be.layer_count; i++) {
+        be.layers[i].pos = engine_pos;
     }
-    if (be.synth_ok) {
-        sound_place(&be.synth_sound, engine_pos, vel);
-    }
-    place_loop(be.starter, engine_pos, vel);
-    place_loop(be.horn, engine_pos, vel);
-    place_loop(be.skid, center_pos, vel);
-    place_loop(be.roll_road, center_pos, vel);
-    place_loop(be.roll_grass, center_pos, vel);
-    place_loop(be.roll_wet, center_pos, vel);
-    if (be.tape_active) {
-        sound_place(&be.tape, dash_pos, vel);
-    }
+    be.starter.pos = engine_pos;
+    be.horn.pos = engine_pos;
+    be.skid.pos = center_pos;
+    be.roll_road.pos = center_pos;
+    be.roll_grass.pos = center_pos;
+    be.roll_wet.pos = center_pos;
+    be.tape.pos = dash_pos;
 }
 
 bool Audio::sfx_available(SfxKind kind) const
 {
-    return backend_ && backend_->sfx[kind].loaded > 0;
+    return backend_ && backend_->sfx[kind] != nullptr;
 }
 
 void Audio::play(SfxKind kind, f32 volume, f32 pitch)
@@ -603,9 +341,11 @@ void Audio::play(SfxKind kind, f32 volume, f32 pitch)
     if (!sfx_available(kind)) {
         return;
     }
-    ma_sound* voice = pick_voice(backend_->sfx[kind], volume, pitch);
-    ma_sound_set_spatialization_enabled(voice, MA_FALSE);
-    ma_sound_start(voice);
+    engine::PlayParams params;
+    params.volume = volume;
+    params.pitch = f_max(pitch, 0.02f);
+    params.group = kCarGroup;
+    backend_->engine->play(backend_->sfx[kind], params);
 }
 
 void Audio::play_at(SfxKind kind, f32 volume, f32 pitch, Vec3 pos)
@@ -613,10 +353,14 @@ void Audio::play_at(SfxKind kind, f32 volume, f32 pitch, Vec3 pos)
     if (!sfx_available(kind)) {
         return;
     }
-    ma_sound* voice = pick_voice(backend_->sfx[kind], volume * backend_->occ, pitch);
-    ma_sound_set_spatialization_enabled(voice, MA_TRUE);
-    sound_place(voice, pos, Vec3{});
-    ma_sound_start(voice);
+    engine::PlayParams params;
+    params.volume = volume * backend_->occ;
+    params.pitch = f_max(pitch, 0.02f);
+    params.position = to_glm(pos);
+    params.minDistance = 2.0f;
+    params.maxDistance = 90.0f;
+    params.group = kCarGroup;
+    backend_->engine->play(backend_->sfx[kind], params);
 }
 
 void Audio::set_engine(f32 rpm, f32 load, bool running, bool cranking, f32 dt)
@@ -625,44 +369,31 @@ void Audio::set_engine(f32 rpm, f32 load, bool running, bool cranking, f32 dt)
         return;
     }
     AudioBackend& be = *backend_;
-
-    if (be.set.loaded) {
-        AudioBackend::EngineSet& set = be.set;
-        const f32 master_target = running ? 0.30f + 0.45f * f_clamp01(load)
-                                          : (cranking ? 0.10f : 0.0f);
-        set.master = f_approach_exp(set.master, master_target, 10.0f, dt);
-
-        f32 target[kEngineLayerMax] = {};
-        const f32 rpm_eff = f_max(rpm, 100.0f);
-        if (set.master > 0.001f) {
-            engine_crossfade(std::span<const f32>(set.base_rpm, set.count), rpm_eff, target);
-        }
-        for (u32 i = 0; i < set.count; i++) {
-            set.vol[i] = f_approach_exp(set.vol[i], target[i] * set.master, 18.0f, dt);
-            ma_sound_set_volume(&set.loops[i], set.vol[i] * be.occ);
-            if (set.vol[i] > 0.002f) {
-                ma_sound_set_pitch(&set.loops[i],
-                                   f_clamp(rpm_eff / set.base_rpm[i], 0.45f, 2.3f));
-            }
-        }
-    } else if (be.synth_ok) {
-        be.synth.rpm.store(rpm, std::memory_order_relaxed);
-        be.synth.load.store(f_clamp01(load), std::memory_order_relaxed);
-        be.synth.running.store(running, std::memory_order_relaxed);
-        be.synth.cranking.store(cranking, std::memory_order_relaxed);
-        ma_sound_set_volume(&be.synth_sound, 0.85f * be.occ);
+    const f32 master_target = running ? 0.30f + 0.45f * f_clamp01(load) : (cranking ? 0.10f : 0.0f);
+    be.master = f_approach_exp(be.master, master_target, 10.0f, dt);
+    f32 target[kEngineLayerMax] = {};
+    const f32 rpm_eff = f_max(rpm, 100.0f);
+    if (be.master > 0.001f) {
+        engine_crossfade(std::span<const f32>(be.base_rpm, be.layer_count), rpm_eff, target);
     }
-    set_loop(be.starter, cranking ? 0.5f * be.occ : 0.0f);
+    for (u32 i = 0; i < be.layer_count; i++) {
+        be.layer_vol[i] = f_approach_exp(be.layer_vol[i], target[i] * be.master, 18.0f, dt);
+        if (be.layer_vol[i] > 0.002f) {
+            be.layers[i].pitch = f_clamp(rpm_eff / be.base_rpm[i], 0.45f, 2.3f);
+        }
+        be.push(be.layers[i], be.layer_vol[i] * be.occ);
+    }
+    be.push(be.starter, cranking ? 0.5f * be.occ : 0.0f);
 }
 
 u32 Audio::engine_layer_count() const
 {
-    return backend_ ? backend_->set.count : 0;
+    return backend_ ? backend_->layer_count : 0;
 }
 
 f32 Audio::engine_layer_volume(u32 index) const
 {
-    return backend_ && index < backend_->set.count ? backend_->set.vol[index] : 0.0f;
+    return backend_ && index < backend_->layer_count ? backend_->layer_vol[index] : 0.0f;
 }
 
 void Audio::set_rolling(f32 speed, f32 road_amount, bool grounded, f32 wetness, f32 dt)
@@ -679,14 +410,13 @@ void Audio::set_rolling(f32 speed, f32 road_amount, bool grounded, f32 wetness, 
     be.roll_road_vol = f_approach_exp(be.roll_road_vol, road_target, 8.0f, dt);
     be.roll_wet_vol = f_approach_exp(be.roll_wet_vol, wet_target, 8.0f, dt);
     be.roll_grass_vol = f_approach_exp(be.roll_grass_vol, grass_target, 8.0f, dt);
-    set_loop(be.roll_road, be.roll_road_vol * be.occ);
-    set_loop(be.roll_wet, be.roll_wet_vol * be.occ);
-    set_loop(be.roll_grass, be.roll_grass_vol * be.occ);
-
     const f32 pitch = 0.8f + f_clamp01(speed / 35.0f) * 0.5f;
-    pitch_loop(be.roll_road, pitch);
-    pitch_loop(be.roll_wet, pitch);
-    pitch_loop(be.roll_grass, pitch);
+    be.roll_road.pitch = pitch;
+    be.roll_wet.pitch = pitch;
+    be.roll_grass.pitch = pitch;
+    be.push(be.roll_road, be.roll_road_vol * be.occ);
+    be.push(be.roll_wet, be.roll_wet_vol * be.occ);
+    be.push(be.roll_grass, be.roll_grass_vol * be.occ);
 }
 
 void Audio::set_rain(f32 exterior, f32 roof, f32 dt)
@@ -696,16 +426,15 @@ void Audio::set_rain(f32 exterior, f32 roof, f32 dt)
     }
     AudioBackend& be = *backend_;
     const f32 ext = f_clamp01(exterior);
-    const f32 light_target = f_clamp01(ext * 2.2f) * 0.34f
-                             * (1.0f - f_clamp01((ext - 0.5f) * 1.4f));
+    const f32 light_target = f_clamp01(ext * 2.2f) * 0.34f * (1.0f - f_clamp01((ext - 0.5f) * 1.4f));
     const f32 heavy_target = f_clamp01((ext - 0.30f) / 0.55f) * 0.48f;
     const f32 roof_target = f_clamp01(roof) * 0.50f;
     be.rain_light_vol = f_approach_exp(be.rain_light_vol, light_target, 2.5f, dt);
     be.rain_heavy_vol = f_approach_exp(be.rain_heavy_vol, heavy_target, 2.5f, dt);
     be.rain_roof_vol = f_approach_exp(be.rain_roof_vol, roof_target, 4.0f, dt);
-    set_loop(be.rain_light, be.rain_light_vol);
-    set_loop(be.rain_heavy, be.rain_heavy_vol);
-    set_loop(be.rain_roof, be.rain_roof_vol);
+    be.push(be.rain_light, be.rain_light_vol);
+    be.push(be.rain_heavy, be.rain_heavy_vol);
+    be.push(be.rain_roof, be.rain_roof_vol);
 }
 
 void Audio::set_horn(bool on, f32 dt)
@@ -715,7 +444,7 @@ void Audio::set_horn(bool on, f32 dt)
     }
     AudioBackend& be = *backend_;
     be.horn_vol = f_approach_exp(be.horn_vol, on ? 0.5f : 0.0f, 40.0f, dt);
-    set_loop(be.horn, be.horn_vol * be.occ);
+    be.push(be.horn, be.horn_vol * be.occ);
 }
 
 void Audio::set_skid(f32 intensity, f32 dt)
@@ -725,8 +454,8 @@ void Audio::set_skid(f32 intensity, f32 dt)
     }
     AudioBackend& be = *backend_;
     be.skid_vol = f_approach_exp(be.skid_vol, f_clamp01(intensity) * 0.55f, 14.0f, dt);
-    set_loop(be.skid, be.skid_vol * be.occ);
-    pitch_loop(be.skid, 0.9f + 0.25f * f_clamp01(intensity));
+    be.skid.pitch = 0.9f + 0.25f * f_clamp01(intensity);
+    be.push(be.skid, be.skid_vol * be.occ);
 }
 
 bool Audio::tape_play(std::string_view path)
@@ -735,33 +464,36 @@ bool Audio::tape_play(std::string_view path)
         return false;
     }
     AudioBackend& be = *backend_;
-    tape_release(be);
-
-    wchar_t wide[640];
-    if (fs::utf8_to_wide(path, wide) == 0
-        || ma_sound_init_from_file_w(&be.engine, wide, MA_SOUND_FLAG_STREAM, nullptr, nullptr,
-                                     &be.tape)
-               != MA_SUCCESS) {
-        log_warn("audio: failed to stream %.*s", static_cast<int>(path.size()), path.data());
+    be.release(be.tape);
+    be.tape_active = false;
+    std::optional<engine::SoundBuffer> buffer = engine::loadSoundFile(std::filesystem::path(std::u8string(path.begin(), path.end())));
+    if (!buffer) {
+        log_warn("audio: failed to load tape %.*s", static_cast<int>(path.size()), path.data());
         return false;
     }
-    ma_sound_set_looping(&be.tape, MA_TRUE);
-    sound_spatial(&be.tape, 1.5f, 40.0f);
-    sound_place(&be.tape, be.dash_pos, be.car_vel);
-    if (be.tape_chain) {
-        ma_node_attach_output_bus(&be.tape, 0, &be.tape_hpf, 0);
-    }
-    ma_sound_set_volume(&be.tape, 0.0f);
-    ma_sound_start(&be.tape);
-    be.tape_active = true;
+    be.tape.sound = std::make_shared<const engine::SoundBuffer>(std::move(*buffer));
+    be.tape.positional = true;
+    be.tape.pos = be.dash_pos;
+    engine::PlayParams params;
+    params.volume = 0.0f;
+    params.loop = true;
+    params.group = kCarGroup;
+    params.position = to_glm(be.dash_pos);
+    params.minDistance = 1.5f;
+    params.maxDistance = 40.0f;
+    params.highpass = kTapeLow;
+    params.lowpass = 4500.0f;
+    be.tape.voice = be.engine->play(be.tape.sound, params);
+    be.tape_active = be.tape.voice != 0;
     be.tape_speed_sm = 0.4f;
-    return true;
+    return be.tape_active;
 }
 
 void Audio::tape_stop()
 {
     if (backend_) {
-        tape_release(*backend_);
+        backend_->release(backend_->tape);
+        backend_->tape_active = false;
     }
 }
 
@@ -780,30 +512,15 @@ void Audio::set_tape(f32 speed, f32 condition, f32 volume, f32 dt)
     if (be.tape_wobble_t > 1000.0f) {
         be.tape_wobble_t -= 1000.0f;
     }
-
     const f32 wear = 1.0f - f_clamp01(condition);
     const f32 wow = std::sin(be.tape_wobble_t * kTau * 0.6f) * (0.003f + 0.032f * wear);
-    const f32 flutter = std::sin(be.tape_wobble_t * kTau * 6.3f
-                                 + std::sin(be.tape_wobble_t * 17.0f))
-                        * 0.007f * wear;
+    const f32 flutter = std::sin(be.tape_wobble_t * kTau * 6.3f + std::sin(be.tape_wobble_t * 17.0f)) * 0.007f * wear;
     be.tape_speed_sm = f_approach_exp(be.tape_speed_sm, f_clamp(speed, 0.0f, 1.2f), 5.0f, dt);
-    ma_sound_set_pitch(&be.tape, f_clamp(be.tape_speed_sm * (1.0f + wow + flutter), 0.05f, 1.6f));
-
+    be.tape.pitch = f_clamp(be.tape_speed_sm * (1.0f + wow + flutter), 0.05f, 1.6f);
     const f32 am = 1.0f - wear * 0.35f * (0.5f + 0.5f * std::sin(be.tape_wobble_t * kTau * 1.4f));
     const f32 drag = 0.30f + 0.70f * f_clamp01((be.tape_speed_sm - 0.30f) / 0.70f);
-    ma_sound_set_volume(&be.tape, f_clamp(volume * am * drag * be.occ, 0.0f, 1.0f));
-
-    if (be.tape_chain) {
-        const f32 cutoff = 1900.0f + 2600.0f * f_clamp01(condition);
-        if (f_abs(cutoff - be.tape_cutoff) > 140.0f) {
-            be.tape_cutoff = cutoff;
-            ma_lpf_node_config lc = ma_lpf_node_config_init(ma_engine_get_channels(&be.engine),
-                                                           ma_engine_get_sample_rate(&be.engine),
-                                                           static_cast<f64>(cutoff),
-                                                           kTapeLpfOrder);
-            ma_lpf_node_reinit(&lc.lpf, &be.tape_lpf);
-        }
-    }
+    be.push(be.tape, f_clamp(volume * am * drag * be.occ, 0.0f, 1.0f));
+    be.engine->filter(be.tape.voice, 1900.0f + 2600.0f * f_clamp01(condition), kTapeLow);
 }
 
-} // namespace anom
+}

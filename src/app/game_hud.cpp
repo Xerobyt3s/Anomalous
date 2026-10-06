@@ -1,0 +1,224 @@
+#include "app/game.h"
+#include "carsys/items.h"
+#include "math/glm_bridge.h"
+#include "render/debug_draw.h"
+
+#include <imgui.h>
+
+#include <cstdio>
+#include <string_view>
+
+namespace anom {
+namespace {
+
+constexpr f32 kSpeedSize = 26.0f;
+constexpr f32 kReadoutSize = 20.0f;
+constexpr f32 kPromptSize = 20.0f;
+constexpr f32 kHoldingSize = 18.0f;
+constexpr f32 kNoteSize = 17.0f;
+constexpr f32 kHoldBarWidth = 160.0f;
+constexpr f32 kCrosshair = 6.0f;
+constexpr f32 kNameLift = 0.25f;
+
+void text_at(ImDrawList* draw, f32 size, ImVec2 at, ImU32 color, const char* text)
+{
+    draw->AddText(ImGui::GetFont(), size, {at.x + 1.0f, at.y + 1.0f}, IM_COL32(0, 0, 0, 160), text);
+    draw->AddText(ImGui::GetFont(), size, at, color, text);
+}
+
+void text_centered(ImDrawList* draw, f32 size, f32 cx, f32 y, ImU32 color, const char* text)
+{
+    const ImVec2 extent = ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
+    text_at(draw, size, {cx - extent.x * 0.5f, y}, color, text);
+}
+
+void plot(const char* label, const Telemetry& t, f32 lo, f32 hi)
+{
+    ImGui::PlotLines(label, t.samples, static_cast<int>(kTelemetrySamples), static_cast<int>(t.head), nullptr, lo, hi,
+                     {0.0f, 48.0f});
+}
+
+}
+
+void Game::draw_play_hud()
+{
+    if (editor_.active() || toggles_.free_cam || terminal_focused()) {
+        return;
+    }
+    ImDrawList* draw = ImGui::GetForegroundDrawList();
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    const f32 cx = size.x * 0.5f;
+    const f32 cy = size.y * 0.5f;
+    char line[160];
+
+    if (play_) {
+        HudFrame hud;
+        hud.viewProj = to_glm(hud_view_proj_);
+        hud.roster = &sim_.roster();
+        hud.rules = &sim_.player_rules();
+        for (const PlayerSlot& slot : sim_.slots()) {
+            if (!slot.active || slot.id == local_ || !bodies_.visible(slot.id)) {
+                continue;
+            }
+            const Player& p = slot.player;
+            const Vec3 up = rotate(p.movement().state().frame, Vec3{0.0f, 1.0f, 0.0f});
+            const Vec3 feet = lerp(p.prev_pos(), p.pos(), alpha_);
+            HudPlayer other;
+            other.id = slot.id;
+            other.name = std::string(slot.name.view());
+            other.color = to_glm(slot.color);
+            other.feet = to_glm(feet);
+            other.head = to_glm(feet + up * (p.movement().state().height + kNameLift));
+            other.shroudFade = p.movement().state().shroud_time > 0.0f ? 1.0f : 0.0f;
+            hud.others.push_back(std::move(other));
+        }
+        if (const PlayerSlot* me = sim_.slot(local_)) {
+            hud.pickupProgress = me->gun.pickupProgress;
+        }
+        for (const PlayerSlot& slot : sim_.slots()) {
+            const ghost::game::RosterEntry* entry = sim_.roster().find(slot.id);
+            if (slot.active && entry && !entry->zombie) {
+                hud.score.push_back({std::string(slot.name.view()) + (slot.id == local_ ? " (you)" : ""), entry->kills,
+                                     slot.id == local_ ? glm::vec3(1.0f) : to_glm(slot.color)});
+            }
+        }
+        play_->drawHud(hud);
+    }
+    if (sim_.roster().downed(local_)) {
+        return;
+    }
+
+    if (!gun_out() && !viewfinder_) {
+        draw->AddLine({cx - kCrosshair, cy}, {cx + kCrosshair, cy}, kDdWhite);
+        draw->AddLine({cx, cy - kCrosshair}, {cx, cy + kCrosshair}, kDdWhite);
+    }
+
+    if (sim_.player(local_).driving()) {
+        const f32 speed = f_abs(sim_.vehicle().forward_speed(sim_.phys())) * 3.6f;
+        const i32 gear = sim_.vehicle().train().gear;
+        std::snprintf(line, sizeof(line), "%3.0f km/h", static_cast<f64>(speed));
+        text_at(draw, kSpeedSize, {24.0f, size.y - 96.0f - kSpeedSize}, kDdWhite, line);
+        std::snprintf(line, sizeof(line), "%4.0f rpm  gear %s%s", static_cast<f64>(drivetrain_rpm(sim_.vehicle().train())),
+                      gear < 0 ? "R" : (gear == 0 ? "N" : "D"), sim_.vehicle().train().manual ? " [M]" : "");
+        text_at(draw, kReadoutSize, {24.0f, size.y - 64.0f - kReadoutSize}, kDdWhite, line);
+    }
+
+    const Interact& interact = sim_.interact(local_);
+    const std::string_view prompt = interact.prompt();
+    if (!prompt.empty() && !(play_ && play_->radialOpen())) {
+        std::snprintf(line, sizeof(line), "%.*s", static_cast<int>(prompt.size()), prompt.data());
+        text_centered(draw, kPromptSize, cx, cy + 60.0f - kPromptSize, kDdWhite, line);
+        if (interact.action_is_hold() && interact.hold_progress() > 0.0f) {
+            const f32 x0 = cx - kHoldBarWidth * 0.5f;
+            draw->AddRect({x0, cy + 74.0f}, {x0 + kHoldBarWidth, cy + 82.0f}, kDdGray);
+            draw->AddRectFilled({x0, cy + 74.0f}, {x0 + kHoldBarWidth * interact.hold_progress(), cy + 82.0f}, kDdYellow);
+        }
+    }
+
+    if (interact.hands().kind != ITEM_NONE) {
+        const std::string_view name = item_name(interact.hands().kind);
+        std::snprintf(line, sizeof(line), "holding %.*s", static_cast<int>(name.size()), name.data());
+        text_at(draw, kHoldingSize, {24.0f, 28.0f - kHoldingSize * 0.5f}, kDdYellow, line);
+        if (throw_charge_ > 0.0f) {
+            std::snprintf(line, sizeof(line), "throw %.0f%%", static_cast<f64>(throw_charge_ / kThrowChargeMax * 100.0f));
+            text_at(draw, 16.0f, {24.0f, 50.0f - 8.0f}, kDdOrange, line);
+        }
+        if (place_active_) {
+            text_centered(draw, kNoteSize, cx, size.y * 0.66f - kNoteSize, place_valid_ ? kDdWhite : kDdGray,
+                          place_valid_ ? "release [F] to place | scroll to rotate" : "no surface to place on");
+        }
+    }
+
+    if (const PlayerSlot* me = sim_.slot(local_); me && me->at_bench) {
+        const bool full = me->gun.speedloaders.loaders[0].count() + me->gun.speedloaders.loaders[1].count()
+                       == ghost::game::kSpeedloaderSlots * ghost::game::kSpeedloadersCarried;
+        text_centered(draw, kPromptSize, cx, cy + 60.0f - kPromptSize, kDdWhite,
+                      full ? "speedloaders full" : (me->bench_time > 0.0f ? "filling speedloaders..." : "hold E  fill speedloaders"));
+    }
+}
+
+void Game::draw_debug_panels()
+{
+    if (toggles_.telemetry) {
+        ImGui::SetNextWindowPos({ImGui::GetIO().DisplaySize.x - 290.0f, 16.0f}, ImGuiCond_FirstUseEver);
+        ImGui::Begin("Telemetry");
+        plot("rpm", telem_rpm_, 0.0f, 7000.0f);
+        plot("km/h", telem_speed_, 0.0f, 180.0f);
+        plot("slip", telem_slip_, -1.0f, 1.0f);
+        plot("load kN", telem_load_, 0.0f, 8.0f);
+        ImGui::End();
+    }
+    if (toggles_.carsys) {
+        ImGui::SetNextWindowPos({16.0f, ImGui::GetIO().DisplaySize.y - 260.0f}, ImGuiCond_FirstUseEver);
+        ImGui::Begin("CarSys");
+        ImGui::Text("engine %s", sim_.carsys().engine_on ? "running" : "off");
+        ImGui::Text("fuel %.1f L", static_cast<f64>(sim_.carsys().fluids.fuel));
+        ImGui::Text("oil %.2f", static_cast<f64>(sim_.carsys().fluids.oil));
+        ImGui::Text("coolant %.0f C", static_cast<f64>(sim_.carsys().fluids.coolant_temp));
+        ImGui::Text("battery %.2f", static_cast<f64>(sim_.carsys().elec.battery_charge));
+        ImGui::Text("weather %s %.2f", weather_mode_name(sim_.weather().mode()), static_cast<f64>(sim_.weather().rain()));
+        ImGui::End();
+    }
+    if (toggles_.tuning) {
+        ImGui::SetNextWindowPos({16.0f, 16.0f}, ImGuiCond_FirstUseEver);
+        ImGui::Begin("Tuning");
+        VehicleConfig& cfg = sim_.vehicle().config();
+        ImGui::SliderFloat("peak mu", &cfg.tire_peak_mu, 0.4f, 2.0f);
+        ImGui::SliderFloat("slide mu", &cfg.tire_slide_mu, 0.2f, 1.6f);
+        ImGui::SliderFloat("diff lock", &cfg.diff_lock, 0.0f, 1.0f);
+        ImGui::SliderFloat("arb front", &cfg.arb_front, 0.0f, 40000.0f);
+        ImGui::SliderFloat("arb rear", &cfg.arb_rear, 0.0f, 40000.0f);
+        ImGui::Text("%.1f fps", static_cast<f64>(ImGui::GetIO().Framerate));
+        ImGui::End();
+    }
+}
+
+void Game::draw_viewfinder()
+{
+    if (terminal_focused()) {
+        return;
+    }
+    ImDrawList* draw = ImGui::GetBackgroundDrawList();
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    if (capture_flash_ > 0.0f) {
+        draw->AddRectFilled({0.0f, 0.0f}, size, dd_rgba(235, 245, 235, static_cast<u8>(capture_flash_ * 210.0f)));
+    }
+    if (viewfinder_) {
+        const f32 frame_h = size.y * 0.80f;
+        const f32 frame_w = frame_h * 1.6f;
+        const f32 x0 = (size.x - frame_w) * 0.5f;
+        const f32 y0 = (size.y - frame_h) * 0.5f;
+        const f32 x1 = x0 + frame_w;
+        const f32 y1 = y0 + frame_h;
+        const u32 shade = dd_rgba(8, 10, 8, 215);
+        draw->AddRectFilled({0.0f, 0.0f}, {size.x, y0}, shade);
+        draw->AddRectFilled({0.0f, y1}, size, shade);
+        draw->AddRectFilled({0.0f, y0}, {x0, y1}, shade);
+        draw->AddRectFilled({x1, y0}, {size.x, y1}, shade);
+        const u32 line = dd_rgba(220, 230, 220, 200);
+        const f32 b = 26.0f;
+        draw->AddRect({x0, y0}, {x1, y1}, dd_rgba(160, 170, 160, 90));
+        draw->AddRectFilled({x0, y0}, {x0 + b, y0 + 3.0f}, line);
+        draw->AddRectFilled({x0, y0}, {x0 + 3.0f, y0 + b}, line);
+        draw->AddRectFilled({x1 - b, y0}, {x1, y0 + 3.0f}, line);
+        draw->AddRectFilled({x1 - 3.0f, y0}, {x1, y0 + b}, line);
+        draw->AddRectFilled({x0, y1 - 3.0f}, {x0 + b, y1}, line);
+        draw->AddRectFilled({x0, y1 - b}, {x0 + 3.0f, y1}, line);
+        draw->AddRectFilled({x1 - b, y1 - 3.0f}, {x1, y1}, line);
+        draw->AddRectFilled({x1 - 3.0f, y1 - b}, {x1, y1}, line);
+        const f32 cx = size.x * 0.5f;
+        const f32 cy = size.y * 0.5f;
+        draw->AddRectFilled({cx - 14.0f, cy - 1.0f}, {cx + 14.0f, cy + 1.0f}, line);
+        draw->AddRectFilled({cx - 1.0f, cy - 14.0f}, {cx + 1.0f, cy + 14.0f}, line);
+        char text[32];
+        std::snprintf(text, sizeof(text), "EXP %02u", sim_.disks().camera_exposures_left(&sim_.terminal().fs()));
+        text_at(draw, kNoteSize, {x0 + 8.0f, y1 - 26.0f}, kDdWhite, text);
+        text_at(draw, kNoteSize, {x1 - 170.0f, y1 - 26.0f}, kDdGray, "LMB SHUTTER");
+    }
+    if (capture_msg_until_ > 0.0f && sim_.player(local_).state() == PlayerState::OnFoot) {
+        text_at(ImGui::GetForegroundDrawList(), 18.0f, {size.x * 0.5f - 80.0f, size.y * 0.80f - 9.0f}, kDdCyan,
+                capture_msg_.c_str());
+    }
+}
+
+}

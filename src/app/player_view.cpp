@@ -133,7 +133,8 @@ void PlayerView::camera(const Player& player, PhysWorld& phys, const Vehicle* ve
     const Vec3 body_pos = lerp(body->prev_pos, body->pos, alpha);
     const Quat body_rot = slerp(body->prev_rot, body->rot, alpha);
     const Quat car_frame = player.car_frame();
-    const Vec3 seat_eye = body_pos + rotate(body_rot, veh->config().seat_eye);
+    const VehicleConfig& cfg = veh->config();
+    const Vec3 seat_eye = body_pos + rotate(body_rot, cfg.seats[player.seat() < cfg.seat_count ? player.seat() : 0].eye);
     f32 car_yaw = 0.0f;
     f32 car_pitch = 0.0f;
     frame_view_angles(car_frame, rotate(body_rot, Vec3{0.0f, 0.0f, -1.0f}), car_yaw, car_pitch);

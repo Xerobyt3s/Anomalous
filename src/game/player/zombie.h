@@ -52,7 +52,7 @@ struct ZombieOrder {
 };
 
 ZombieOrder zombieThink(ZombieMind& mind, const ZombieTuning& tuning, const PlayerState& self, std::span<const ZombieTarget> targets,
-                        int liveRounds, float dt);
+                        int liveRounds, float dt, const glm::vec3& up = glm::vec3(0.0f, 1.0f, 0.0f));
 
 bool zombieRamming(const PlayerState& self, const ZombieTuning& tuning);
 

@@ -1,4 +1,6 @@
 #include "vehicle/vehicle_config.h"
+
+#include <cstdio>
 #include "core/arena.h"
 #include "core/config.h"
 #include "core/log.h"
@@ -126,6 +128,48 @@ bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view pa
     out.steer_rate_deg = cfg.get_f32("steering.rate_deg", 240.0f);
 
     out.seat_eye = cfg.get_vec3("cabin.seat_eye", Vec3{-0.4f, 0.35f, -0.3f});
+    out.seat_hips = cfg.get_vec3("cabin.seat_hips", out.seat_eye - Vec3{0.0f, 0.62f, -0.05f});
+    out.pedals = cfg.get_vec3("cabin.pedals", out.seat_hips + Vec3{0.0f, -0.18f, -0.38f});
+    out.wheel_center = cfg.get_vec3("cabin.wheel_center", out.seat_eye + Vec3{0.0f, -0.27f, -0.23f});
+    out.wheel_normal = normalize(cfg.get_vec3("cabin.wheel_normal", Vec3{0.0f, 0.4f, 0.92f}));
+    out.wheel_radius = cfg.get_f32("cabin.wheel_radius", 0.18f);
+    out.shifter = cfg.get_vec3("cabin.shifter", Vec3{0.0f, 0.1f, 0.11f});
+    out.seat_count = 1;
+    SeatConfig& driver = out.seats[0];
+    driver.eye = out.seat_eye;
+    driver.hips = out.seat_hips;
+    driver.feet = out.pedals;
+    driver.door_side = out.seat_eye.x < 0.0f ? 0 : 1;
+    driver.drives = true;
+    const i32 declared = cfg.get_i32("seats.count", 1);
+    for (u32 i = 1; i < kMaxSeats && static_cast<i32>(i) < declared; i++) {
+        char key[64];
+        SeatConfig& seat = out.seats[i];
+        std::snprintf(key, sizeof(key), "seats.seat%u_eye", i);
+        seat.eye = cfg.get_vec3(key, Vec3{-driver.eye.x, driver.eye.y, driver.eye.z});
+        std::snprintf(key, sizeof(key), "seats.seat%u_hips", i);
+        seat.hips = cfg.get_vec3(key, Vec3{-driver.hips.x, driver.hips.y, driver.hips.z});
+        std::snprintf(key, sizeof(key), "seats.seat%u_feet", i);
+        seat.feet = cfg.get_vec3(key, Vec3{-driver.feet.x, driver.feet.y, driver.feet.z});
+        std::snprintf(key, sizeof(key), "seats.seat%u_window_cos", i);
+        seat.window_cos = cfg.get_f32(key, 0.3f);
+        seat.door_side = seat.eye.x < 0.0f ? 0 : 1;
+        seat.drives = false;
+        std::snprintf(key, sizeof(key), "seats.seat%u_blocked_by", i);
+        const ItemKind blocker = item_from_id(cfg.get_str(key, ""));
+        seat.blocked_by = PART_COUNT;
+        for (u32 k = 0; k < PART_COUNT; k++) {
+            if (blocker != ITEM_NONE && item_for_part(static_cast<PartKind>(k)) == blocker) {
+                seat.blocked_by = static_cast<PartKind>(k);
+            }
+        }
+        out.seat_count = i + 1;
+    }
+    out.synth.print_time = cfg.get_f32("synth.print_time", 3.0f);
+    out.synth.battery_per_round = cfg.get_f32("synth.battery_per_round", 0.01f);
+    out.synth.min_battery = cfg.get_f32("synth.min_battery", 0.15f);
+    out.synth.tray_max = static_cast<u32>(cfg.get_i32("synth.tray_max", 24));
+    out.synth.tank_capacity = static_cast<u32>(cfg.get_i32("synth.tank_capacity", 60));
 
     out.body_mesh.assign(cfg.get_str("render.body_mesh", ""));
     out.wheel_mesh.assign(cfg.get_str("render.wheel_mesh", ""));

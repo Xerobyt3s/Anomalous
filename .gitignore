@@ -22,3 +22,6 @@ README.md
 
 __pycache__/
 *.pyc
+
+dist/
+third_party/

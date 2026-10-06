@@ -73,6 +73,21 @@ struct PlayerCommand {
 
     bool dummy_cycle = false;
     i32 dummy_script = -1;
+    i32 spawn_ghost = -1;
+    i32 scene = -1;
+
+    bool trigger = false;
+    bool cock = false;
+    bool cylinder = false;
+    bool close_cylinder = false;
+    bool eject = false;
+    bool speedload = false;
+    i32 turn = 0;
+    i32 load_element = -1;
+    i32 quick_fill_element = -1;
+    Vec3 muzzle{};
+    Vec3 barrel_dir{0.0f, 0.0f, -1.0f};
+    Vec3 wind{};
 };
 
 class Player {
@@ -83,7 +98,9 @@ public:
     void look(f32 dx, f32 dy);
 
     bool driving() const { return state_ == PlayerState::Driving; }
-    bool can_enter(PhysWorld& phys, const Vehicle* veh) const;
+    bool can_enter(PhysWorld& phys, const Vehicle* veh, u32 seat = 0) const;
+    u32 seat() const { return seat_; }
+    void set_seat(u32 seat) { seat_ = seat; }
     bool can_exit(PhysWorld& phys, const Vehicle* veh) const;
 
     PlayerState state() const { return state_; }
@@ -138,6 +155,7 @@ private:
     f32 car_turn_rate_ = 0.0f;
     f32 car_presence_ = 0.0f;
     i32 exit_pref_ = 0;
+    u32 seat_ = 0;
 };
 
 }

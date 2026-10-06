@@ -1,6 +1,14 @@
 {
   "_comment": "Ghost types. drops: a killed ghost leaves ONE of the listed entries, chosen at random with equal chance. damage: multiplier per damage kind (plain, fire, wind, lightning) applied to roundDamage. Rounds whose effect does no damage of its own (haze, fog, the voodoo rounds) count as plain; see 'damage' on each element in elements.json. Health is in the same units as roundDamage. hitstop: seconds a hit holds the ghost (and what hit it) still, from min for a graze to max for a kill; things that hit continuously (fire, breath) only do it on first contact.",
   "roundDamage": 25.0,
+  "caught": {
+    "_comment": "A tornado catches a ghost when the air speed where it is passes catchSpeed. While caught the ghost's own behaviour stops: its velocity is pulled toward the air at grip per second (scaled by 1 - weight), it falls at fallShare of gravity (a mimic falls at full gravity and tumbles at up to tumbleSpin rad/s), and it is let go after releaseTime seconds of calm. Ghosts with windImmune are never caught.",
+    "catchSpeed": 2.5,
+    "releaseTime": 0.4,
+    "grip": 5.0,
+    "tumbleSpin": 6.0,
+    "fallShare": 0.25
+  },
   "ghosts": [
     {
       "name": "wisp",
@@ -70,6 +78,7 @@
       "health": 50.0,
       "radius": 0.28,
       "weight": 0.8,
+      "windImmune": true,
       "sightRange": 22.0,
       "hearingRange": 40.0,
       "memory": 5.0,
@@ -213,6 +222,7 @@
       "health": 1.0,
       "radius": 0.2,
       "weight": 1.0,
+      "windImmune": true,
       "sightRange": 0.0,
       "hearingRange": 0.0,
       "memory": 0.0,

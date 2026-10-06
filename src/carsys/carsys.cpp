@@ -239,12 +239,39 @@ void CarSys::detect_impacts(Vehicle& veh, const RigidBody& body, Vec3 dv, f32 dt
     parts_apply_impact(parts, point + veh.config().com_offset, severity);
 }
 
+void CarSys::synth_tick(const SynthTuning& tuning, f32 dt)
+{
+    SynthBay& s = synth;
+    s.stalled = false;
+    if (s.job_left == 0 || s.job_element < 0) {
+        s.progress = 0.0f;
+        return;
+    }
+    if (!parts[PART_PRINTER].installed || s.tray_total() >= tuning.tray_max || elec.battery_charge < tuning.min_battery) {
+        s.stalled = true;
+        return;
+    }
+    s.progress += dt / f_max(tuning.print_time, 0.05f);
+    elec.battery_charge = f_max(elec.battery_charge - tuning.battery_per_round * dt / f_max(tuning.print_time, 0.05f), 0.0f);
+    if (s.progress < 1.0f) {
+        return;
+    }
+    s.progress = 0.0f;
+    s.tray[static_cast<u32>(s.job_element) % kSynthElements]++;
+    s.job_left--;
+    s.serial++;
+    if (s.job_left == 0) {
+        s.job_element = -1;
+    }
+}
+
 void CarSys::tick(Vehicle& veh, PhysWorld& world, f32 dt)
 {
     RigidBody* body = world.body(veh.body());
     if (!body) {
         return;
     }
+    synth_tick(veh.config().synth, dt);
 
     const Vec3 dv = body->vel - prev_vel;
     prev_vel = body->vel;

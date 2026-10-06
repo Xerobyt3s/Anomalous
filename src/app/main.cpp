@@ -6,6 +6,8 @@
 #include "engine/debug/imgui_layer.h"
 #include "engine/debug/log.h"
 #include "app/game.h"
+#include "engine/net/steam.h"
+#include "world/scenes.h"
 #include "math/vmath.h"
 #include "platform/clock.h"
 #include "platform/gl_loader.h"
@@ -33,7 +35,7 @@ struct Options {
     i32 height = 900;
     i64 max_frames = -1;
     const char* screenshot = nullptr;
-    f32 exposure = 1.40f;
+    f32 exposure = 1.10f;
     f32 time_of_day = 0.32f;
     bool retro = true;
     bool free_cam = false;
@@ -50,10 +52,21 @@ struct Options {
     bool have_carat = false;
     anom::Vec3 carat{};
     bool have_playerat = false;
+    f32 pitch_deg = 0.0f;
     const char* hold = nullptr;
     i32 dummy = -1;
     bool host = false;
     bool novsync = false;
+    bool gun = false;
+    bool shoot = false;
+    bool aim = false;
+    const char* ghost = nullptr;
+    const char* rounds = nullptr;
+    const char* scene = nullptr;
+    const char* install = nullptr;
+    bool ride = false;
+    bool host_steam = false;
+    i32 materials = 0;
     const char* join = nullptr;
     const char* name = nullptr;
     anom::Vec3 playerat{};
@@ -95,8 +108,28 @@ Options parse_options(int argc, char** argv)
             options.dummy = std::atoi(argv[i] + 8);
         } else if (std::strcmp(argv[i], "--novsync") == 0) {
             options.novsync = true;
+        } else if (std::strcmp(argv[i], "--gun") == 0) {
+            options.gun = true;
+        } else if (std::strcmp(argv[i], "--shoot") == 0) {
+            options.gun = true;
+            options.shoot = true;
+        } else if (std::strcmp(argv[i], "--aim") == 0) {
+            options.gun = true;
+            options.aim = true;
+        } else if (std::strncmp(argv[i], "--ghost=", 8) == 0) {
+            options.ghost = argv[i] + 8;
+        } else if (std::strncmp(argv[i], "--materials=", 12) == 0) {
+            options.materials = std::atoi(argv[i] + 12);
+        } else if (std::strncmp(argv[i], "--install=", 10) == 0) {
+            options.install = argv[i] + 10;
+        } else if (std::strncmp(argv[i], "--scene=", 8) == 0) {
+            options.scene = argv[i] + 8;
+        } else if (std::strncmp(argv[i], "--rounds=", 9) == 0) {
+            options.rounds = argv[i] + 9;
         } else if (std::strcmp(argv[i], "--host") == 0) {
             options.host = true;
+        } else if (std::strcmp(argv[i], "--host-steam") == 0) {
+            options.host_steam = true;
         } else if (std::strncmp(argv[i], "--join=", 7) == 0) {
             options.join = argv[i] + 7;
         } else if (std::strcmp(argv[i], "--join") == 0 && i + 1 < argc) {
@@ -125,6 +158,8 @@ Options parse_options(int argc, char** argv)
             options.steer_frame = std::atoll(argv[i] + 8);
         } else if (std::strcmp(argv[i], "--drive") == 0) {
             options.drive = true;
+        } else if (std::strcmp(argv[i], "--ride") == 0) {
+            options.ride = true;
         } else if (std::strcmp(argv[i], "--walk") == 0) {
             options.walk = true;
         } else if (std::strcmp(argv[i], "--carat") == 0 && i + 3 < argc) {
@@ -140,6 +175,8 @@ Options parse_options(int argc, char** argv)
             options.playerat_yaw = static_cast<f32>(std::atof(argv[i + 4])) * anom::kDegToRad;
             options.have_playerat = true;
             i += 4;
+        } else if (std::strncmp(argv[i], "--pitch=", 8) == 0) {
+            options.pitch_deg = static_cast<f32>(std::atof(argv[i] + 8));
         } else if (std::strncmp(argv[i], "--jump=", 7) == 0) {
             options.jump_frame = std::atoll(argv[i] + 7);
         } else if (std::strncmp(argv[i], "--zone=", 7) == 0) {
@@ -241,6 +278,25 @@ int main(int argc, char** argv)
         device.shaders().program(name);
     }
 
+    if (options.install) {
+        std::string_view list = options.install;
+        while (!list.empty()) {
+            const size_t comma = list.find(',');
+            const std::string_view name = list.substr(0, comma);
+            for (u32 k = 0; k < anom::PART_COUNT; k++) {
+                const anom::PartKind kind = static_cast<anom::PartKind>(k);
+                if (anom::item_id(anom::item_for_part(kind)) == name) {
+                    game.carsys().parts[k].installed = true;
+                }
+            }
+            list = comma == std::string_view::npos ? std::string_view{} : list.substr(comma + 1);
+        }
+    }
+    for (u32 k = 0; k < anom::kSynthMaterials && options.materials > 0; k++) {
+        if (k < game.sim().gameplay().ammo().materials.size()) {
+            game.carsys().synth.tank[k] = static_cast<u16>(options.materials);
+        }
+    }
     if (options.coil) {
         game.carsys().parts[PART_COIL].installed = true;
         game.set_travel_charge(options.charge);
@@ -265,6 +321,9 @@ int main(int argc, char** argv)
     if (options.have_playerat) {
         game.player().init(options.playerat, options.playerat_yaw);
     }
+    if (options.pitch_deg != 0.0f) {
+        game.player().look(0.0f, -options.pitch_deg * anom::kDegToRad / anom::kLookSensitivity);
+    }
     game.toggles().free_cam = options.free_cam;
     if (options.dummy >= 0) {
         game.pending().dummy_script = options.dummy;
@@ -272,10 +331,18 @@ int main(int argc, char** argv)
     if (options.novsync) {
         window.set_vsync(false);
     }
+    ghost::engine::steam::init();
     if (options.name) {
         game.net().setName(options.name);
+    } else if (ghost::engine::steam::available()) {
+        game.net().setName(ghost::engine::steam::personaName());
     }
-    if (options.host) {
+    if (anom::PlayerSlot* mine = game.sim().slot(game.local_id())) {
+        mine->name.assign(game.net().name());
+    }
+    if (options.host_steam) {
+        game.net().hostSteam(game.sim());
+    } else if (options.host) {
         game.net().host(game.sim(), ghost::game::net::kDefaultPort);
     } else if (options.join) {
         game.net().join(game.sim(), options.join, ghost::game::net::kDefaultPort, game.net().name());
@@ -289,6 +356,16 @@ int main(int argc, char** argv)
             const anom::Vec3 door = car->pos + out;
             game.player().init(anom::Vec3{door.x, car->pos.y - car->half_extents.y, door.z},
                                std::atan2(-out.x, out.z));
+            game.player().look(0.0f, 265.0f);
+        }
+    }
+    if (options.ride) {
+        const anom::RigidBody* car = game.phys().body(game.vehicle().body());
+        game.carsys().parts[PART_COMPUTER].installed = false;
+        if (car) {
+            const anom::Vec3 out = rotate(car->rot, anom::Vec3{car->half_extents.x + 0.8f, 0.0f, 0.0f});
+            const anom::Vec3 door = car->pos + out;
+            game.player().init(anom::Vec3{door.x, car->pos.y - car->half_extents.y, door.z}, std::atan2(-out.x, out.z));
             game.player().look(0.0f, 265.0f);
         }
     }
@@ -337,6 +414,8 @@ int main(int argc, char** argv)
     u32 fps_frames = 0;
     i64 frame_index = 0;
 
+    anom::PlayerId gun_owner = 0;
+    bool gun_seated = false;
     while (!window.should_close()) {
         scratch.reset();
 
@@ -348,6 +427,7 @@ int main(int argc, char** argv)
         }
 
         window.poll();
+        ghost::engine::steam::runCallbacks();
         if (options.place) {
             window.input().set_key(static_cast<int>(anom::Key::F), true);
         }
@@ -366,6 +446,12 @@ int main(int argc, char** argv)
             if (options.steer_frame && frame_index >= options.steer_frame
                 && game.player().driving()) {
                 window.input().set_key(static_cast<int>(anom::Key::D), true);
+            }
+        }
+        if (options.ride && !game.player().driving()) {
+            const anom::InteractAction act = game.interact().action();
+            if (frame_index % 3 == 0 && (act == anom::InteractAction::OpenDoor || act == anom::InteractAction::EnterCar)) {
+                window.input().set_key(static_cast<int>(anom::Key::E), true);
             }
         }
         if (options.walk && !game.player().driving()) {
@@ -405,6 +491,39 @@ int main(int argc, char** argv)
             }
         }
         game.handle_input(window, input, static_cast<f32>(frame_dt));
+        if (options.gun && options.ride && game.player().driving() && !gun_seated) {
+            game.pending().holster = true;
+            gun_seated = true;
+        }
+        if (options.gun && !options.ride && (frame_index == 2 || game.local_id() != gun_owner)) {
+            game.pending().holster = frame_index >= 2;
+            gun_owner = frame_index >= 2 ? game.local_id() : gun_owner;
+        }
+        if (options.aim && frame_index > 2) {
+            game.pending().aim = true;
+        }
+        if (options.shoot && frame_index > 60) {
+            game.pending().trigger = (frame_index % 50) < 25;
+        }
+        if (options.scene && frame_index == 1) {
+            game.pending().scene = anom::scene_index(options.scene);
+        }
+        if (options.rounds && frame_index == 1) {
+            if (anom::PlayerSlot* me = game.sim().slot(game.local_id())) {
+                const ghost::game::ElementId element = game.sim().gameplay().ammo().element(options.rounds);
+                for (int k = 0; k < ghost::game::kChamberCount; k++) {
+                    me->gun.mechanism.setChamber(k, {ghost::game::ChamberState::Live, ghost::game::Round{element}});
+                }
+            }
+        }
+        if (options.ghost && frame_index == 1) {
+            const auto& types = game.sim().gameplay().ghostData().types;
+            for (size_t t = 0; t < types.size(); t++) {
+                if (types[t].name == options.ghost) {
+                    game.pending().spawn_ghost = static_cast<i32>(t);
+                }
+            }
+        }
         if (options.drive && game.player().driving() && !game.carsys().engine_on) {
             game.pending().crank = true;
         }
@@ -466,6 +585,7 @@ int main(int argc, char** argv)
     }
 
     game.audio().shutdown();
+    ghost::engine::steam::shutdown();
     terrain_renderer.shutdown();
     device.shutdown();
 

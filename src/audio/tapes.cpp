@@ -74,8 +74,7 @@ void TapeLibrary::scan_dir(std::string_view dir, bool relay)
             continue;
         }
         Track& t = tracks_[count_];
-        t.path.format("%.*s/%s", static_cast<int>(dir.size()), dir.data(),
-                      entries[i].name.c_str());
+        t.path.format("%s/%s", fs::resolve(dir).c_str(), entries[i].name.c_str());
         display_name(entries[i].name.view(), t.name);
         t.on_relay = relay;
 

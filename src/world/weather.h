@@ -2,6 +2,7 @@
 
 #include "core/rng.h"
 #include "core/types.h"
+#include "math/vmath.h"
 
 namespace anom {
 
@@ -13,6 +14,9 @@ enum class WeatherMode : u32 {
     Snow,
     Count,
 };
+
+inline constexpr f32 kWindSpeed = 7.0f;
+inline constexpr Vec3 kWindDir{0.86f, 0.0f, 0.51f};
 
 const char* weather_mode_name(WeatherMode mode);
 
@@ -28,6 +32,7 @@ public:
     f32 overcast() const { return overcast_; }
     f32 wetness() const { return wetness_; }
     f32 wind() const { return wind_; }
+    Vec3 wind_velocity() const;
     f32 snow() const { return snow_; }
     f32 snow_cover() const { return snow_cover_; }
 

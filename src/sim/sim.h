@@ -26,14 +26,19 @@
 #include "world/zone.h"
 
 #include <array>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
 
 namespace anom {
 inline constexpr f32 kFixedDt = 1.0f / 120.0f;
+inline constexpr u32 kStaleSnapshotTicks = 1200;
 
 struct CarSnapshot;
+
+bool own_event(const ghost::game::GameEvent& e, PlayerId local);
+bool echo_of_mine(const ghost::game::GameEvent& e, PlayerId local);
 
 class Sim {
 public:
@@ -48,10 +53,18 @@ public:
     void client_reset(PlayerId local, Vec3 feet, f32 yaw, std::string_view name);
     PlayerId become_solo(PlayerId local);
     void make_snapshot(WorldSnapshot& out) const;
-    void queue_snapshot(WorldSnapshot&& snapshot);
+    bool queue_snapshot(WorldSnapshot&& snapshot);
     void queue_host_event(const ghost::game::GameEvent& event) { host_events_.push_back(event); }
     void queue_term_mirror(const TermMirror& mirror);
     bool switch_zone(std::string_view dir) { return load_zone(dir); }
+    bool switch_scene(i32 index);
+    const ZoneScene& scene() const;
+    bool has_car() const;
+    bool owns(const PlayerSlot& s) const;
+    std::vector<const Entity*> scene_entities(EntityKind kind) const;
+    const Entity* spawn_entity_for(PlayerId id) const;
+    const Entity* bench_for(PlayerId id) const;
+    f32 spawn_yaw(PlayerId id) const;
     u32 zone_serial() const { return zone_serial_; }
     PlayerId local_id() const { return local_; }
     void set_local_id(PlayerId id) { local_ = id; }
@@ -60,6 +73,15 @@ public:
     void guard_against_falling();
     void watch_islands(f32 dt);
     void rebuild_islands();
+    void spawn_zone_ghosts();
+    void apply_scene();
+    void park_car();
+    void respawn_owned(PlayerId id);
+    void tick_bench(PlayerSlot& s, f32 dt);
+    void queue_print(const u8* doses, u32 dose_count, u32 count);
+    void fill_tank();
+    void take_tray(PlayerSlot& s);
+    void update_hands_and_gun(PlayerSlot& s, const PlayerCommand& cmd, PlayerCommand& player_cmd, bool took, f32 dt);
     void poll_hot_reload(Arena& scratch, f64 now);
     void queue_photo(const u8* rgb, PlayerId by = 0);
     void arm_travel(i32 destination);
@@ -82,11 +104,30 @@ public:
     const PlayerSlot* slot(PlayerId id) const;
     std::span<PlayerSlot> slots() { return slots_; }
     std::span<const PlayerSlot> slots() const { return slots_; }
-    Player& player(PlayerId id) { return slots_[id].player; }
-    const Player& player(PlayerId id) const { return slots_[id].player; }
-    Interact& interact(PlayerId id) { return slots_[id].interact; }
-    const Interact& interact(PlayerId id) const { return slots_[id].interact; }
+    Player& player(PlayerId id) { return slots_[slot_index(id)].player; }
+    const Player& player(PlayerId id) const { return slots_[slot_index(id)].player; }
+    Interact& interact(PlayerId id) { return slots_[slot_index(id)].interact; }
+    const Interact& interact(PlayerId id) const { return slots_[slot_index(id)].interact; }
     PlayerId driver() const;
+    PlayerId seat_owner(u32 seat) const { return seat < kMaxSeats ? seat_owners_[seat] : kNoPlayer; }
+    u32 seats_taken_for(PlayerId id) const;
+    bool seat_blocked(u32 seat) const;
+    bool seated_armed(const PlayerSlot& s) const;
+    bool aims_out_window(const PlayerSlot& s, Vec3 dir) const;
+    Vec3 window_origin(const PlayerSlot& s, Vec3 origin, Vec3 dir) const;
+    Vec3 shooter_velocity(const PlayerSlot& s) const;
+    ghost::game::Gameplay& gameplay() { return gameplay_; }
+    const ghost::game::Gameplay& gameplay() const { return gameplay_; }
+    ghost::game::MechanismView gun_view(PlayerId id, f32 alpha) const;
+    void queue_remote_shot(PlayerId id, const ghost::game::net::ShotMsg& shot) { remote_shots_.push_back({id, shot}); }
+    void queue_remote_rounds(std::vector<ghost::game::net::RoundWire> rounds);
+    void queue_impulse(const glm::vec3& delta_v) { impulses_in_.push_back(delta_v); }
+    void queue_give(const ghost::game::Round& round) { gives_in_.push_back(round); }
+    void queue_projectile(const ghost::game::Projectile& projectile) { projectiles_in_.push_back(projectile); }
+    std::vector<ghost::game::net::ShotMsg> take_outgoing_shots() { return std::move(shots_out_); }
+    std::vector<ghost::game::net::RoundWire> take_outgoing_rounds() { return std::move(rounds_out_); }
+    std::vector<std::pair<PlayerId, glm::vec3>> take_impulses() { return std::move(impulses_out_); }
+    std::vector<std::pair<PlayerId, ghost::game::Round>> take_gives() { return std::move(gives_out_); }
     ghost::game::Roster& roster() { return roster_; }
     const ghost::game::Roster& roster() const { return roster_; }
     const ghost::game::PlayerRules& player_rules() const { return rules_; }
@@ -126,6 +167,19 @@ public:
 
 private:
     void gather_commands(std::span<const SlotCommand> commands, f32 dt);
+    void gather_world_for_gameplay();
+    void spawn_debug_ghost(PlayerId id, const PlayerCommand& cmd);
+    void tick_guns(f32 dt);
+    void spawn_shot(PlayerSlot& slot, const ghost::game::ShotFired& shot);
+    void drop_ejected(PlayerSlot& slot, const ghost::game::ChambersEjected& ejected);
+    void apply_inbound();
+    void push_player(PlayerId id, const glm::vec3& delta_v);
+    glm::vec3 self_cast(PlayerId id, const ghost::game::ElementDef& def, const glm::vec3& direction);
+    PlayerId raise_zombie(PlayerId player);
+    void fell_zombie(PlayerId zombie);
+    PlayerCommand zombie_command(PlayerSlot& slot, f32 dt);
+    void fell_new_zombies(size_t first_event);
+    Vec3 eye_of(const PlayerSlot& slot) const;
     void adopt_remote_bodies(std::span<const SlotCommand> commands);
     void sync_remote_character(PlayerSlot& slot);
     void arbitrate_seat();
@@ -139,7 +193,7 @@ private:
     void apply_terminal_input(const PlayerCommand& cmd);
     void interact_slot(PlayerSlot& slot, const PlayerCommand& cmd, PlayerCommand& player_cmd, f32 dt);
     void tick_roster(f32 dt);
-    PlayerCommand dummy_command(PlayerSlot& slot, f32 dt) const;
+    PlayerCommand dummy_command(PlayerSlot& slot, f32 dt);
     const PlayerSlot* nearest_human(Vec3 from) const;
     Vec3 spawn_point(PlayerId id) const;
     PlayerId spawn_dummy();
@@ -167,10 +221,13 @@ private:
     GravityField gravity_;
     PhysWorld phys_;
     Vehicle vehicle_;
-    std::array<PlayerSlot, kMaxPlayers> slots_{};
-    std::array<PlayerCommand, kMaxPlayers> commands_{};
+    std::array<PlayerSlot, kMaxSlots> slots_{};
+    std::array<PlayerCommand, kMaxSlots> commands_{};
     ghost::game::PlayerRules rules_;
+    ghost::game::PlayerRules base_rules_;
+    bool car_parked_ = false;
     ghost::game::Roster roster_{rules_};
+    ghost::game::Gameplay gameplay_{roster_, rules_, jolt_};
     CarSys carsys_;
     InteractBoxes boxes_;
     Weather weather_;
@@ -192,7 +249,22 @@ private:
 
     ghost::game::EventList events_;
     ghost::game::EventList host_events_;
+    struct RemoteShot {
+        PlayerId id = kNoPlayer;
+        ghost::game::net::ShotMsg shot;
+    };
+    std::vector<RemoteShot> remote_shots_;
+    std::vector<ghost::game::net::RoundWire> remote_rounds_;
+    std::vector<glm::vec3> impulses_in_;
+    std::vector<ghost::game::Round> gives_in_;
+    std::vector<ghost::game::Projectile> projectiles_in_;
+    std::vector<ghost::game::net::ShotMsg> shots_out_;
+    std::vector<ghost::game::net::RoundWire> rounds_out_;
+    std::vector<std::pair<PlayerId, glm::vec3>> impulses_out_;
+    std::vector<std::pair<PlayerId, ghost::game::Round>> gives_out_;
     std::vector<WorldSnapshot> snapshots_;
+    std::optional<u32> snapshot_tick_;
+    u32 snapshot_zone_ = 0;
     std::vector<TermMirror> term_mirrors_;
     struct Mirrored {
         u32 idx = 0;
@@ -202,7 +274,7 @@ private:
     std::vector<Mirrored> mirrored_;
     SimRole role_ = SimRole::Solo;
     PlayerId local_ = 0;
-    PlayerId seat_owner_ = kNoPlayer;
+    PlayerId seat_owners_[kMaxSeats] = {kNoPlayer, kNoPlayer};
     PlayerId mirror_driver_ = kNoPlayer;
     u32 host_zone_serial_ = 0;
     u32 zone_serial_ = 0;

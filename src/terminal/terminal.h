@@ -9,6 +9,7 @@
 #include "terminal/programs/link.h"
 #include "terminal/programs/map.h"
 #include "terminal/programs/status.h"
+#include "terminal/programs/synth.h"
 #include "terminal/programs/tapes.h"
 #include "terminal/programs/travel.h"
 #include "terminal/shell.h"
@@ -32,6 +33,7 @@ enum class TermMode : u32 {
     Tapes,
     Dev,
     Travel,
+    Synth,
 };
 
 struct TermMirror {
@@ -108,6 +110,7 @@ private:
     TapesProgram tapes_;
     DevProgram dev_;
     TravelProgram travel_;
+    SynthProgram synth_;
 
     TermScene scene_;
     TermRequest request_;

@@ -7,7 +7,6 @@
 
 namespace ghost::game {
 namespace {
-constexpr glm::vec3 kUp{0.0f, 1.0f, 0.0f};
 constexpr int kMost = 440;
 constexpr float kChangeTime = 0.6f;
 constexpr float kChangeSpread = 0.3f;
@@ -45,8 +44,8 @@ ShardFlock::Slot ShardFlock::slot(int index, int count, Form form, const Input& 
     const float h3 = hash(fi * 5.3f + in.seed + 11.0f);
     switch (form) {
     case Form::Cluster: {
-        const glm::vec3 n = normalizeOr(in.normal, kUp);
-        const glm::vec3 a = normalizeOr(glm::cross(n, std::abs(n.y) < 0.9f ? kUp : glm::vec3(1.0f, 0.0f, 0.0f)), glm::vec3(1.0f, 0.0f, 0.0f));
+        const glm::vec3 n = normalizeOr(in.normal, m_up);
+        const glm::vec3 a = normalizeOr(glm::cross(n, std::abs(glm::dot(n, m_up)) < 0.9f ? m_up : glm::vec3(1.0f, 0.0f, 0.0f)), glm::vec3(1.0f, 0.0f, 0.0f));
         const glm::vec3 b = glm::cross(n, a);
         const float angle = h1 * glm::two_pi<float>();
         const float splay = std::sqrt(h2) * 1.1f;
@@ -60,7 +59,7 @@ ShardFlock::Slot ShardFlock::slot(int index, int count, Form form, const Input& 
         return {in.center + out * ((0.2f + 0.12f * h1) * scale), out, 1.0f};
     }
     case Form::Cloud: {
-        const glm::vec3 axis = normalizeOr(glm::vec3(h1 - 0.5f, 0.6f + h2, h3 - 0.5f), kUp);
+        const glm::vec3 axis = normalizeOr(glm::quat(glm::vec3(0.0f, 1.0f, 0.0f), m_up) * glm::vec3(h1 - 0.5f, 0.6f + h2, h3 - 0.5f), m_up);
         const glm::vec3 a = normalizeOr(glm::cross(axis, glm::vec3(0.3f, 0.1f, 1.0f)), glm::vec3(1.0f, 0.0f, 0.0f));
         const glm::vec3 b = glm::cross(axis, a);
         const float angle = m_time * (2.2f + 2.8f * h2) * (index % 2 == 0 ? 1.0f : -0.7f) + h3 * glm::two_pi<float>();
@@ -74,7 +73,7 @@ ShardFlock::Slot ShardFlock::slot(int index, int count, Form form, const Input& 
         const bool stoop = form == Form::Stoop;
 
         const float flare = stoop ? 0.0f : m_flare;
-        const glm::vec3 level = normalizeOr(glm::cross(m_forward, kUp), glm::vec3(1.0f, 0.0f, 0.0f));
+        const glm::vec3 level = normalizeOr(glm::cross(m_forward, m_up), glm::vec3(1.0f, 0.0f, 0.0f));
         const glm::vec3 over = glm::cross(level, m_forward);
         const glm::vec3 f = glm::normalize(m_forward * std::cos(flare * 0.7f) + over * std::sin(flare * 0.7f));
         const glm::vec3 above = glm::cross(level, f);
@@ -129,6 +128,7 @@ ShardFlock::Slot ShardFlock::slot(int index, int count, Form form, const Input& 
 void ShardFlock::update(float dtIn, const Input& in) {
     const float dt = std::min(dtIn, 1.0f / 30.0f);
     m_time += dt;
+    m_up = glm::length(in.up) > 1e-3f ? glm::normalize(in.up) : glm::vec3(0.0f, 1.0f, 0.0f);
     if (!m_started) {
         m_lastCenter = in.center;
         m_from = m_to = in.form;
@@ -212,7 +212,7 @@ void ShardFlock::update(float dtIn, const Input& in) {
         shard.width = shard.base * shard.slim * glm::mix(1.0f, shard.length / std::max(shard.base, 1e-4f), 0.4f);
         if (m_flung > 0.0f) {
             shard.velocity *= std::exp(-2.5f * dt);
-            shard.velocity.y -= 4.0f * dt;
+            shard.velocity -= m_up * (4.0f * dt);
             shard.position += shard.velocity * dt;
             shard.axis = normalizeOr(glm::mix(shard.axis, normalizeOr(shard.velocity, shard.axis), std::min(1.0f, dt * 12.0f)), shard.axis);
             continue;
@@ -264,7 +264,7 @@ void ShardFlock::update(float dtIn, const Input& in) {
 
 void ShardFlock::fall(float dt) {
     for (Shard& piece : m_debris) {
-        piece.velocity.y -= 9.81f * dt;
+        piece.velocity -= m_up * (9.81f * dt);
         piece.position += piece.velocity * dt;
         piece.roll += dt * 9.0f;
         piece.fade -= dt / 1.4f;
@@ -287,8 +287,8 @@ ShardFlock ShardFlock::divide() {
 void ShardFlock::burst(const glm::vec3& from) {
     for (std::size_t i = 0; i < m_shards.size(); ++i) {
         Shard& shard = m_shards[i];
-        const glm::vec3 out = normalizeOr(shard.position - from + onSphere(static_cast<int>(i), static_cast<int>(m_shards.size())) * 0.3f, kUp);
-        shard.velocity = out * (7.0f + 6.0f * hash(static_cast<float>(i) * 1.3f)) + kUp * 1.5f;
+        const glm::vec3 out = normalizeOr(shard.position - from + onSphere(static_cast<int>(i), static_cast<int>(m_shards.size())) * 0.3f, m_up);
+        shard.velocity = out * (7.0f + 6.0f * hash(static_cast<float>(i) * 1.3f)) + m_up * 1.5f;
     }
     m_flung = 0.3f;
 }

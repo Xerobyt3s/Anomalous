@@ -419,3 +419,52 @@ TEST(zone_save, islands_and_links_round_trip_with_their_graph)
     CHECK(islands == 2);
     CHECK(links == 2);
 }
+
+TEST(zone_save, a_ghost_spawn_round_trips)
+{
+    const FixedString<256> dir = temp_zone("save_ghost");
+    CHECK(write_text(cfg_path(dir).view(), "[entities]\n"));
+
+    Bench bench;
+    const EntityHandle h = bench.world.spawn(EntityKind::GhostSpawn, Vec3{12.0f, 1.5f, -4.0f}, quat_identity(), 1.0f, "", 0);
+    Entity* e = bench.world.entity(h);
+    CHECK(e != nullptr);
+    e->mesh_name.assign("ball_lightning");
+    e->aux_kind = 3;
+    const std::string_view text = bench.save_and_read(dir);
+    CHECK(contains(text, "ghost = ball_lightning 12.000 1.500 -4.000 3"));
+
+    World reloaded;
+    reloaded.init(bench.arena);
+    CHECK(zone_reload(dir.view(), bench.arena, bench.arena, reloaded, bench.phys, bench.terrain, nullptr));
+    u32 found = 0;
+    for (u32 idx : reloaded.entities().live_indices()) {
+        const Entity* r = reloaded.entities().at(idx);
+        if (r && r->kind == EntityKind::GhostSpawn) {
+            found++;
+            CHECK(r->mesh_name.view() == "ball_lightning");
+            CHECK(r->aux_kind == 3u);
+            CHECK_NEAR(r->pos.x, 12.0f, 1e-3);
+            CHECK_NEAR(r->pos.z, -4.0f, 1e-3);
+        }
+    }
+    CHECK(found == 1u);
+}
+
+TEST(zone_save, saving_twice_writes_every_entity_line_once)
+{
+    const FixedString<256> dir = temp_zone("save_twice");
+    CHECK(write_text(cfg_path(dir).view(), "[entities]\n"));
+
+    Bench bench;
+    const EntityHandle g = bench.world.spawn(EntityKind::Gravity, Vec3{1.0f, 2.0f, 3.0f}, quat_identity(), 2.0f, "", 0);
+    bench.world.entity(g)->mesh_name.assign("well");
+    bench.world.entity(g)->half = Vec3{2.0f, 2.0f, 2.0f};
+    const EntityHandle s = bench.world.spawn(EntityKind::GhostSpawn, Vec3{5.0f, 0.0f, 5.0f}, quat_identity(), 1.0f, "", 0);
+    bench.world.entity(s)->mesh_name.assign("wisp");
+    bench.world.entity(s)->aux_kind = 1;
+    CHECK(!bench.save_and_read(dir).empty());
+    const std::string_view text = bench.save_and_read(dir);
+    CHECK(count_of(text, "gravity = well") == 1u);
+    CHECK(count_of(text, "ghost = wisp") == 1u);
+}

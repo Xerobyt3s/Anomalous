@@ -1,4 +1,5 @@
 #include "sim/sim.h"
+#include "math/glm_bridge.h"
 
 #include <cmath>
 
@@ -6,6 +7,9 @@ namespace anom {
 namespace {
 
 constexpr f32 kRunLap = 5.5f;
+constexpr f32 kDummyShotEvery = 2.5f;
+constexpr f32 kDummySpreadDeg = 1.5f;
+constexpr f32 kReloadCycle = 4.5f;
 constexpr f32 kCrawlLap = 5.0f;
 
 bool crossed(f32 t, f32 dt, f32 when)
@@ -22,6 +26,10 @@ std::string_view dummy_script_name(DummyScript script)
         return "stands";
     case DummyScript::Strafe:
         return "strafes";
+    case DummyScript::Shoot:
+        return "shoots at you";
+    case DummyScript::Reload:
+        return "reloads standing, crouched and crawling";
     case DummyScript::Revive:
         return "revives the downed";
     case DummyScript::Run:
@@ -36,7 +44,7 @@ std::string_view dummy_script_name(DummyScript script)
     return "idles";
 }
 
-PlayerCommand Sim::dummy_command(PlayerSlot& s, f32 dt) const
+PlayerCommand Sim::dummy_command(PlayerSlot& s, f32 dt)
 {
     s.script_time += dt;
     Player& body = s.player;
@@ -140,6 +148,42 @@ PlayerCommand Sim::dummy_command(PlayerSlot& s, f32 dt) const
         case DummyScript::Stand:
             cmd.holster = std::fmod(t_all, 2.0f) < dt;
             break;
+        case DummyScript::Shoot:
+            cmd.holster = state.holstered;
+            s.shot_timer -= dt;
+            if (s.shot_timer <= 0.0f && local && state.holster <= 0.0f) {
+                s.shot_timer = kDummyShotEvery;
+                const Vec3 forward = frame_forward(frame, yaw);
+                const Vec3 muzzle = eye - body.up() * 0.12f + forward * 0.6f + frame_right(frame, yaw) * 0.18f;
+                const Vec3 aim = normalize(chest(*local) - muzzle);
+                emit(ghost::game::ShotFired{ghost::game::Round{}, 0, s.id});
+                gameplay_.fireShot(s.id, to_glm(muzzle), to_glm(aim), kDummySpreadDeg, ghost::game::Round{}, true, events_);
+            }
+            break;
+        case DummyScript::Reload: {
+            cmd.holster = state.holstered;
+            const i32 stance_index = static_cast<i32>(t_all / kReloadCycle) % 3;
+            const f32 t = std::fmod(t_all, kReloadCycle);
+            cmd.crouch = stance_index == 1;
+            if ((stance_index == 2) != (state.stance == Stance::Crawl) && state.grounded) {
+                cmd.crawl = true;
+            }
+            if (s.gun.pouch.count(ghost::game::kPlainElement) < ghost::game::kChamberCount) {
+                s.gun.pouch.add(ghost::game::kPlainElement, ghost::game::kChamberCount);
+            }
+            const ghost::game::MechanismState& gun = s.gun.mechanism.state();
+            cmd.cylinder = crossed(t, dt, 0.05f) && gun.isClosed();
+            bool loaded = false;
+            for (const ghost::game::Chamber& chamber : gun.chambers) {
+                loaded = loaded || chamber.state != ghost::game::ChamberState::Empty;
+            }
+            cmd.eject = t > 0.45f && t < 1.0f && loaded && gun.cylinder == ghost::game::CylinderPhase::Open && gun.ejectTime < 0.0f;
+            if (t > 1.0f && t < 4.0f) {
+                cmd.quick_fill_element = static_cast<i32>(ghost::game::kPlainElement);
+            }
+            cmd.close_cylinder = crossed(t, dt, 4.2f);
+            break;
+        }
         case DummyScript::Count:
             break;
         }

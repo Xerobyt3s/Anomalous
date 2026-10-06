@@ -110,6 +110,9 @@ void CarSysRenderer::draw_glass(RenderDevice& device, const CarSys& sys, const V
                                slerp(body->prev_rot, body->rot, alpha), kOne);
 
     device.draw_glass(device.assets().mesh("excel_glass"), offset_from(base, -com), time);
+    if (sys.parts[PART_TANK].installed) {
+        device.draw_glass(device.assets().mesh("part_tank_glass"), offset_from(base, part_def(PART_TANK).socket_pos - com), time);
+    }
     for (u32 side = 0; side < 2; side++) {
         const f32 sign = side == 0 ? -1.0f : 1.0f;
         const Vec3 hinge = Vec3{sign * kDoorHingeX, 0.0f, kDoorHingeZ} - com;
@@ -228,6 +231,15 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
         }
         device.draw_mesh(assets.mesh(kAntennas[variant]),
                          offset_from(base, part_def(PART_ANTENNA).socket_pos - com));
+    }
+
+    for (PartKind kind : {PART_TANK, PART_PRINTER}) {
+        if (sys.parts[kind].installed) {
+            device.draw_mesh(assets.mesh(part_def(kind).mesh), offset_from(base, part_def(kind).socket_pos - com));
+        }
+    }
+    if (sys.parts[PART_PRINTER].installed) {
+        device.draw_mesh(assets.mesh("jack_bus"), offset_from(base, kPrinterJackLocal - com));
     }
 
     if (sys.parts[PART_COIL].installed) {

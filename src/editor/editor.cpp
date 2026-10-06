@@ -348,7 +348,8 @@ EntityHandle Editor::pick(const Camera& cam, const World& world, Arena& scratch,
         const Entity* e = pool.at(idx);
         const GpuMesh* mesh = mesh_of(idx);
         if (!e || (!mesh && e->kind != EntityKind::Trigger && e->kind != EntityKind::Gravity
-                   && e->kind != EntityKind::Island)) {
+                   && e->kind != EntityKind::Island && e->kind != EntityKind::GhostSpawn && e->kind != EntityKind::Prop
+                   && e->kind != EntityKind::Bench && e->kind != EntityKind::SpawnPoint)) {
             continue;
         }
         if (e->kind == EntityKind::IslandLink && (e->aux_kind & 1u) == 0) {
@@ -421,6 +422,8 @@ void Editor::drive_gizmo(const Input& input, const Camera& cam, World& world, Ph
     const bool sel_body = pickup_body_state(phys, *sel, sel_state);
     const bool no_scale = sel_body || sel->kind == EntityKind::Trigger
                        || sel->kind == EntityKind::Gravity || sel->kind == EntityKind::Island
+                       || sel->kind == EntityKind::GhostSpawn || sel->kind == EntityKind::Prop
+                       || sel->kind == EntityKind::Bench || sel->kind == EntityKind::SpawnPoint
                        || sel->kind == EntityKind::IslandLink;
 
     Vec3 gizmo_pos = sel_body ? sel_state.pos : sel->pos;
@@ -643,6 +646,30 @@ void Editor::render(Ui& ui, DebugDraw& debug, TextRenderer& text, const Input& i
                 end = Vec3{from->pos.x, from->pos.y - 12.0f, from->pos.z};
             }
             debug.line(from->pos, end, is_sel ? kDdYellow : kDdOrange);
+            continue;
+        }
+        if (e && (e->kind == EntityKind::Prop || e->kind == EntityKind::Bench)) {
+            if (pool.handle_at(idx) == selection_) {
+                const Vec3 center = e->kind == EntityKind::Bench ? e->pos - Vec3{0.0f, e->half.y, 0.0f} : e->pos;
+                debug.obb(center, quat_identity(), e->half, kDdYellow);
+            }
+            continue;
+        }
+        if (e && e->kind == EntityKind::SpawnPoint) {
+            const bool is_sel = pool.handle_at(idx) == selection_;
+            const u32 color = is_sel ? kDdYellow : kDdCyan;
+            const Vec3 ahead = rotate(e->rot, Vec3{0.0f, 0.0f, -1.0f});
+            debug.cross(e->pos, 0.6f, color);
+            debug.arrow(e->pos + Vec3{0.0f, 0.1f, 0.0f}, e->pos + Vec3{0.0f, 0.1f, 0.0f} + ahead * 1.2f, 0.25f, color);
+            debug.text_3d(e->pos + Vec3{0.0f, 1.9f, 0.0f}, 13.0f, color, "spawn %u", e->aux_kind + 1);
+            continue;
+        }
+        if (e && e->kind == EntityKind::GhostSpawn) {
+            const bool is_sel = pool.handle_at(idx) == selection_;
+            const u32 color = is_sel ? kDdYellow : kDdGreen;
+            debug.sphere(e->pos, e->half.x, color);
+            debug.text_3d(e->pos + Vec3{0.0f, e->half.y + 0.3f, 0.0f}, 13.0f, color, "%s x%u", e->mesh_name.c_str(),
+                          e->aux_kind);
             continue;
         }
         if (e && e->kind == EntityKind::Gravity) {

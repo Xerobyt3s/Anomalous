@@ -170,6 +170,20 @@ void Interact::set_tower(bool present, Vec3 port)
     tower_port_ = port;
 }
 
+bool Interact::take_rounds_request()
+{
+    const bool value = rounds_request_;
+    rounds_request_ = false;
+    return value;
+}
+
+bool Interact::take_holster_request()
+{
+    const bool value = holster_request_;
+    holster_request_ = false;
+    return value;
+}
+
 bool Interact::take_terminal_request()
 {
     const bool value = use_terminal_request_;
@@ -302,6 +316,11 @@ void Interact::perform(const InteractContext& ctx)
         sys.coax_target = kCoaxTargetCamera;
         cable_drag_ = -1;
         break;
+    case InteractAction::CablePlugPrinter:
+        sys.cables[CABLE_BUS].state = CableState::Plugged;
+        sys.bus_target = kBusTargetPrinter;
+        cable_drag_ = -1;
+        break;
     case InteractAction::CablePlugTower:
         sys.cables[CABLE_BUS].state = CableState::Plugged;
         sys.bus_target = kBusTargetTower;
@@ -337,6 +356,10 @@ void Interact::perform(const InteractContext& ctx)
 
     case InteractAction::Wipers:
         sys.wiper_mode = (sys.wiper_mode + 1) % 3;
+        break;
+
+    case InteractAction::TakeRounds:
+        rounds_request_ = true;
         break;
 
     case InteractAction::TapeInsert:
@@ -526,7 +549,7 @@ void Interact::resolve_doors(Candidate& best, const InteractBoxes& boxes,
     const InteractBox& door_box = boxes.box(IBOX_DOOR);
     const Vec3 door_half = door_box.half;
 
-    const i32 driver_side = ctx.veh->config().seat_eye.x < 0.0f ? 0 : 1;
+    const VehicleConfig& cfg = ctx.veh->config();
     f32 t = 0.0f;
 
     for (i32 side = 0; side < 2; side++) {
@@ -538,14 +561,28 @@ void Interact::resolve_doors(Candidate& best, const InteractBoxes& boxes,
         if (ray_vs_local_box(local, center, door_half, &t)) {
             bool taken = false;
             if (on_foot) {
+                i32 seat = -1;
+                for (u32 k = 0; k < cfg.seat_count; k++) {
+                    if (cfg.seats[k].door_side == side) {
+                        seat = static_cast<i32>(k);
+                    }
+                }
+                const SeatConfig* sc = seat >= 0 ? &cfg.seats[seat] : nullptr;
                 if (!open) {
                     taken = best.consider(t + 0.05f, InteractAction::OpenDoor, center, door_half,
                                           false, "[E] open door");
-                } else if (side != driver_side) {
+                } else if (!sc) {
                     taken = false;
-                } else if (!ctx.seat_taken && ctx.player->can_enter(*ctx.phys, ctx.veh)) {
-                    taken = best.consider(t + 0.05f, InteractAction::EnterCar, center, door_half,
-                                          false, "[E] enter car");
+                } else if (sc->blocked_by != PART_COUNT && sys.parts[sc->blocked_by].installed) {
+                    const std::string_view name = part_def(sc->blocked_by).name;
+                    FixedString<96> blocked;
+                    blocked.format("the %.*s is on that seat", static_cast<int>(name.size()), name.data());
+                    taken = best.consider(t + 0.05f, InteractAction::Info, center, door_half, false, blocked.view());
+                } else if (ctx.seats_taken & (1u << static_cast<u32>(seat))) {
+                    taken = best.consider(t + 0.05f, InteractAction::Info, center, door_half, false, "seat taken");
+                } else if (ctx.player->can_enter(*ctx.phys, ctx.veh, static_cast<u32>(seat))) {
+                    taken = best.consider(t + 0.05f, InteractAction::EnterCar, center, door_half, false,
+                                          sc->drives ? "[E] drive" : "[E] ride along");
                 }
             } else {
                 taken = best.consider(t + 0.05f,
@@ -574,6 +611,9 @@ void Interact::resolve_doors(Candidate& best, const InteractBoxes& boxes,
 void Interact::resolve_in_car(Candidate& best, const InteractBoxes& boxes,
                               const InteractContext& ctx) const
 {
+    if (!ctx.veh) {
+        return;
+    }
     RigidBody* body = ctx.phys->body(ctx.veh->body());
     if (!body) {
         return;
@@ -677,6 +717,9 @@ void Interact::resolve_in_car(Candidate& best, const InteractBoxes& boxes,
 void Interact::resolve_car_targets(Candidate& best, const InteractBoxes& boxes,
                                    const InteractContext& ctx) const
 {
+    if (!ctx.veh) {
+        return;
+    }
     RigidBody* body = ctx.phys->body(ctx.veh->body());
     if (!body) {
         return;
@@ -704,6 +747,12 @@ void Interact::resolve_car_targets(Candidate& best, const InteractBoxes& boxes,
             if (kind == PART_ENGINE && hands_.kind == ITEM_OILCAN) {
                 taken = best.consider(t, InteractAction::OilFill, center, def.socket_half, true,
                                       "hold [E] top up oil");
+            } else if (kind == PART_PRINTER && hands_.kind == ITEM_NONE && sys.synth.tray_total() > 0) {
+                prompt.format("[E] take %u rounds from the printer", sys.synth.tray_total());
+                taken = best.consider(t, InteractAction::TakeRounds, center, def.socket_half, false, prompt.view());
+            } else if (kind == PART_PRINTER && hands_.kind == ITEM_NONE && sys.parts[PART_TANK].installed) {
+                taken = best.consider(t, InteractAction::Info, center, def.socket_half, false,
+                                      "printer | take the tank off it first");
             } else if (def.removable && hands_.kind == ITEM_NONE) {
                 if (kind == PART_COMPUTER && sys.computer_on) {
                     taken = best.consider(t, InteractAction::TerminalUse, center,
@@ -712,6 +761,15 @@ void Interact::resolve_car_targets(Candidate& best, const InteractBoxes& boxes,
                 } else if (kind == PART_COMPUTER) {
                     prompt.format("tap [E] power | hold [E] take terminal (%.0f%%)",
                                   static_cast<f64>(slot.condition * 100.0f));
+                    taken = best.consider(t, InteractAction::RemovePart, center, def.socket_half,
+                                          true, prompt.view());
+                } else if (kind == PART_TANK) {
+                    prompt.format("material tank: %u doses | hold [E] take", sys.synth.tank_total());
+                    taken = best.consider(t, InteractAction::RemovePart, center, def.socket_half,
+                                          true, prompt.view());
+                } else if (kind == PART_PRINTER && sys.synth.job_left > 0) {
+                    prompt.format("printer: %u left%s | hold [E] take", static_cast<u32>(sys.synth.job_left),
+                                  sys.synth.stalled ? " (stalled)" : "");
                     taken = best.consider(t, InteractAction::RemovePart, center, def.socket_half,
                                           true, prompt.view());
                 } else {
@@ -727,6 +785,8 @@ void Interact::resolve_car_targets(Candidate& best, const InteractBoxes& boxes,
                 taken = best.consider(t, InteractAction::Info, center, def.socket_half, false,
                                       prompt.view());
             }
+        } else if (kind == PART_TANK && !sys.parts[PART_PRINTER].installed) {
+            continue;
         } else if (hands_.kind != ITEM_NONE
                    && (kind == PART_ANTENNA ? antenna_variant_for_item(hands_.kind) >= 0
                                             : item_for_part(kind) == hands_.kind)) {
@@ -775,6 +835,25 @@ void Interact::resolve_car_targets(Candidate& best, const InteractBoxes& boxes,
                        || sys.cables[CABLE_COAX].state == CableState::Plugged) {
                 consider_cable_jack(best, sys, CABLE_COAX, t - 0.20f, center, jack_half,
                                     "antenna");
+            }
+        }
+        if (sys.parts[PART_PRINTER].installed && sys.bus_target != kBusTargetTower) {
+            const Vec3 jack = kPrinterJackLocal - com;
+            if (ray_vs_local_box(local, jack, kPrinterJackHalf, &t)) {
+                const Cable& bus = sys.cables[CABLE_BUS];
+                if (bus.state == CableState::Plugged && sys.bus_target == kBusTargetPrinter) {
+                    if (best.consider(t - 0.20f, InteractAction::CableUnplug, jack, kPrinterJackHalf, false,
+                                      "[E] unplug bus cable")) {
+                        best.cable = static_cast<i32>(CABLE_BUS);
+                    }
+                } else if (cable_drag_ == static_cast<i32>(CABLE_BUS)) {
+                    if (best.consider(t - 0.20f, InteractAction::CablePlugPrinter, jack, kPrinterJackHalf, false,
+                                      "[E] connect bus to printer")) {
+                        best.cable = static_cast<i32>(CABLE_BUS);
+                    }
+                } else {
+                    best.consider(t - 0.20f, InteractAction::Info, jack, kPrinterJackHalf, false, "printer bus jack");
+                }
             }
         }
         if (sys.hood_open >= kHoodOpenForBay && sys.bus_target == kBusTargetCar) {
@@ -1079,6 +1158,13 @@ void Interact::update(const InteractBoxes& boxes, const InteractContext& ctx, f3
         resolve_tower_port(best, ctx);
     } else if (ctx.player->state() == PlayerState::Driving) {
         resolve_in_car(best, boxes, ctx);
+    }
+    if (ctx.gun_drawn && (best.action == InteractAction::Pickup || best.action == InteractAction::RemovePart
+                          || best.action == InteractAction::TakeCargo)) {
+        best.action = InteractAction::Info;
+        best.is_hold = false;
+        best.prompt.assign("[E] holster and take");
+        holster_request_ = holster_request_ || ctx.e_pressed;
     }
 
     const bool same_target = best.action == action_ && best.part == target_part_

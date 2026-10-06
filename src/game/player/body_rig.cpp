@@ -12,6 +12,10 @@ constexpr float kRopeStep = 1.0f / 120.0f;
 constexpr float kToppleTime = 0.5f;
 constexpr float kGetUpTime = 0.6f;
 constexpr float kFlopTime = 0.5f;
+constexpr float kSeatTwist = 0.4f;
+constexpr float kSeatRecline = 0.5f;
+constexpr float kSeatSlouch = 0.15f;
+constexpr float kHandOnRim = 1.05f;
 
 float ease(float rate, float dt) { return 1.0f - std::exp(-rate * dt); }
 
@@ -100,6 +104,57 @@ Limb solveTwoBone(const glm::vec3& root, const glm::vec3& target, float upper, f
 void BodyRig::setMode(BodyMode mode) {
     m_mode = mode;
     m_modeTime = 0.0f;
+}
+
+void BodyRig::rebase(const glm::mat3& rotation, const glm::vec3& shift) {
+    const auto point = [&](glm::vec3& p) { p = rotation * p + shift; };
+    const auto turn = [&](glm::vec3& v) { v = rotation * v; };
+    const glm::quat spin = glm::quat_cast(rotation);
+    for (Foot& foot : m_feet) {
+        point(foot.planted);
+        point(foot.from);
+        point(foot.to);
+    }
+    for (auto* ropes : {&m_armRope, &m_armsBefore, &m_legRope, &m_legRopeBefore}) {
+        for (Chain& chain : *ropes) {
+            for (glm::vec3& p : chain) {
+                point(p);
+            }
+        }
+    }
+    for (glm::vec3& hinge : m_hinge) {
+        turn(hinge);
+    }
+    turn(m_lastVelocity);
+    turn(m_spin);
+    m_orient = glm::normalize(spin * m_orient);
+    m_settleFrom = glm::normalize(spin * m_settleFrom);
+    BodyPose& p = m_pose;
+    point(p.body);
+    p.bodyBasis = rotation * p.bodyBasis;
+    point(p.head);
+    point(p.neck);
+    turn(p.headForward);
+    turn(p.headUp);
+    for (Arm& arm : p.arms) {
+        for (glm::vec3& joint : arm) {
+            point(joint);
+        }
+    }
+    for (Limb& leg : p.legs) {
+        point(leg.root);
+        point(leg.joint);
+        point(leg.end);
+    }
+    for (glm::vec3& forward : p.footForward) {
+        turn(forward);
+    }
+    turn(p.carryAim);
+    point(p.holsterGrip);
+    turn(p.holsterAim);
+    turn(p.holsterUp);
+    point(p.feet);
+    point(p.held);
 }
 
 void BodyRig::jolt(const glm::vec3& direction, float strength, bool head) {
@@ -332,6 +387,13 @@ const BodyPose& BodyRig::update(float dt, const BodyInput& in) {
             m_turning = false;
         }
     }
+    const float seated = std::clamp(in.seated, 0.0f, 1.0f);
+    if (seated > 0.0f) {
+        const float twist = std::clamp(wrapAngle(in.yaw - in.seatYaw), -1.2f, 1.2f) * kSeatTwist;
+        m_hipYaw += wrapAngle(in.seatYaw - m_hipYaw) * seated;
+        m_torsoYaw += wrapAngle(in.seatYaw + twist - m_torsoYaw) * seated;
+        m_turning = false;
+    }
     const glm::vec3 hipForward = flatForward(m_hipYaw);
     const glm::vec3 hipRight = flatRight(m_hipYaw);
 
@@ -402,6 +464,12 @@ const BodyPose& BodyRig::update(float dt, const BodyInput& in) {
             foot.step = -1.0f;
             foot.planted = {end.x, in.feet.y, end.z};
         }
+    } else if (grounded && seated > 0.5f) {
+        for (int i = 0; i < 2; ++i) {
+            Foot& foot = m_feet[static_cast<std::size_t>(i)];
+            foot.step = -1.0f;
+            foot.planted = in.feet + hipRight * (i == 0 ? -width : width);
+        }
     } else if (grounded) {
         const float ahead = std::min(speed * stepTime * 0.5f, 0.2f);
         stepFeet(dt, in, hipRight, speed, flatVelocity, safeNormalize(flatVelocity, glm::vec3(0.0f)) * ahead, width);
@@ -431,12 +499,14 @@ const BodyPose& BodyRig::update(float dt, const BodyInput& in) {
 
     const float hipHeight = s.hip - m_crouch * 0.24f - m_slide * 0.3f + std::min(stretch, 0.0f) * 0.25f + bob -
                             glm::mix(0.015f * moving, 0.04f, m_run);
-    const float core = s.core * (1.0f - m_crouch * 0.33f - m_slide * 0.3f) * (1.0f + stretch * 0.5f);
-    const glm::vec3 pelvis = in.feet + kUp * hipHeight + hipRight * (sway + std::sin(m_time * 0.45f) * 0.02f * idle) + m_stagger.value;
+    const float core = s.core * (1.0f - m_crouch * 0.33f - m_slide * 0.3f - kSeatSlouch * seated) * (1.0f + stretch * 0.5f);
+    const glm::vec3 pelvis = glm::mix(in.feet + kUp * hipHeight + hipRight * (sway + std::sin(m_time * 0.45f) * 0.02f * idle) + m_stagger.value,
+                                      in.seatHips, seated);
 
     const glm::vec3 torsoRight = flatRight(m_torsoYaw + twist);
     const glm::vec3 torsoForward = flatForward(m_torsoYaw + twist);
-    const glm::vec3 tilt = safeNormalize(kUp + torsoForward * (lean.z + m_run * 0.25f + m_crouch * 0.22f - m_slide * 0.35f) + torsoRight * lean.x, kUp);
+    const glm::vec3 tilt =
+        safeNormalize(kUp + torsoForward * (lean.z + m_run * 0.25f + m_crouch * 0.22f - m_slide * 0.35f - kSeatRecline * seated) + torsoRight * lean.x, kUp);
     const glm::quat standing = orientation(safeNormalize(torsoRight - tilt * glm::dot(torsoRight, tilt), torsoRight), tilt);
     const glm::quat upright = orientation(hipRight, kUp);
 
@@ -584,6 +654,10 @@ const BodyPose& BodyRig::update(float dt, const BodyInput& in) {
             target = glm::mix(target, slid, m_slide);
         }
         glm::vec3 pole = forward + right * (side * 0.3f);
+        if (seated > 0.0f) {
+            target = glm::mix(target, in.pedals + hipRight * (side * width * 1.2f), seated);
+            pole = glm::mix(pole, hipForward + kUp * 0.8f + right * (side * 0.2f), seated);
+        }
         if (flat > 0.001f) {
             const float reachBack = (s.thigh + s.shin) * glm::mix(0.9f, 0.97f, std::max(m_dive, bellySlide));
             const float draw = std::max(0.0f, std::sin(glm::two_pi<float>() * (m_crawlPhase + 0.5f * static_cast<float>(i)))) * crawling;
@@ -663,6 +737,27 @@ const BodyPose& BodyRig::update(float dt, const BodyInput& in) {
         reach = in.gunGrip - aimRight * 0.045f - kUp * 0.02f;
     }
 
+    const float steering = in.steering ? seated : 0.0f;
+    const float resting = seated * (1.0f - (in.steering ? 1.0f : 0.0f));
+    m_hold += ((in.holdHands > 0 ? 1.0f : 0.0f) - m_hold) * ease(9.0f, dt);
+    m_twoHand += ((in.holdHands >= 2 ? 1.0f : 0.0f) - m_twoHand) * ease(9.0f, dt);
+    const float holding = m_hold * (1.0f - seated);
+    const glm::vec3 holdCenter = body + forward * (s.depth + 0.14f) - up * (core * 0.45f);
+    const glm::vec3 wheelRight = safeNormalize(glm::cross(in.wheelUp, in.wheelNormal), hipRight);
+    const auto rim = [&](float angle) {
+        return in.wheelCenter + (in.wheelUp * std::cos(angle) + wheelRight * std::sin(angle)) * in.wheelRadius;
+    };
+    const glm::vec3 thighRest = hips + hipForward * 0.3f + kUp * 0.08f;
+    if (seated > 0.0f) {
+        swingTarget = 0.0f;
+        reach = glm::mix(reach, rim(in.steer - kHandOnRim), steering);
+        reach = glm::mix(reach, thighRest - hipRight * 0.13f, resting);
+    }
+    if (holding > 0.001f) {
+        swingTarget = glm::mix(swingTarget, 0.0f, m_twoHand);
+        reach = glm::mix(reach, holdCenter - right * in.holdHalfWidth, holding * m_twoHand);
+    }
+
     const bool busy = in.loading >= 0.0f || in.ejector > 0.05f || in.crane > 0.05f || in.aiming;
     m_carry += ((running && !busy && in.holster < 0.5f ? 1.0f : 0.0f) - m_carry) * ease(7.0f, dt);
     const float carry = m_carry * m_carry * (3.0f - 2.0f * m_carry);
@@ -686,6 +781,15 @@ const BodyPose& BodyRig::update(float dt, const BodyInput& in) {
         hang = glm::mix(hang, body + forward * (s.depth + 0.04f) + right * 0.1f, backed);
     }
     gunHand = glm::mix(glm::mix(gunHand, holsterGrip, toHip), hang, m_handFree);
+    const glm::vec3 oneHand = hips + right * (s.radius + 0.05f) + hipForward * 0.08f + kUp * 0.02f;
+    const glm::vec3 heldHand = glm::mix(oneHand, holdCenter + right * in.holdHalfWidth, m_twoHand);
+    gunHand = glm::mix(gunHand, heldHand, holding * m_handFree);
+    const glm::vec3 driveHand = glm::mix(rim(in.steer + kHandOnRim), in.shifter, std::clamp(in.shifting, 0.0f, 1.0f));
+    gunHand = glm::mix(gunHand, driveHand, steering * m_handFree);
+    gunHand = glm::mix(gunHand, thighRest + hipRight * 0.13f, resting * m_handFree);
+    p.holding = holding;
+    p.held = glm::mix(oneHand - kUp * 0.1f, holdCenter, m_twoHand);
+    p.seated = seated;
     gunPole = glm::mix(gunPole, -forward * 0.8f + right * 0.35f - kUp * 0.2f, toHip * (1.0f - flat));
     p.holster = in.holster;
     p.holsterGrip = holsterGrip;

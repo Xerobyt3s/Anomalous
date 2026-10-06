@@ -16,6 +16,7 @@ public:
     bool load(Arena& arena, Arena& scratch, std::string_view zone_dir, const Config& cfg);
 
     f32 road_amount(f32 x, f32 z) const;
+    f32 base_height(f32 x, f32 z) const;
 
     Heightfield& heightfield() { return hf_; }
     const Heightfield& heightfield() const { return hf_; }

@@ -51,14 +51,15 @@ void MimicBody::update(float dtIn, const Input& in, const Raycast& raycast) {
         m_up = clung;
         m_velocity = in.velocity;
     }
-    m_up = normalizeOr(glm::mix(m_up, clung, std::min(1.0f, dt * 10.0f)), clung);
+    const bool tumbling = in.mode == Mode::Tumble;
+    m_up = normalizeOr(glm::mix(m_up, clung, std::min(1.0f, dt * (tumbling ? 30.0f : 10.0f))), clung);
     m_velocity += (in.velocity - m_velocity) * std::min(1.0f, dt * 9.0f);
     const glm::vec3 up = m_up;
     const glm::vec3 a = normalizeOr(glm::cross(up, std::abs(up.y) < 0.9f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f)),
                                     glm::vec3(1.0f, 0.0f, 0.0f));
     const glm::vec3 b = glm::cross(up, a);
     const float speed = glm::length(m_velocity);
-    const bool air = in.mode == Mode::Air;
+    const bool air = in.mode == Mode::Air || tumbling;
     const bool ground = in.mode == Mode::Walk || in.mode == Mode::Idle || in.mode == Mode::Lash;
 
     for (int i = 0; i < kTentacles; ++i) {
@@ -202,6 +203,10 @@ void MimicBody::update(float dtIn, const Input& in, const Raycast& raycast) {
                 const glm::vec3 side = normalizeOr(glm::cross(toTarget, up), a);
                 tip = m_center + toTarget * std::min(targetDistance, length) + side * (std::sin(m_time * 30.0f + fi * 1.3f) * 0.12f);
                 pull = 32.0f;
+            } else if (tumbling) {
+                const float flail = std::sin(m_time * 7.0f + fi * 2.1f + in.seed);
+                tip = m_center + outward * (length * 0.8f) + up * (length * 0.3f * flail) + sway * 2.2f;
+                pull = 5.0f;
             } else if (air) {
                 tip = m_center - flying * (length * 0.75f) + outward * (length * 0.35f) + sway;
                 pull = 10.0f;

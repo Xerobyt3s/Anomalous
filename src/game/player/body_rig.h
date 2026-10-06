@@ -50,6 +50,9 @@ struct BodyPose {
     glm::vec3 holsterUp{0.0f, 0.0f, -1.0f};
     glm::vec3 feet{0.0f};
     BodyMode mode = BodyMode::Grounded;
+    float holding = 0.0f;
+    glm::vec3 held{0.0f};
+    float seated = 0.0f;
 };
 
 struct BodyInput {
@@ -76,6 +79,22 @@ struct BodyInput {
 
     bool reach = false;
     glm::vec3 reachTo{0.0f};
+
+    int holdHands = 0;
+    float holdHalfWidth = 0.12f;
+
+    float seated = 0.0f;
+    float seatYaw = 0.0f;
+    glm::vec3 seatHips{0.0f};
+    glm::vec3 pedals{0.0f};
+    bool steering = false;
+    glm::vec3 wheelCenter{0.0f};
+    glm::vec3 wheelNormal{0.0f, 0.0f, 1.0f};
+    glm::vec3 wheelUp{0.0f, 1.0f, 0.0f};
+    float wheelRadius = 0.18f;
+    float steer = 0.0f;
+    float shifting = 0.0f;
+    glm::vec3 shifter{0.0f};
 };
 
 struct BodyShape {
@@ -103,6 +122,7 @@ public:
     BodyMode mode() const { return m_mode; }
 
     void jolt(const glm::vec3& direction, float strength = 1.0f, bool head = false);
+    void rebase(const glm::mat3& rotation, const glm::vec3& shift);
     const BodyShape& shape() const { return m_shape; }
 
     int stepsTaken() const { return m_steps; }
@@ -182,6 +202,8 @@ private:
     float m_handFree = 0.0f;
     float m_reach = 0.0f;
     float m_roll = 0.0f;
+    float m_hold = 0.0f;
+    float m_twoHand = 0.0f;
 };
 
 }

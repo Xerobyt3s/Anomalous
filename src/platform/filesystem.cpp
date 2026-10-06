@@ -7,6 +7,12 @@
 #include <direct.h>
 #include <io.h>
 #include <sys/stat.h>
+
+#include "engine/assets/asset_path.h"
+
+#include <cstring>
+#include <filesystem>
+#include <optional>
 #include <sys/types.h>
 #include <wchar.h>
 
@@ -29,7 +35,48 @@ WidePath to_wide(std::string_view path)
     return result;
 }
 
+bool starts_with_folded(std::string_view text, std::string_view prefix)
+{
+    if (text.size() < prefix.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < prefix.size(); i++) {
+        char a = text[i] == '\\' ? '/' : text[i];
+        char b = prefix[i] == '\\' ? '/' : prefix[i];
+        a = static_cast<char>(a >= 'A' && a <= 'Z' ? a - 'A' + 'a' : a);
+        b = static_cast<char>(b >= 'A' && b <= 'Z' ? b - 'A' + 'a' : b);
+        if (a != b) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
+
+bool asset_relative(std::string_view path, std::string& out_relative)
+{
+    static const std::string kRoot = std::filesystem::path(GHOST_ASSET_DIR).generic_string() + "/";
+    for (const std::string_view prefix : {std::string_view("assets/"), std::string_view(kRoot), std::string_view("embedded/")}) {
+        if (starts_with_folded(path, prefix)) {
+            out_relative.assign(path.substr(prefix.size()));
+            for (char& c : out_relative) {
+                c = c == '\\' ? '/' : c;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string resolve(std::string_view path)
+{
+    std::string relative;
+    if (asset_relative(path, relative)) {
+        return ghost::engine::assetPath(relative).string();
+    }
+    return std::string(path);
+}
 
 u32 utf8_to_wide(std::string_view utf8, std::span<wchar_t> out)
 {
@@ -116,8 +163,10 @@ u32 wide_to_utf8(const wchar_t* wide, std::span<char> out)
     return n;
 }
 
-std::FILE* open(std::string_view path, const char* mode)
+std::FILE* open(std::string_view path_in, const char* mode)
 {
+    const std::string resolved = resolve(path_in);
+    const std::string_view path = resolved;
     const WidePath wpath = to_wide(path);
     if (!wpath.get()) {
         return nullptr;
@@ -139,6 +188,23 @@ std::FILE* open(std::string_view path, const char* mode)
 FileData read_entire_file(Arena& arena, std::string_view path)
 {
     FileData result;
+    std::string relative;
+    if (ghost::engine::assetsEmbedded() && asset_relative(path, relative)) {
+        const std::optional<std::string> bytes = ghost::engine::readAsset(ghost::engine::assetPath(relative));
+        if (!bytes || bytes->empty()) {
+            log_warn("file: no asset %.*s", static_cast<int>(path.size()), path.data());
+            return result;
+        }
+        u8* data = arena.push_array<u8>(bytes->size() + 1);
+        if (!data) {
+            return result;
+        }
+        std::memcpy(data, bytes->data(), bytes->size());
+        data[bytes->size()] = 0;
+        result.data = data;
+        result.size = bytes->size();
+        return result;
+    }
     std::FILE* file = open(path, "rb");
     if (!file) {
         log_warn("file: could not open %.*s", static_cast<int>(path.size()), path.data());
@@ -177,8 +243,14 @@ bool make_dir(std::string_view path)
     return _wmkdir(wpath.get()) == 0 || errno == EEXIST;
 }
 
-bool exists(std::string_view path)
+bool exists(std::string_view path_in)
 {
+    std::string relative;
+    if (ghost::engine::assetsEmbedded() && asset_relative(path_in, relative)) {
+        return ghost::engine::readAsset(ghost::engine::assetPath(relative)).has_value();
+    }
+    const std::string resolved = resolve(path_in);
+    const std::string_view path = resolved;
     const WidePath wpath = to_wide(path);
     if (!wpath.get()) {
         return false;
@@ -187,8 +259,13 @@ bool exists(std::string_view path)
     return _wstat64(wpath.get(), &info) == 0;
 }
 
-i64 file_mtime(std::string_view path)
+i64 file_mtime(std::string_view path_in)
 {
+    if (ghost::engine::assetsEmbedded()) {
+        return 0;
+    }
+    const std::string resolved = resolve(path_in);
+    const std::string_view path = resolved;
     const WidePath wpath = to_wide(path);
     if (!wpath.get()) {
         return 0;
@@ -200,11 +277,14 @@ i64 file_mtime(std::string_view path)
     return static_cast<i64>(info.st_mtime);
 }
 
-u32 list_dir(std::string_view path, std::span<DirEntry> out)
+u32 list_dir(std::string_view path_in, std::span<DirEntry> out)
 {
-    if (out.empty()) {
+    std::string relative;
+    if (out.empty() || (ghost::engine::assetsEmbedded() && asset_relative(path_in, relative))) {
         return 0;
     }
+    const std::string resolved = resolve(path_in);
+    const std::string_view path = resolved;
     FixedString<512> pattern;
     pattern.format("%.*s/*", static_cast<int>(path.size()), path.data());
 

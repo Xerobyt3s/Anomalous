@@ -105,4 +105,9 @@ void Weather::tick(f32 dt)
           + 0.06f * std::sin(wind_phase_ * 2.7f);
 }
 
+Vec3 Weather::wind_velocity() const
+{
+    return kWindDir * (wind_ * kWindSpeed);
+}
+
 } // namespace anom

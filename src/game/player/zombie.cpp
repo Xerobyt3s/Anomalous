@@ -18,13 +18,13 @@ bool zombieRamming(const PlayerState& self, const ZombieTuning& tuning) {
 }
 
 ZombieOrder zombieThink(ZombieMind& mind, const ZombieTuning& tuning, const PlayerState& self, std::span<const ZombieTarget> targets,
-                        int liveRounds, float dt) {
+                        int liveRounds, float dt, const glm::vec3& up) {
     mind.age += dt;
     mind.cooldown = std::max(0.0f, mind.cooldown - dt);
     ZombieOrder order;
     order.command.yaw = self.yaw;
     order.command.pitch = self.pitch;
-    const glm::vec3 eye = self.position + glm::vec3(0.0f, self.eyeHeight, 0.0f);
+    const glm::vec3 eye = self.position + up * self.eyeHeight;
     order.command.muzzle = eye;
     order.aim = glm::vec3(std::cos(self.pitch) * std::sin(self.yaw), std::sin(self.pitch), -std::cos(self.pitch) * std::cos(self.yaw));
     order.command.barrelDirection = order.aim;
@@ -45,9 +45,10 @@ ZombieOrder zombieThink(ZombieMind& mind, const ZombieTuning& tuning, const Play
     const bool shooting = liveRounds > 0;
     const float wander = tuning.aimWander * (shooting ? 1.0f : 0.25f);
     const glm::vec3 to = target->chest - eye;
-    const float flat = std::max(glm::length(glm::vec2(to.x, to.z)), 1e-3f);
+    const float flat = std::max(glm::length(to - up * glm::dot(to, up)), 1e-3f);
+    const float level = std::max(glm::length(glm::vec2(to.x, to.z)), 1e-3f);
     order.command.yaw = std::atan2(to.x, -to.z) + wander * std::sin(mind.age * 1.7f + mind.seed);
-    order.command.pitch = std::atan2(to.y, flat) + wander * 0.6f * std::sin(mind.age * 2.3f + mind.seed * 2.0f);
+    order.command.pitch = std::atan2(to.y, level) + wander * 0.6f * std::sin(mind.age * 2.3f + mind.seed * 2.0f);
     order.aim = glm::vec3(std::cos(order.command.pitch) * std::sin(order.command.yaw), std::sin(order.command.pitch),
                           -std::cos(order.command.pitch) * std::cos(order.command.yaw));
     order.command.barrelDirection = order.aim;

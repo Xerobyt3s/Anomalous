@@ -15,6 +15,10 @@
 
 namespace ghost::engine {
 namespace {
+float onePole(float hz) {
+    return hz <= 0.0f ? 1.0f : 1.0f - std::exp(-6.28318531f * hz / static_cast<float>(kAudioSampleRate));
+}
+
 std::optional<SoundBuffer> readAll(ma_decoder& decoder) {
     SoundBuffer sound;
     constexpr std::size_t kChunkFrames = 2048;
@@ -151,6 +155,8 @@ VoiceId AudioEngine::play(SoundRef sound, const PlayParams& params) {
         voice.fade = 0.0f;
         voice.fadeStep = 1.0f / (params.fadeIn * static_cast<float>(kAudioSampleRate));
     }
+    voice.lowpass = params.lowpass;
+    voice.highpass = params.highpass;
     m_voices.push_back(std::move(voice));
     return m_voices.back().id;
 }
@@ -163,6 +169,14 @@ void AudioEngine::set(VoiceId voice, float volume, float pitch, std::optional<gl
         if (position) {
             v->position = *position;
         }
+    }
+}
+
+void AudioEngine::filter(VoiceId voice, float lowpass, float highpass) {
+    const std::lock_guard lock(m_mutex);
+    if (Voice* v = find(voice)) {
+        v->lowpass = std::max(lowpass, 0.0f);
+        v->highpass = std::max(highpass, 0.0f);
     }
 }
 
@@ -228,6 +242,24 @@ void AudioEngine::mix(float* output, std::size_t frames) {
         const float count = static_cast<float>(frames - first);
         const float stepLeft = (target.left - voice.left) / count;
         const float stepRight = (target.right - voice.right) / count;
+        const float low = onePole(voice.lowpass);
+        const float high = voice.highpass > 0.0f ? std::exp(-6.28318531f * voice.highpass / static_cast<float>(kAudioSampleRate)) : 0.0f;
+        const auto shape = [&](float x, int channel) {
+            if (voice.highpass > 0.0f) {
+                const float y = high * (voice.highState[channel] + x - voice.highLast[channel]);
+                voice.highLast[channel] = x;
+                voice.highState[channel] = y;
+                x = y;
+            }
+            if (voice.lowpass > 0.0f) {
+                float& a = voice.lowState[channel * 2];
+                float& b = voice.lowState[channel * 2 + 1];
+                a += low * (x - a);
+                b += low * (a - b);
+                x = b;
+            }
+            return x;
+        };
 
         for (std::size_t i = first; i < frames; ++i) {
             if (voice.cursor >= length) {
@@ -251,6 +283,10 @@ void AudioEngine::mix(float* output, std::size_t frames) {
                 if (voice.positional) {
                     left = right = 0.5f * (left + right);
                 }
+            }
+            if (voice.lowpass > 0.0f || voice.highpass > 0.0f) {
+                left = shape(left, 0);
+                right = shape(right, 1);
             }
             output[i * 2] += left * voice.left;
             output[i * 2 + 1] += right * voice.right;

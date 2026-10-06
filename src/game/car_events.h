@@ -77,7 +77,7 @@ struct PartRemoved {
 };
 
 struct ZoneLoaded {
-    int destination = -1;
+    int scene = -1;
 };
 
 struct PlayerPlaced {

@@ -1,4 +1,5 @@
 #include "sim/sim.h"
+#include "world/scenes.h"
 #include "world/pickup_body.h"
 #include "core/log.h"
 #include "math/glm_bridge.h"
@@ -12,7 +13,7 @@ void Sim::client_reset(PlayerId local, Vec3 feet, f32 yaw, std::string_view name
 {
     for (PlayerSlot& s : slots_) {
         if (s.active) {
-            jolt_.characterDestroy(s.id);
+            jolt_.characterDestroy(static_cast<int>(slot_index(s.id)));
         }
         const PlayerId id = s.id;
         s = PlayerSlot{};
@@ -21,30 +22,33 @@ void Sim::client_reset(PlayerId local, Vec3 feet, f32 yaw, std::string_view name
     role_ = SimRole::Client;
     local_ = local;
     host_zone_serial_ = 0;
-    seat_owner_ = kNoPlayer;
+    seat_owners_[0] = kNoPlayer;
+    seat_owners_[1] = kNoPlayer;
     mirror_driver_ = kNoPlayer;
     terminal_user_ = kNoPlayer;
     snapshots_.clear();
+    snapshot_tick_.reset();
     host_events_.clear();
     term_mirrors_.clear();
     roster_.replace({});
 
-    PlayerSlot& s = slots_[local];
+    PlayerSlot& s = slots_[slot_index(local)];
     s.active = true;
     s.name.assign(name);
     s.color = kSlotColors[local];
     s.interact.init();
+    gameplay_.stockGun(s.gun);
     place_player(s, feet, yaw);
-    commands_[local] = PlayerCommand{};
+    commands_[slot_index(local)] = PlayerCommand{};
     roster_.add(local);
 }
 
 PlayerId Sim::become_solo(PlayerId local)
 {
-    PlayerSlot kept = slots_[local];
+    PlayerSlot kept = slots_[slot_index(local)];
     for (PlayerSlot& s : slots_) {
         if (s.active) {
-            jolt_.characterDestroy(s.id);
+            jolt_.characterDestroy(static_cast<int>(slot_index(s.id)));
         }
         const PlayerId id = s.id;
         s = PlayerSlot{};
@@ -52,10 +56,12 @@ PlayerId Sim::become_solo(PlayerId local)
     }
     role_ = SimRole::Solo;
     local_ = 0;
-    seat_owner_ = kNoPlayer;
+    seat_owners_[0] = kNoPlayer;
+    seat_owners_[1] = kNoPlayer;
     mirror_driver_ = kNoPlayer;
     terminal_user_ = kNoPlayer;
     snapshots_.clear();
+    snapshot_tick_.reset();
     host_events_.clear();
     term_mirrors_.clear();
     mirrored_.clear();
@@ -76,10 +82,18 @@ PlayerId Sim::become_solo(PlayerId local)
     return 0;
 }
 
-void Sim::queue_snapshot(WorldSnapshot&& snapshot)
+bool Sim::queue_snapshot(WorldSnapshot&& snapshot)
 {
+    const u32 tick = snapshot.header.tick;
+    if (snapshot_tick_ && snapshot.header.zone_serial == snapshot_zone_ && tick <= *snapshot_tick_
+        && *snapshot_tick_ - tick < kStaleSnapshotTicks) {
+        return false;
+    }
+    snapshot_tick_ = tick;
+    snapshot_zone_ = snapshot.header.zone_serial;
     snapshots_.clear();
     snapshots_.push_back(std::move(snapshot));
+    return true;
 }
 
 void Sim::queue_term_mirror(const TermMirror& mirror)
@@ -120,9 +134,11 @@ void Sim::make_snapshot(WorldSnapshot& out) const
         wire.color = s.color;
         wire.player = s.player;
         wire.interact = s.interact;
+        wire.gun = gun_view(s.id, 1.0f);
         out.players.push_back(wire);
     }
     out.roster = roster_.entries();
+    gameplay_.snapshot(out.gameplay);
 
     out.pickups.clear();
     const Pool<Entity>& pool = world_.entities();
@@ -159,13 +175,13 @@ void Sim::sync_remote_character(PlayerSlot& s)
     const bool on_foot = p.state() == PlayerState::OnFoot;
     const MoveState& m = p.movement().state();
     const Vec3 up = p.up();
-    if (!jolt_.characterValid(s.id)) {
-        jolt_.characterCreate(s.id, to_glm(m.pos), to_glm(up), p.movement().tuning().radius, m.height);
+    if (!jolt_.characterValid(static_cast<int>(slot_index(s.id)))) {
+        jolt_.characterCreate(static_cast<int>(slot_index(s.id)), to_glm(m.pos), to_glm(up), p.movement().tuning().radius, m.height);
     } else {
-        jolt_.characterSetHeight(s.id, m.height, to_glm(up));
-        jolt_.characterTeleport(s.id, to_glm(m.pos), to_glm(up));
+        jolt_.characterSetHeight(static_cast<int>(slot_index(s.id)), m.height, to_glm(up));
+        jolt_.characterTeleport(static_cast<int>(slot_index(s.id)), to_glm(m.pos), to_glm(up));
     }
-    jolt_.characterSetSolid(s.id, on_foot);
+    jolt_.characterSetSolid(static_cast<int>(slot_index(s.id)), on_foot);
 }
 
 void Sim::adopt_remote_bodies(std::span<const SlotCommand> commands)
@@ -179,6 +195,9 @@ void Sim::adopt_remote_bodies(std::span<const SlotCommand> commands)
             s->player.adopt(in.body);
             sync_remote_character(*s);
         }
+        if (in.has_gun) {
+            s->gun.shown = in.gun;
+        }
         if (in.has_car && driver() == in.id) {
             vehicle_.adopt(phys_, in.car);
         }
@@ -187,21 +206,20 @@ void Sim::adopt_remote_bodies(std::span<const SlotCommand> commands)
 
 void Sim::arbitrate_seat()
 {
-    if (seat_owner_ != kNoPlayer) {
-        const PlayerSlot* owner = slot(seat_owner_);
-        if (!owner || owner->player.state() == PlayerState::OnFoot) {
-            seat_owner_ = kNoPlayer;
+    for (u32 k = 0; k < kMaxSeats; k++) {
+        const PlayerSlot* owner = slot(seat_owners_[k]);
+        if (!owner || owner->player.state() == PlayerState::OnFoot || owner->player.seat() != k) {
+            seat_owners_[k] = kNoPlayer;
         }
     }
     for (PlayerSlot& s : slots_) {
         if (!s.active || s.player.state() == PlayerState::OnFoot) {
             continue;
         }
-        if (seat_owner_ == kNoPlayer) {
-            seat_owner_ = s.id;
-            continue;
-        }
-        if (s.id == seat_owner_) {
+        const u32 k = s.player.seat();
+        const bool refused = k >= kMaxSeats || seat_blocked(k) || (seat_owners_[k] != kNoPlayer && seat_owners_[k] != s.id);
+        if (!refused) {
+            seat_owners_[k] = s.id;
             continue;
         }
         if (s.remote) {
@@ -316,17 +334,17 @@ void Sim::apply_snapshot(const WorldSnapshot& snap)
             present = present || w.id == s.id;
         }
         if (!present) {
-            jolt_.characterDestroy(s.id);
+            jolt_.characterDestroy(static_cast<int>(slot_index(s.id)));
             const PlayerId id = s.id;
             s = PlayerSlot{};
             s.id = id;
         }
     }
     for (const SlotWire& w : snap.players) {
-        if (w.id >= kMaxPlayers) {
+        if (slot_index(w.id) >= kMaxSlots) {
             continue;
         }
-        PlayerSlot& s = slots_[w.id];
+        PlayerSlot& s = slots_[slot_index(w.id)];
         s.name.assign(std::string_view(w.name, strnlen(w.name, sizeof(w.name))));
         s.color = w.color;
         s.dummy = w.dummy;
@@ -342,19 +360,21 @@ void Sim::apply_snapshot(const WorldSnapshot& snap)
             s.name.assign(std::string_view(w.name, strnlen(w.name, sizeof(w.name))));
             s.color = w.color;
             s.dummy = w.dummy;
-            s.player.set_character(id);
+            s.player.set_character(slot_index(id));
         }
         s.remote = true;
         s.use_down = w.use_down;
         s.interact = w.interact;
+        s.gun.shown = w.gun;
         s.player.adopt(w.player);
         s.view_origin = s.player.pos() + s.player.up() * s.player.movement().state().eye_height;
         sync_remote_character(s);
     }
 
     roster_.replace(snap.roster);
+    gameplay_.applySnapshot(snap.gameplay);
     if (const ghost::game::RosterEntry* mine = roster_.find(local_)) {
-        slots_[local_].player.movement().set_vitals(mine->health, mine->sinceHurt, mine->downed);
+        slots_[slot_index(local_)].player.movement().set_vitals(mine->health, mine->sinceHurt, mine->downed);
     }
     adopt_pickups(snap.pickups);
 }
@@ -363,17 +383,18 @@ void Sim::apply_host_events()
 {
     for (const ghost::game::GameEvent& event : host_events_) {
         if (const auto* zone = std::get_if<ghost::game::ZoneLoaded>(&event)) {
-            const std::span<const Destination> all = destinations();
-            if (zone->destination >= 0 && static_cast<u32>(zone->destination) < all.size()) {
-                load_zone(all[static_cast<u32>(zone->destination)].zone_dir);
+            if (zone->scene >= 0 && static_cast<u32>(zone->scene) < scenes().size()) {
+                load_zone(scenes()[static_cast<u32>(zone->scene)].zone_dir);
             }
+        } else if (const auto* back = std::get_if<ghost::game::PlayerRespawned>(&event)) {
+            respawn_owned(back->player);
         } else if (const auto* placed = std::get_if<ghost::game::PlayerPlaced>(&event)) {
             if (placed->player == local_) {
-                place_player(slots_[local_], from_glm(placed->position), placed->yaw);
+                place_player(slots_[slot_index(local_)], from_glm(placed->position), placed->yaw);
             }
         } else if (const auto* refused = std::get_if<ghost::game::SeatRefused>(&event)) {
             if (refused->player == local_) {
-                slots_[local_].player.eject(phys_, vehicle_);
+                slots_[slot_index(local_)].player.eject(phys_, vehicle_);
             }
         }
     }

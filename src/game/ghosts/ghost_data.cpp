@@ -51,6 +51,14 @@ GhostData parseGhostData(std::string_view ghostsJson, const AmmoData& ammo) {
     GhostData data;
     const json doc = json::parse(ghostsJson);
     data.roundDamage = doc.value("roundDamage", data.roundDamage);
+    if (doc.contains("caught")) {
+        const json& k = doc.at("caught");
+        data.caught.catchSpeed = k.value("catchSpeed", data.caught.catchSpeed);
+        data.caught.releaseTime = k.value("releaseTime", data.caught.releaseTime);
+        data.caught.grip = k.value("grip", data.caught.grip);
+        data.caught.tumbleSpin = k.value("tumbleSpin", data.caught.tumbleSpin);
+        data.caught.fallShare = k.value("fallShare", data.caught.fallShare);
+    }
     for (const json& g : doc.at("ghosts")) {
         GhostDef def;
         def.name = g.at("name").get<std::string>();
@@ -80,6 +88,7 @@ GhostData parseGhostData(std::string_view ghostsJson, const AmmoData& ammo) {
         def.memory = g.value("memory", def.memory);
         def.dodgeChance = g.value("dodgeChance", 0.0f);
         def.invisible = g.value("invisible", false);
+        def.windImmune = g.value("windImmune", false);
         if (g.contains("hitstop")) {
             def.hitstopMin = g.at("hitstop").value("min", def.hitstopMin);
             def.hitstopMax = g.at("hitstop").value("max", def.hitstopMax);

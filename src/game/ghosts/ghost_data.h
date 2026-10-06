@@ -181,13 +181,23 @@ struct GhostDef {
     NecromiteParams necromite;
     float dropDisguiseChance = 0.0f;
     bool invisible = false;
+    bool windImmune = false;
     float hitstopMin = 0.06f;
     float hitstopMax = 0.14f;
+};
+
+struct CaughtTuning {
+    float catchSpeed = 2.5f;
+    float releaseTime = 0.4f;
+    float grip = 5.0f;
+    float tumbleSpin = 6.0f;
+    float fallShare = 0.25f;
 };
 
 struct GhostData {
     std::vector<GhostDef> types;
     float roundDamage = 25.0f;
+    CaughtTuning caught;
 
     std::optional<GhostTypeId> find(std::string_view name) const;
     GhostTypeId type(std::string_view name) const;

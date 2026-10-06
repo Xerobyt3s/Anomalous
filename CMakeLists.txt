@@ -19,6 +19,12 @@ endif()
 
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
+option(GHOST_EMBED_ASSETS "Pack assets/ into the executable instead of reading it from the source tree" OFF)
+if(GHOST_EMBED_ASSETS AND MSVC)
+    file(TO_NATIVE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/" GHOST_SOURCE_PREFIX)
+    add_compile_options("/d1trimfile:${GHOST_SOURCE_PREFIX}" "/d1trimfile:${CMAKE_CURRENT_SOURCE_DIR}/")
+endif()
+
 add_library(anomalous_options INTERFACE)
 
 target_compile_features(anomalous_options INTERFACE cxx_std_20)
@@ -111,6 +117,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/terminal/programs/link.cpp
     src/terminal/programs/map.cpp
     src/terminal/programs/status.cpp
+    src/terminal/programs/synth.cpp
     src/terminal/programs/tapes.cpp
     src/terminal/programs/travel.cpp
     src/terminal/term_font.cpp
@@ -122,6 +129,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/physics/static_grid.cpp
     src/physics/world.cpp
     src/render/camera.cpp
+    src/render/haze.cpp
     src/render/debug_draw.cpp
     src/render/fontchain.cpp
     src/render/text.cpp
@@ -140,6 +148,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/vehicle/vehicle.cpp
     src/vehicle/vehicle_config.cpp
     src/world/destination.cpp
+    src/world/scenes.cpp
     src/world/entity.cpp
     src/world/islands/island_field.cpp
     src/world/islands/island_shape.cpp
@@ -154,6 +163,10 @@ set(ANOMALOUS_CORE_SOURCES
     src/sim/sim.cpp
     src/sim/dummy.cpp
     src/sim/sim_net.cpp
+    src/sim/gameplay.cpp
+    src/sim/sim_gameplay.cpp
+    src/sim/sim_scene.cpp
+    src/sim/sim_synth.cpp
     src/net/session.cpp
     src/platform/clock.cpp
     src/platform/filesystem.cpp
@@ -259,6 +272,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/sim/sim.h
     src/sim/player_slot.h
     src/sim/wire.h
+    src/sim/gameplay.h
     src/net/session.h
     src/platform/clock.h
     src/platform/filesystem.h
@@ -273,7 +287,7 @@ file(GLOB_RECURSE GHOST_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/engine/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/engine/*.h"
 )
-foreach(dir ammo audio ballistics crafting fx ghosts net player weapons world)
+foreach(dir ammo audio ballistics crafting fx ghosts net player render weapons world)
     file(GLOB_RECURSE GHOST_GAME_SOURCES CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/src/game/${dir}/*.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/game/${dir}/*.h"
@@ -281,14 +295,38 @@ foreach(dir ammo audio ballistics crafting fx ghosts net player weapons world)
     list(APPEND GHOST_SOURCES ${GHOST_GAME_SOURCES})
 endforeach()
 list(APPEND GHOST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/game/events.h")
+set(GHOST_STEAM_SDK "${CMAKE_CURRENT_SOURCE_DIR}/third_party/steamworks_sdk")
+if(WIN32 AND EXISTS "${GHOST_STEAM_SDK}/public/steam/steam_api.h" AND EXISTS "${GHOST_STEAM_SDK}/redistributable_bin/win64/steam_api64.lib")
+    message(STATUS "Steamworks SDK found: building with Steam")
+    set(GHOST_WITH_STEAM ON)
+    list(REMOVE_ITEM GHOST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/engine/net/steam_none.cpp")
+else()
+    message(STATUS "No Steamworks SDK in third_party/steamworks_sdk: building without Steam")
+    set(GHOST_WITH_STEAM OFF)
+    list(REMOVE_ITEM GHOST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/engine/net/steam.cpp")
+endif()
+if(GHOST_EMBED_ASSETS)
+    list(REMOVE_ITEM GHOST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/engine/assets/embedded_assets_none.cpp")
+else()
+    list(REMOVE_ITEM GHOST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/engine/assets/embedded_assets_pack.cpp")
+endif()
 
 add_library(ghost STATIC ${GHOST_SOURCES})
 target_include_directories(ghost PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_definitions(ghost PUBLIC GHOST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+if(GHOST_EMBED_ASSETS)
+    target_compile_definitions(ghost PUBLIC GHOST_ASSET_DIR="assets")
+else()
+    target_compile_definitions(ghost PUBLIC GHOST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+endif()
 target_link_libraries(ghost
     PUBLIC anomalous_options anomalous_headers anomalous_graphics anomalous_ghost_deps
 )
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${GHOST_SOURCES})
+if(GHOST_WITH_STEAM)
+    target_include_directories(ghost SYSTEM PRIVATE "${GHOST_STEAM_SDK}/public")
+    target_link_libraries(ghost PUBLIC "${GHOST_STEAM_SDK}/redistributable_bin/win64/steam_api64.lib")
+    file(WRITE "${CMAKE_BINARY_DIR}/steam_appid.txt" "480")
+endif()
 
 add_library(anomalous_core STATIC
     ${ANOMALOUS_CORE_SOURCES}
@@ -314,6 +352,10 @@ add_executable(anomalous
     src/app/game.cpp
     src/app/main.cpp
     src/app/player_bodies.cpp
+    src/app/play_view.cpp
+    src/app/play_fx.cpp
+    src/app/game_hud.cpp
+    src/app/play_view.h
     src/app/player_bodies.h
 )
 
@@ -322,6 +364,35 @@ target_link_libraries(anomalous PRIVATE anomalous_core)
 set_target_properties(anomalous PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 )
+
+if(GHOST_EMBED_ASSETS)
+    add_executable(embed_assets tools/embed_assets.cpp)
+    target_include_directories(embed_assets PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_features(embed_assets PRIVATE cxx_std_20)
+    file(GLOB_RECURSE GHOST_ASSET_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/*")
+    set(GHOST_ASSET_PACK "${CMAKE_CURRENT_BINARY_DIR}/assets.pak")
+    set(GHOST_ASSET_RC "${CMAKE_CURRENT_BINARY_DIR}/assets.rc")
+    add_custom_command(
+        OUTPUT ${GHOST_ASSET_PACK} ${GHOST_ASSET_RC}
+        COMMAND embed_assets "${CMAKE_CURRENT_SOURCE_DIR}/assets" ${GHOST_ASSET_PACK} ${GHOST_ASSET_RC}
+        DEPENDS embed_assets ${GHOST_ASSET_FILES}
+        COMMENT "Packing assets into the executable"
+        VERBATIM)
+    target_sources(anomalous PRIVATE ${GHOST_ASSET_RC})
+    set_source_files_properties(${GHOST_ASSET_RC} PROPERTIES OBJECT_DEPENDS ${GHOST_ASSET_PACK})
+endif()
+
+if(GHOST_WITH_STEAM)
+    file(COPY "${GHOST_STEAM_SDK}/redistributable_bin/win64/steam_api64.dll" "${CMAKE_BINARY_DIR}/steam_appid.txt"
+         DESTINATION "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+endif()
+
+add_custom_target(dist
+    COMMAND ${CMAKE_COMMAND} -DBIN_DIR=$<TARGET_FILE_DIR:anomalous> -DDIST_DIR=${CMAKE_CURRENT_SOURCE_DIR}/dist
+            -DEXE=$<TARGET_FILE_NAME:anomalous> -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/dist.cmake
+    DEPENDS anomalous
+    COMMENT "Gathering dist/"
+    VERBATIM)
 
 enable_testing()
 add_subdirectory(tests)

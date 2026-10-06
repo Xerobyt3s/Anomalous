@@ -7,8 +7,6 @@
 
 namespace ghost::game {
 namespace {
-constexpr glm::vec3 kUp{0.0f, 1.0f, 0.0f};
-constexpr float kGravity = 9.81f;
 constexpr float kPickupReach = 1.95f;
 constexpr float kViewCone = 0.5f;
 
@@ -19,7 +17,7 @@ void enter(Ghost& ghost, GhostState state) {
 
 glm::vec3 chestOf(const GhostQuarry& quarry) { return glm::mix(quarry.feet, quarry.eye, 0.6f); }
 
-glm::vec3 flat(const glm::vec3& v) { return {v.x, 0.0f, v.z}; }
+glm::vec3 flat(const glm::vec3& v, const glm::vec3& up) { return across(v, up); }
 
 glm::vec3 normalizeOr(const glm::vec3& v, const glm::vec3& fallback) {
     const float length = glm::length(v);
@@ -54,6 +52,7 @@ glm::vec3 stride(const glm::vec3& moved, float speed, float dt) {
 void crawl(Ghost& ghost, const MimicParams& p, const GhostContext& context, const glm::vec3& goal, float speed, float dt) {
     const glm::vec3 start = ghost.position;
     const glm::vec3 n = ghost.surfaceNormal;
+    const glm::vec3 up = ghost.up;
     const float r = p.bodyRadius;
     const glm::vec3 to = goal - ghost.position;
     const glm::vec3 along = to - n * glm::dot(to, n);
@@ -81,7 +80,7 @@ void crawl(Ghost& ghost, const MimicParams& p, const GhostContext& context, cons
 
     if (const auto hit = castSurface(context, ghost.position, ghost.position + m * (step + r))) {
         if (glm::dot(hit->normal, n) < 0.9f) {
-            if (hit->normal.y < 0.5f && n.y > 0.5f) {
+            if (glm::dot(hit->normal, up) < 0.5f && glm::dot(n, up) > 0.5f) {
                 ghost.climb = 1;
             }
             stick(ghost, *hit, r);
@@ -95,7 +94,7 @@ void crawl(Ghost& ghost, const MimicParams& p, const GhostContext& context, cons
     } else {
         const glm::vec3 probe = ghost.position - n * (r + 0.3f);
         if (const auto under = castSurface(context, probe, probe - m * (r + 0.6f))) {
-            if (under->normal.y < 0.5f && n.y > 0.5f) {
+            if (glm::dot(under->normal, up) < 0.5f && glm::dot(n, up) > 0.5f) {
                 ghost.climb = -1;
             }
             stick(ghost, *under, r);
@@ -109,10 +108,10 @@ void crawl(Ghost& ghost, const MimicParams& p, const GhostContext& context, cons
 }
 
 void fly(Ghost& ghost, const MimicParams& p, const GhostContext& context, float dt) {
-    ghost.velocity.y -= kGravity * dt;
+    ghost.velocity += ghostGravity(context, ghost.position) * dt;
     const glm::vec3 next = ghost.position + ghost.velocity * dt;
     const float speed = glm::length(ghost.velocity);
-    const glm::vec3 ahead = speed > 1e-4f ? ghost.velocity / speed : -kUp;
+    const glm::vec3 ahead = speed > 1e-4f ? ghost.velocity / speed : -ghost.up;
     if (const auto hit = castSurface(context, ghost.position, next + ahead * p.bodyRadius)) {
         stick(ghost, *hit, p.bodyRadius);
         ghost.climb = 1;
@@ -122,16 +121,16 @@ void fly(Ghost& ghost, const MimicParams& p, const GhostContext& context, float 
     ghost.position = next;
 }
 
-std::optional<GhostSurfaceHit> wallNear(const GhostContext& context, const glm::vec3& around, float reach) {
+std::optional<GhostSurfaceHit> wallNear(const GhostContext& context, const glm::vec3& around, float reach, const glm::vec3& up) {
     std::optional<GhostSurfaceHit> best;
     float bestDistance = 1e9f;
-    const glm::vec3 from = around + kUp * 1.0f;
+    const glm::vec3 from = around + up * 1.0f;
     for (int k = 0; k < 8; ++k) {
         const float angle = static_cast<float>(k) * 0.7853982f;
-        const glm::vec3 direction{std::cos(angle), 0.0f, std::sin(angle)};
+        const glm::vec3 direction = ringAround(up, angle);
         if (const auto hit = castSurface(context, from, from + direction * reach)) {
             const float distance = glm::distance(hit->point, from);
-            if (std::abs(hit->normal.y) < 0.3f && distance < bestDistance) {
+            if (std::abs(glm::dot(hit->normal, up)) < 0.3f && distance < bestDistance) {
                 best = hit;
                 bestDistance = distance;
             }
@@ -140,9 +139,9 @@ std::optional<GhostSurfaceHit> wallNear(const GhostContext& context, const glm::
     return best;
 }
 
-glm::vec3 onFloor(const GhostContext& context, const glm::vec3& at, float radius) {
-    if (const auto hit = castSurface(context, at + kUp * 1.5f, at - kUp * 6.0f)) {
-        return hit->point + kUp * radius;
+glm::vec3 onFloor(const GhostContext& context, const glm::vec3& at, float radius, const glm::vec3& up) {
+    if (const auto hit = castSurface(context, at + up * 1.5f, at - up * 6.0f)) {
+        return hit->point + up * radius;
     }
     return at;
 }
@@ -153,27 +152,28 @@ float rest(const MimicParams& p, GhostAccess& access) { return glm::mix(p.pauseM
 glm::vec3 pickSpot(const Ghost& ghost, const MimicParams& p, const GhostContext& context, const GhostQuarry& prey,
                    GhostAccess& access) {
     constexpr int kSpots = 16;
-    const glm::vec3 view = normalizeOr(flat(prey.viewDirection), glm::vec3(0.0f, 0.0f, -1.0f));
+    const glm::vec3 up = prey.up;
+    const glm::vec3 view = normalizeOr(flat(prey.viewDirection, up), glm::vec3(0.0f, 0.0f, -1.0f));
     const float turn = access.random01() * glm::two_pi<float>();
     glm::vec3 best = ghost.position;
     float bestScore = -1e9f;
     for (int k = 0; k < kSpots; ++k) {
         const float angle = turn + static_cast<float>(k) * glm::two_pi<float>() / static_cast<float>(kSpots);
-        const glm::vec3 out{std::cos(angle), 0.0f, std::sin(angle)};
+        const glm::vec3 out = ringAround(up, angle);
         const float radius = glm::mix(p.spotMin, p.spotMax, access.random01());
-        glm::vec3 spot = onFloor(context, prey.feet + out * radius, p.bodyRadius);
-        if (blocked(context, spot, spot + kUp * 0.5f)) {
+        glm::vec3 spot = onFloor(context, prey.feet + out * radius, p.bodyRadius, up);
+        if (blocked(context, spot, spot + up * 0.5f)) {
             continue;
         }
         float score = 0.0f;
-        const bool hidden = blocked(context, prey.eye, spot + kUp * 0.2f);
+        const bool hidden = blocked(context, prey.eye, spot + up * 0.2f);
         score += hidden ? 3.0f : 0.0f;
         score += 2.0f * std::max(0.0f, -glm::dot(out, view));
 
-        if (const auto wall = wallNear(context, spot - kUp * p.bodyRadius, 1.2f)) {
-            if (glm::dot(wall->normal, flat(prey.feet - wall->point)) < 0.0f) {
+        if (const auto wall = wallNear(context, spot - up * p.bodyRadius, 1.2f, up)) {
+            if (glm::dot(wall->normal, flat(prey.feet - wall->point, up)) < 0.0f) {
                 score += 2.5f;
-                spot = glm::vec3(wall->point.x, spot.y, wall->point.z) + wall->normal * 0.05f;
+                spot = wall->point + up * heightOf(spot - wall->point, up) + wall->normal * 0.05f;
             }
         }
         const float distance = glm::distance(ghost.position, spot);
@@ -191,15 +191,16 @@ glm::vec3 pickSpot(const Ghost& ghost, const MimicParams& p, const GhostContext&
 }
 
 glm::vec3 pickRefuge(const Ghost& ghost, const MimicParams& p, const GhostContext& context, GhostAccess& access) {
-    const glm::vec3 from = ghost.lastKnown + kUp * 1.6f;
-    const glm::vec3 away = normalizeOr(flat(ghost.position - ghost.lastKnown), glm::vec3(1.0f, 0.0f, 0.0f));
-    glm::vec3 best = onFloor(context, ghost.position + away * p.fleeMin, p.bodyRadius);
+    const glm::vec3 up = ghost.up;
+    const glm::vec3 from = ghost.lastKnown + up * 1.6f;
+    const glm::vec3 away = normalizeOr(flat(ghost.position - ghost.lastKnown, up), glm::vec3(1.0f, 0.0f, 0.0f));
+    glm::vec3 best = onFloor(context, ghost.position + away * p.fleeMin, p.bodyRadius, up);
     float bestScore = -1e9f;
     for (int k = 0; k < 12; ++k) {
         const float angle = static_cast<float>(k) * glm::two_pi<float>() / 12.0f + access.random01() * 0.4f;
-        const glm::vec3 out{std::cos(angle), 0.0f, std::sin(angle)};
-        const glm::vec3 spot = onFloor(context, ghost.position + out * glm::mix(p.fleeMin, p.fleeMax, access.random01()), p.bodyRadius);
-        if (blocked(context, spot, spot + kUp * 0.5f)) {
+        const glm::vec3 out = ringAround(up, angle);
+        const glm::vec3 spot = onFloor(context, ghost.position + out * glm::mix(p.fleeMin, p.fleeMax, access.random01()), p.bodyRadius, up);
+        if (blocked(context, spot, spot + up * 0.5f)) {
             continue;
         }
         const float score = (blocked(context, from, spot) ? 4.0f : 0.0f) + 2.0f * glm::dot(out, away) +
@@ -212,12 +213,15 @@ glm::vec3 pickRefuge(const Ghost& ghost, const MimicParams& p, const GhostContex
     return best;
 }
 
-void leapAt(Ghost& ghost, const MimicParams& p, const glm::vec3& target) {
+void leapAt(Ghost& ghost, const MimicParams& p, const GhostContext& context, const glm::vec3& target) {
+    const glm::vec3 up = ghost.up;
+    const float gravity = std::max(glm::length(ghostGravity(context, ghost.position)), 0.1f);
     const glm::vec3 d = target - ghost.position;
-    const glm::vec3 across = flat(d);
+    const glm::vec3 sideways = flat(d, up);
+    const float rise = heightOf(d, up);
 
-    const float time = std::max({glm::length(across) / p.leapSpeed, std::sqrt(2.0f * std::max(-d.y, 0.0f) / kGravity), 0.2f});
-    ghost.velocity = across / time + kUp * (d.y / time + 0.5f * kGravity * time);
+    const float time = std::max({glm::length(sideways) / p.leapSpeed, std::sqrt(2.0f * std::max(-rise, 0.0f) / gravity), 0.2f});
+    ghost.velocity = sideways / time + up * (rise / time + 0.5f * gravity * time);
     ghost.attached = false;
     ghost.leapHit = false;
     enter(ghost, GhostState::Leap);
@@ -233,6 +237,7 @@ void startHunt(Ghost& ghost, const MimicParams& p, const GhostContext& context, 
 
 void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, float dt, GhostAccess& access) {
     const MimicParams& p = def.mimic;
+    const glm::vec3 up = ghost.up;
 
     bool known = false;
     if (ghost.target >= 0 && ghost.target < static_cast<int>(context.players.size())) {
@@ -253,7 +258,7 @@ void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, f
     if (stalking && !prey && ghost.attached) {
         enter(ghost, GhostState::Flee);
         ghost.goal = pickRefuge(ghost, p, context, access);
-        if (ghost.surfaceNormal.y < 0.5f) {
+        if (glm::dot(ghost.surfaceNormal, up) < 0.5f) {
             ghost.attached = false;
             ghost.velocity = ghost.surfaceNormal * 1.5f;
         }
@@ -263,7 +268,7 @@ void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, f
         ghost.awayTime += dt;
         const glm::vec3 chest = chestOf(*prey);
         const float distance = glm::distance(ghost.position, chest);
-        const bool climbing = ghost.surfaceNormal.y < 0.5f;
+        const bool climbing = glm::dot(ghost.surfaceNormal, up) < 0.5f;
 
         if (ghost.cooldown <= 0.0f && distance < (climbing ? std::min(p.thrashRange, 1.0f) : p.thrashRange)) {
             enter(ghost, GhostState::Windup);
@@ -272,14 +277,14 @@ void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, f
             return;
         }
 
-        const float across = glm::length(flat(ghost.position - prey->feet));
-        const bool above = ghost.position.y > prey->feet.y + 1.3f;
+        const float across = glm::length(flat(ghost.position - prey->feet, up));
+        const bool above = heightOf(ghost.position - prey->feet, up) > 1.3f;
         const bool inRange = above ? across < p.leapMax + 2.0f : (!climbing && across > p.leapMin && across < p.leapMax);
         if (inRange && !blocked(context, ghost.position + ghost.surfaceNormal * 0.1f, chest)) {
             const bool watched = watching(context, *prey, ghost.position);
             const float rate = !watched ? 4.0f : (ghost.awayTime > p.patience ? 3.0f : (above ? 0.8f : 0.0f));
             if (access.random01() < rate * dt) {
-                leapAt(ghost, p, chest);
+                leapAt(ghost, p, context, chest);
                 ghost.awayTime = 0.0f;
                 return;
             }
@@ -289,15 +294,16 @@ void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, f
     switch (ghost.state) {
     case GhostState::Disguised: {
         ghost.velocity = glm::vec3(0.0f);
-        if (const auto ground = castSurface(context, ghost.position, ghost.position - kUp * (p.bodyRadius + 0.05f))) {
+        const glm::vec3 down = ghost.attached && glm::dot(ghost.surfaceNormal, up) > 0.5f ? ghost.surfaceNormal : up;
+        if (const auto ground = castSurface(context, ghost.position, ghost.position - down * (p.bodyRadius + 0.05f))) {
             stick(ghost, *ground, p.bodyRadius);
         } else {
-            ghost.position.y -= 2.5f * dt;
+            ghost.position -= up * (2.5f * dt);
         }
         bool lingering = false;
         bool grabbed = false;
         for (const GhostQuarry& player : context.players) {
-            const float distance = glm::distance(ghost.position, player.feet + kUp * 0.3f);
+            const float distance = glm::distance(ghost.position, player.feet + up * 0.3f);
             lingering = lingering || (!player.hidden && distance < p.revealNear);
             grabbed = grabbed || (player.interacting && distance < kPickupReach);
         }
@@ -323,9 +329,9 @@ void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, f
                 const auto bit = static_cast<std::uint8_t>(1u << i);
                 if ((ghost.struck & bit) == 0 && distanceToSegment(ghost.position, player.feet, player.eye) < p.revealRadius) {
                     ghost.struck = static_cast<std::uint8_t>(ghost.struck | bit);
-                    const glm::vec3 away = normalizeOr(flat(chestOf(player) - ghost.position), glm::vec3(1.0f, 0.0f, 0.0f));
+                    const glm::vec3 away = normalizeOr(flat(chestOf(player) - ghost.position, up), glm::vec3(1.0f, 0.0f, 0.0f));
                     access.events.push_back(PlayerDamaged{p.revealDamage, ghost.position, static_cast<int>(i),
-                                                          (away + kUp * 0.35f) * p.revealShove});
+                                                          (away + up * 0.35f) * p.revealShove});
                 }
             }
         }
@@ -342,9 +348,9 @@ void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, f
             for (std::size_t i = 0; i < context.players.size(); ++i) {
                 const GhostQuarry& player = context.players[i];
                 if (distanceToSegment(ghost.position, player.feet, player.eye) < p.thrashReach) {
-                    const glm::vec3 away = normalizeOr(flat(chestOf(player) - ghost.position), glm::vec3(1.0f, 0.0f, 0.0f));
+                    const glm::vec3 away = normalizeOr(flat(chestOf(player) - ghost.position, up), glm::vec3(1.0f, 0.0f, 0.0f));
                     access.events.push_back(PlayerDamaged{p.thrashDamage, ghost.position, static_cast<int>(i),
-                                                          (away + kUp * 0.35f) * p.thrashShove});
+                                                          (away + up * 0.35f) * p.thrashShove});
                 }
             }
             ghost.cooldown = p.thrashCooldown;
@@ -359,9 +365,9 @@ void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, f
             for (std::size_t i = 0; i < context.players.size(); ++i) {
                 const GhostQuarry& player = context.players[i];
                 if (distanceToSegment(ghost.position, player.feet, player.eye) < p.leapHitRadius) {
-                    const glm::vec3 along = normalizeOr(flat(ghost.velocity), glm::vec3(1.0f, 0.0f, 0.0f));
+                    const glm::vec3 along = normalizeOr(flat(ghost.velocity, up), glm::vec3(1.0f, 0.0f, 0.0f));
                     access.events.push_back(PlayerDamaged{p.leapDamage, ghost.position, static_cast<int>(i),
-                                                          (along + kUp * 0.3f) * p.leapShove});
+                                                          (along + up * 0.3f) * p.leapShove});
                     ghost.leapHit = true;
                     break;
                 }
@@ -391,40 +397,40 @@ void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, f
         }
         ghost.timer -= dt;
         const glm::vec3 offset = ghost.position - prey->feet;
-        const float across = glm::length(flat(offset));
-        const bool high = ghost.position.y > prey->feet.y + p.climbHeight * 0.8f;
+        const float across = glm::length(flat(offset, up));
+        const bool high = heightOf(ghost.position - prey->feet, up) > p.climbHeight * 0.8f;
         const float far = p.spotMax + 3.0f;
-        if (ghost.surfaceNormal.y < 0.5f) {
+        if (glm::dot(ghost.surfaceNormal, up) < 0.5f) {
             if (across > far || (high && ghost.awayTime > p.patience && across > p.leapMax + 2.0f)) {
                 ghost.attached = false;
                 ghost.velocity = ghost.surfaceNormal * 1.5f;
                 break;
             }
             if (ghost.climb < 0) {
-                crawl(ghost, p, context, ghost.position - kUp * 2.0f, p.burstSpeed, dt);
+                crawl(ghost, p, context, ghost.position - up * 2.0f, p.burstSpeed, dt);
                 break;
             }
 
             if (!high) {
-                crawl(ghost, p, context, ghost.position + kUp * 2.0f, p.burstSpeed, dt);
+                crawl(ghost, p, context, ghost.position + up * 2.0f, p.burstSpeed, dt);
                 break;
             }
-            const bool facingThem = glm::dot(ghost.surfaceNormal, flat(prey->feet - ghost.position)) > 0.0f;
+            const bool facingThem = glm::dot(ghost.surfaceNormal, flat(prey->feet - ghost.position, up)) > 0.0f;
             if (!facingThem) {
-                crawl(ghost, p, context, ghost.position + kUp * 2.0f + normalizeOr(flat(-offset), kUp) * 0.5f, p.burstSpeed, dt);
+                crawl(ghost, p, context, ghost.position + up * 2.0f + normalizeOr(flat(-offset, up), up) * 0.5f, p.burstSpeed, dt);
                 break;
             }
 
             if (across < p.dropRange) {
-                leapAt(ghost, p, chestOf(*prey));
+                leapAt(ghost, p, context, chestOf(*prey));
                 ghost.awayTime = 0.0f;
                 break;
             }
-            crawl(ghost, p, context, prey->feet + kUp * p.climbHeight, p.burstSpeed, dt);
+            crawl(ghost, p, context, prey->feet + up * p.climbHeight, p.burstSpeed, dt);
             break;
         }
-        if (ghost.position.y > prey->feet.y + 1.3f) {
-            if (across > far || blocked(context, ghost.position + kUp * 0.1f, chestOf(*prey))) {
+        if (heightOf(ghost.position - prey->feet, up) > 1.3f) {
+            if (across > far || blocked(context, ghost.position + up * 0.1f, chestOf(*prey))) {
                 crawl(ghost, p, context, prey->feet, p.burstSpeed, dt);
             } else {
                 ghost.velocity = glm::vec3(0.0f);
@@ -447,24 +453,24 @@ void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, f
         }
         glm::vec3 waypoint = committed ? prey->feet : ghost.goal;
         if (!committed) {
-            const glm::vec3 a = flat(ghost.position);
-            const glm::vec3 b = flat(waypoint);
-            const glm::vec3 c = flat(prey->feet);
+            const glm::vec3 a = flat(ghost.position, up);
+            const glm::vec3 b = flat(waypoint, up);
+            const glm::vec3 c = flat(prey->feet, up);
             const glm::vec3 ab = b - a;
             const float t = glm::clamp(glm::dot(c - a, ab) / std::max(glm::dot(ab, ab), 1e-4f), 0.0f, 1.0f);
             const glm::vec3 nearest = a + ab * t;
             if (t > 0.05f && t < 0.95f && glm::distance(nearest, c) < 2.5f) {
-                const glm::vec3 wide = normalizeOr(nearest - c, glm::cross(normalizeOr(ab, glm::vec3(1.0f, 0.0f, 0.0f)), kUp));
-                waypoint = glm::vec3(c.x, ghost.position.y, c.z) + wide * 3.2f;
+                const glm::vec3 wide = normalizeOr(nearest - c, glm::cross(normalizeOr(ab, glm::vec3(1.0f, 0.0f, 0.0f)), up));
+                waypoint = c + up * heightOf(ghost.position, up) + wide * 3.2f;
             }
         }
 
         const glm::vec3 fromEye = ghost.position - prey->eye;
-        if (glm::dot(normalizeOr(fromEye, kUp), prey->viewDirection) > 0.97f && !blocked(context, prey->eye, ghost.position)) {
-            const glm::vec3 side = normalizeOr(glm::cross(flat(waypoint - ghost.position), kUp), glm::vec3(1.0f, 0.0f, 0.0f));
+        if (glm::dot(normalizeOr(fromEye, up), prey->viewDirection) > 0.97f && !blocked(context, prey->eye, ghost.position)) {
+            const glm::vec3 side = normalizeOr(glm::cross(flat(waypoint - ghost.position, up), up), glm::vec3(1.0f, 0.0f, 0.0f));
             waypoint += side * (std::sin(ghost.age * 9.0f + ghost.seed) * 1.6f);
         }
-        crawl(ghost, p, context, glm::vec3(waypoint.x, ghost.position.y, waypoint.z), p.burstSpeed, dt);
+        crawl(ghost, p, context, flat(waypoint, up) + up * heightOf(ghost.position, up), p.burstSpeed, dt);
         break;
     }
     case GhostState::Pause:
@@ -484,7 +490,7 @@ void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, f
             break;
         }
 
-        if (ghost.timer <= 0.0f || (ghost.stateTime > 0.25f && ghost.surfaceNormal.y > 0.5f && watching(context, *prey, ghost.position))) {
+        if (ghost.timer <= 0.0f || (ghost.stateTime > 0.25f && glm::dot(ghost.surfaceNormal, up) > 0.5f && watching(context, *prey, ghost.position))) {
             startHunt(ghost, p, context, prey, access);
         }
         break;
@@ -498,12 +504,12 @@ void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, f
             startHunt(ghost, p, context, prey, access);
             break;
         }
-        if (ghost.surfaceNormal.y < 0.5f) {
+        if (glm::dot(ghost.surfaceNormal, up) < 0.5f) {
             ghost.attached = false;
             ghost.velocity = ghost.surfaceNormal * 1.5f;
             break;
         }
-        const bool there = glm::distance(flat(ghost.position), flat(ghost.goal)) < 0.5f;
+        const bool there = glm::distance(flat(ghost.position, up), flat(ghost.goal, up)) < 0.5f;
         if (there || ghost.stateTime > 5.0f) {
             enter(ghost, GhostState::Conceal);
             ghost.velocity = glm::vec3(0.0f);
@@ -511,7 +517,7 @@ void tickMimic(Ghost& ghost, const GhostDef& def, const GhostContext& context, f
             access.events.push_back(MimicConcealed{ghost.id, ghost.position});
             break;
         }
-        crawl(ghost, p, context, glm::vec3(ghost.goal.x, ghost.position.y, ghost.goal.z), p.burstSpeed, dt);
+        crawl(ghost, p, context, flat(ghost.goal, up) + up * heightOf(ghost.position, up), p.burstSpeed, dt);
         break;
     }
     case GhostState::Conceal:

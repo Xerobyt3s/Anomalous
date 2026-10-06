@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace anom {
@@ -30,6 +31,8 @@ struct DirEntry {
 };
 
 FileData read_entire_file(Arena& arena, std::string_view path);
+bool asset_relative(std::string_view path, std::string& out_relative);
+std::string resolve(std::string_view path);
 bool exists(std::string_view path);
 bool make_dir(std::string_view path);
 i64 file_mtime(std::string_view path);

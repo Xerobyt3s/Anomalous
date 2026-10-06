@@ -14,10 +14,14 @@ constexpr float kGirth = 0.07f;
 }
 
 std::vector<Strands::Point> necromiteWorm(const glm::vec3& ground, const glm::vec3& heading, WormPose pose, float progress, float time,
-                                          float seed, const glm::vec3& into) {
-    const glm::vec3 up{0.0f, 1.0f, 0.0f};
-    glm::vec3 ahead{heading.x, 0.0f, heading.z};
-    ahead = glm::length(ahead) > 1e-4f ? glm::normalize(ahead) : glm::vec3(0.0f, 0.0f, -1.0f);
+                                          float seed, const glm::vec3& into, const glm::vec3& upward) {
+    const glm::vec3 up = glm::length(upward) > 1e-4f ? glm::normalize(upward) : glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3 ahead = heading - up * glm::dot(heading, up);
+    if (glm::length(ahead) <= 1e-4f) {
+        const glm::vec3 helper = std::abs(up.z) < 0.9f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+        ahead = -glm::cross(glm::normalize(glm::cross(up, helper)), up);
+    }
+    ahead = glm::normalize(ahead);
     const glm::vec3 side = glm::cross(ahead, up);
     const float t = glm::clamp(progress, 0.0f, 1.0f);
 

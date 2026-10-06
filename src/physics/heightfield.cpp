@@ -124,6 +124,24 @@ f32 Heightfield::sample(f32 x, f32 z) const
     return h00 + (h11 - h01) * u + (h01 - h00) * v;
 }
 
+f32 Heightfield::sample_from(const f32* heights, f32 x, f32 z) const
+{
+    u32 ix = 0;
+    u32 iz = 0;
+    f32 u = 0.0f;
+    f32 v = 0.0f;
+    locate(x, z, ix, iz, u, v);
+    const auto at = [&](u32 cx, u32 cz) { return heights[static_cast<u64>(cz) * size_x_ + cx]; };
+    const f32 h00 = at(ix, iz);
+    const f32 h10 = at(ix + 1, iz);
+    const f32 h01 = at(ix, iz + 1);
+    const f32 h11 = at(ix + 1, iz + 1);
+    if (u >= v) {
+        return h00 + (h10 - h00) * u + (h11 - h10) * v;
+    }
+    return h00 + (h11 - h01) * u + (h01 - h00) * v;
+}
+
 void Heightfield::cell_triangles(u32 ix, u32 iz, Vec3 out[6]) const
 {
     const f32 x0 = origin_.x + static_cast<f32>(ix) * cell_size_;

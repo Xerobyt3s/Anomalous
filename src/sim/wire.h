@@ -7,6 +7,7 @@
 #include "math/vmath.h"
 #include "player/interact.h"
 #include "player/player.h"
+#include "sim/gameplay.h"
 #include "sim/player_slot.h"
 #include "vehicle/vehicle.h"
 #include "world/weather.h"
@@ -25,6 +26,7 @@ struct SlotWire {
     Vec3 color{0.8f, 0.8f, 0.8f};
     Player player;
     Interact interact;
+    ghost::game::MechanismView gun;
 };
 
 struct PickupWire {
@@ -61,6 +63,7 @@ struct WorldSnapshot {
     std::vector<SlotWire> players;
     std::vector<ghost::game::RosterEntry> roster;
     std::vector<PickupWire> pickups;
+    ghost::game::GameplaySnapshot gameplay;
 };
 
 static_assert(std::is_trivially_copyable_v<SlotWire>);

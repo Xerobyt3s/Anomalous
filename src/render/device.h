@@ -19,7 +19,7 @@ class FileWatcher;
 struct Environment {
     Vec3 sun_dir{-0.45f, -0.8f, -0.35f};
     f32 fog_density = 0.0028f;
-    f32 exposure = 1.40f;
+    f32 exposure = 1.10f;
     f32 time_of_day = 0.5f;
 };
 
@@ -97,6 +97,8 @@ public:
     void draw_sky(f32 time);
     void draw_mesh(const GpuMesh* mesh, const Mat4& model);
     void flush_meshes();
+    u32 copy_scene_depth();
+    void draw_island_haze(f32 near_d, f32 far_d, u32 depth_texture);
     void bind_procedural_ground();
     void draw_glass(const GpuMesh* mesh, const Mat4& model, f32 time);
     void draw_rain(f32 intensity, f32 wind, Vec3 cam_vel, f32 time);

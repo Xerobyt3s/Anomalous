@@ -11,26 +11,29 @@ struct ItemDef {
     Vec3 cargo_half;
     f32 cargo_roll;
     Vec3 mesh_center;
+    u32 hands;
 };
 
 constexpr ItemDef kItems[ITEM_KIND_COUNT] = {
-    {"nothing", "nothing", "", 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, {0.0f, 0.0f, 0.0f}},
-    {"battery", "battery", "part_battery", 14.0f, {0.10f, 0.08f, 0.13f}, 0.0f, {0.0f, 0.0f, 0.0f}},
-    {"alternator", "alternator", "part_alternator", 6.0f, {0.09f, 0.09f, 0.09f}, 0.0f, {0.0f, 0.0f, 0.0f}},
-    {"radiator", "radiator", "part_radiator", 9.0f, {0.30f, 0.04f, 0.14f}, -0.5f, {0.0f, 0.0f, 0.0f}},
-    {"tire", "tire", "excel_wheel", 16.0f, {0.28f, 0.09f, 0.28f}, 0.5f, {0.0f, 0.0f, 0.0f}},
-    {"jerry can", "jerrycan", "part_jerrycan", 12.0f, {0.16f, 0.19f, 0.07f}, 0.0f, {0.0f, 0.0f, 0.0f}},
-    {"oil can", "oilcan", "part_oilcan", 5.0f, {0.06f, 0.12f, 0.06f}, 0.0f, {0.0f, 0.0f, 0.0f}},
-    {"terminal", "computer", "part_computer", 11.0f, {0.24f, 0.21f, 0.26f}, 0.0f, {0.0f, 0.0f, 0.0f}},
-    {"whip antenna", "antenna_whip", "antenna_whip", 2.0f, {0.33f, 0.05f, 0.09f}, 0.5f, {0.0f, 0.315f, 0.036f}},
-    {"antenna", "antenna_std", "antenna_std", 4.0f, {0.38f, 0.10f, 0.08f}, 0.5f, {0.0f, 0.37f, 0.01f}},
-    {"array antenna", "antenna_array", "antenna_array", 15.0f, {0.48f, 0.17f, 0.17f}, 0.5f, {0.0f, 0.475f, 0.0f}},
-    {"car key", "key", "part_key", 0.2f, {0.04f, 0.015f, 0.07f}, 0.0f, {0.0f, 0.0f, 0.0f}},
-    {"floppy disk", "floppy", "part_floppy", 0.3f, {0.07f, 0.012f, 0.07f}, 0.0f, {0.0f, 0.0f, 0.0f}},
-    {"camera", "camera", "part_camera", 1.5f, {0.12f, 0.08f, 0.075f}, 0.0f, {0.0f, 0.0f, 0.0f}},
-    {"cable reel", "reel", "part_reel", 6.0f, {0.12f, 0.11f, 0.12f}, 0.0f, {0.0f, 0.0f, 0.0f}},
-    {"cassette", "cassette", "part_cassette", 0.2f, {0.06f, 0.012f, 0.042f}, 0.0f, {0.0f, 0.0f, 0.0f}},
-    {"zippy go boom", "coil", "part_coil", 27.0f, {0.16f, 0.24f, 0.16f}, 0.0f, {0.0f, 0.23f, 0.0f}},
+    {"nothing", "nothing", "", 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0},
+    {"battery", "battery", "part_battery", 14.0f, {0.10f, 0.08f, 0.13f}, 0.0f, {0.0f, 0.0f, 0.0f}, 2},
+    {"alternator", "alternator", "part_alternator", 6.0f, {0.09f, 0.09f, 0.09f}, 0.0f, {0.0f, 0.0f, 0.0f}, 1},
+    {"radiator", "radiator", "part_radiator", 9.0f, {0.30f, 0.04f, 0.14f}, -0.5f, {0.0f, 0.0f, 0.0f}, 2},
+    {"tire", "tire", "excel_wheel", 16.0f, {0.28f, 0.09f, 0.28f}, 0.5f, {0.0f, 0.0f, 0.0f}, 2},
+    {"jerry can", "jerrycan", "part_jerrycan", 12.0f, {0.16f, 0.19f, 0.07f}, 0.0f, {0.0f, 0.0f, 0.0f}, 1},
+    {"oil can", "oilcan", "part_oilcan", 5.0f, {0.06f, 0.12f, 0.06f}, 0.0f, {0.0f, 0.0f, 0.0f}, 1},
+    {"terminal", "computer", "part_computer", 11.0f, {0.24f, 0.21f, 0.26f}, 0.0f, {0.0f, 0.0f, 0.0f}, 2},
+    {"whip antenna", "antenna_whip", "antenna_whip", 2.0f, {0.33f, 0.05f, 0.09f}, 0.5f, {0.0f, 0.315f, 0.036f}, 1},
+    {"antenna", "antenna_std", "antenna_std", 4.0f, {0.38f, 0.10f, 0.08f}, 0.5f, {0.0f, 0.37f, 0.01f}, 1},
+    {"array antenna", "antenna_array", "antenna_array", 15.0f, {0.48f, 0.17f, 0.17f}, 0.5f, {0.0f, 0.475f, 0.0f}, 2},
+    {"car key", "key", "part_key", 0.2f, {0.04f, 0.015f, 0.07f}, 0.0f, {0.0f, 0.0f, 0.0f}, 1},
+    {"floppy disk", "floppy", "part_floppy", 0.3f, {0.07f, 0.012f, 0.07f}, 0.0f, {0.0f, 0.0f, 0.0f}, 1},
+    {"camera", "camera", "part_camera", 1.5f, {0.12f, 0.08f, 0.075f}, 0.0f, {0.0f, 0.0f, 0.0f}, 1},
+    {"cable reel", "reel", "part_reel", 6.0f, {0.12f, 0.11f, 0.12f}, 0.0f, {0.0f, 0.0f, 0.0f}, 1},
+    {"cassette", "cassette", "part_cassette", 0.2f, {0.06f, 0.012f, 0.042f}, 0.0f, {0.0f, 0.0f, 0.0f}, 1},
+    {"zippy go boom", "coil", "part_coil", 27.0f, {0.16f, 0.24f, 0.16f}, 0.0f, {0.0f, 0.23f, 0.0f}, 2},
+    {"material tank", "tank", "part_tank", 9.0f, {0.12f, 0.13f, 0.12f}, 0.0f, {0.0f, 0.0f, 0.0f}, 2},
+    {"printer", "printer", "part_printer", 15.0f, {0.22f, 0.15f, 0.18f}, 0.0f, {0.0f, 0.0f, 0.0f}, 2},
 };
 
 static_assert(sizeof(kItems) / sizeof(kItems[0]) == ITEM_KIND_COUNT);
@@ -43,6 +46,7 @@ std::string_view item_mesh(ItemKind kind) { return kItems[kind].mesh; }
 f32 item_mass(ItemKind kind) { return kItems[kind].mass; }
 Vec3 item_cargo_half(ItemKind kind) { return kItems[kind].cargo_half; }
 Vec3 item_mesh_center(ItemKind kind) { return kItems[kind].mesh_center; }
+u32 item_hold_hands(ItemKind kind) { return kItems[kind].hands; }
 
 ItemKind item_from_id(std::string_view id)
 {
@@ -74,6 +78,8 @@ ItemKind item_for_part(PartKind part)
     case PART_COMPUTER: return ITEM_COMPUTER;
     case PART_ANTENNA: return ITEM_ANTENNA_STD;
     case PART_COIL: return ITEM_COIL;
+    case PART_TANK: return ITEM_TANK;
+    case PART_PRINTER: return ITEM_PRINTER;
     default:
         return part_kind_is_tire(part) ? ITEM_TIRE : ITEM_NONE;
     }

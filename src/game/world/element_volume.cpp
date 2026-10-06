@@ -107,22 +107,34 @@ void ElementVolumes::tick(float dt, const AmmoData& data, EventList& events) {
 
 void ElementVolumes::settle(float dt, const std::function<bool(ElementId)>& settles,
                             const std::function<std::optional<float>(const glm::vec3&)>& groundBelow) {
+    settle(dt, settles, [&](const glm::vec3& at, const glm::vec3&) { return groundBelow(at); },
+           [](const glm::vec3&) { return glm::vec3(0.0f, 1.0f, 0.0f); });
+}
+
+void ElementVolumes::settle(float dt, const std::function<bool(ElementId)>& settles,
+                            const std::function<std::optional<float>(const glm::vec3&, const glm::vec3&)>& groundBelow,
+                            const std::function<glm::vec3(const glm::vec3&)>& upAt) {
     for (ElementVolume& v : m_volumes) {
         if (!settles(v.element)) {
             continue;
         }
-        v.normal = glm::vec3(0.0f, 1.0f, 0.0f);
-        const auto ground = groundBelow(v.center);
+        const glm::vec3 up = upAt(v.center);
+        v.normal = up;
+        const auto ground = groundBelow(v.center, up);
         const float rest = ground ? *ground + kRestHeight : -1e9f;
-        if (v.center.y <= rest + 1e-3f) {
-            v.center.y = rest;
-            v.velocity.y = 0.0f;
+        const float height = glm::dot(v.center, up);
+        float rise = glm::dot(v.velocity, up);
+        const glm::vec3 lateral = v.velocity - up * rise;
+        if (height <= rest + 1e-3f) {
+            v.center += up * (rest - height);
+            rise = 0.0f;
         } else {
-            v.velocity.y = std::max(v.velocity.y - 9.81f * dt, -30.0f);
-            if (v.center.y + v.velocity.y * dt < rest) {
-                v.velocity.y = (rest - v.center.y) / std::max(dt, 1e-4f);
+            rise = std::max(rise - 9.81f * dt, -30.0f);
+            if (height + rise * dt < rest) {
+                rise = (rest - height) / std::max(dt, 1e-4f);
             }
         }
+        v.velocity = lateral + up * rise;
     }
 }
 

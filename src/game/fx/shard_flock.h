@@ -1,6 +1,7 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <array>
 #include <span>
@@ -23,6 +24,7 @@ public:
         glm::vec3 center{0.0f};
         glm::vec3 velocity{0.0f};
         glm::vec3 normal{0.0f, 1.0f, 0.0f};
+        glm::vec3 up{0.0f, 1.0f, 0.0f};
         Form form = Form::Cloud;
         float size = 1.0f;
         float seed = 0.0f;
@@ -76,6 +78,7 @@ private:
     std::vector<Shard> m_shards;
     std::vector<Shard> m_debris;
     glm::vec3 m_forward{0.0f, 0.0f, -1.0f};
+    glm::vec3 m_up{0.0f, 1.0f, 0.0f};
     glm::vec3 m_lastCenter{0.0f};
     float m_time = 0.0f;
     float m_flung = 0.0f;

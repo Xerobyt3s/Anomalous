@@ -31,7 +31,8 @@ void EntityMeshes::bind(AssetCache& assets, const World& world)
         }
         ensure(idx);
         const bool drawable = !e->mesh_name.empty() && e->kind != EntityKind::Trigger && e->kind != EntityKind::Gravity
-                           && e->kind != EntityKind::IslandLink && e->kind != EntityKind::Tree;
+                           && e->kind != EntityKind::IslandLink && e->kind != EntityKind::Tree
+                           && e->kind != EntityKind::GhostSpawn;
         if (!drawable) {
             meshes_[idx] = nullptr;
             names_[idx].assign("");

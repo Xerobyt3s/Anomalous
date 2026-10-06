@@ -19,6 +19,7 @@ public:
     void recompute_extents();
 
     f32 height_at(u32 ix, u32 iz) const;
+    f32 sample_from(const f32* heights, f32 x, f32 z) const;
     f32 sample(f32 x, f32 z) const;
     Vec3 normal(f32 x, f32 z) const;
     void cell_triangles(u32 ix, u32 iz, Vec3 out[6]) const;

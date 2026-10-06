@@ -23,6 +23,7 @@ struct WindVortex {
     glm::vec3 base{0.0f};
     float strength = 1.0f;
     VortexParams params;
+    glm::vec3 axis{0.0f, 1.0f, 0.0f};
 };
 
 float vortexStrength(const VortexParams& params, float age, float lifetime);

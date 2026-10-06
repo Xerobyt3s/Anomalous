@@ -10,6 +10,7 @@ uniform vec3 uCameraPos;
 uniform vec3 uCameraForward;
 uniform vec3 uBoxCenter;
 uniform vec3 uBoxHalf;
+uniform mat3 uBasis;
 uniform sampler2D uSceneDepth;
 uniform vec2 uNF;
 uniform float uSplit;
@@ -50,7 +51,7 @@ vec2 centerline(float h) {
 }
 
 float groundAt(vec2 xz) {
-    vec2 g = ((xz + uBase.xz - uGroundCenter.xz) / max(uGroundSpan, 1e-3) + 0.5) * 6.0;
+    vec2 g = ((xz + (transpose(uBasis) * (uBase - uGroundCenter)).xz) / max(uGroundSpan, 1e-3) + 0.5) * 6.0;
     if (any(lessThan(g, vec2(0.0))) || any(greaterThan(g, vec2(6.0)))) return -1e3;
     ivec2 i = min(ivec2(floor(g)), ivec2(5));
     vec2 f = g - vec2(i);
@@ -127,10 +128,14 @@ float sceneDistance(vec3 rd) {
 void main() {
     vec3 ro = uCameraPos;
     vec3 rd = normalize(vWorld - uCameraPos);
+    mat3 toLocal = transpose(uBasis);
+    vec3 roBox = toLocal * (ro - uBoxCenter);
+    vec3 rdLocal = toLocal * rd;
+    vec3 roBase = toLocal * (ro - uBase);
 
-    vec3 inv = 1.0 / rd;
-    vec3 t0 = (uBoxCenter - uBoxHalf - ro) * inv;
-    vec3 t1 = (uBoxCenter + uBoxHalf - ro) * inv;
+    vec3 inv = 1.0 / rdLocal;
+    vec3 t0 = (-uBoxHalf - roBox) * inv;
+    vec3 t1 = (uBoxHalf - roBox) * inv;
     vec3 tmin = min(t0, t1), tmax = max(t0, t1);
     float tNear = max(max(max(tmin.x, tmin.y), tmin.z), 0.02);
     float tFar = min(min(min(tmax.x, tmax.y), tmax.z), sceneDistance(rd));
@@ -145,7 +150,7 @@ void main() {
     vec3 color = vec3(0.0);
     float transmittance = 1.0;
     for (int i = 0; i < steps && t < tFar; ++i) {
-        vec2 f = field(ro + rd * t - uBase);
+        vec2 f = field(roBase + rdLocal * t);
         if (f.x > 0.003) {
             float a = 1.0 - exp(-f.x * uDensity * stepLen);
             color += transmittance * a * fireColor(f.y);

@@ -13,7 +13,7 @@ public:
     static constexpr int kPoints = 8;
     static constexpr float kLength = 1.1f;
 
-    enum class Mode { Hidden, Reveal, Walk, Idle, Air, Lash };
+    enum class Mode { Hidden, Reveal, Walk, Idle, Air, Lash, Tumble };
 
     struct Input {
         glm::vec3 center{0.0f};

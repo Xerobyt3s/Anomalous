@@ -55,6 +55,16 @@
       }
     },
     {
+      "name": "ninja-shipping",
+      "displayName": "Ninja Shipping",
+      "description": "Release with every asset packed into the executable (GHOST_EMBED_ASSETS). Build the dist target for dist/.",
+      "inherits": "ninja-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "GHOST_EMBED_ASSETS": "ON"
+      }
+    },
+    {
       "name": "ninja-relwithdebinfo",
       "displayName": "Ninja RelWithDebInfo",
       "description": "Optimised with debug info - the configuration to profile against.",
@@ -86,6 +96,10 @@
     {
       "name": "ninja-relwithdebinfo",
       "configurePreset": "ninja-relwithdebinfo"
+    },
+    {
+      "name": "ninja-shipping",
+      "configurePreset": "ninja-shipping"
     }
   ],
   "testPresets": [

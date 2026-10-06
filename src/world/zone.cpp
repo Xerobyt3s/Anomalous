@@ -5,6 +5,7 @@
 #include "core/arena.h"
 #include "core/config.h"
 #include "core/log.h"
+#include "game/ballistics/surface.h"
 #include "physics/gravity_field.h"
 #include "world/islands/island_field.h"
 #include "physics/heightfield.h"
@@ -15,6 +16,7 @@
 #include "world/terrain.h"
 
 #include <charconv>
+#include <algorithm>
 #include <cstdio>
 
 namespace anom {
@@ -170,7 +172,7 @@ void spawn_entity(World& world, PhysWorld& phys, Arena& scratch, const Terrain& 
     const f32 roll_deg = t.next_f32(0.0f);
 
     const EntityKind kind = kind_from_str(kind_str);
-    const Vec3 pos{x, terrain.heightfield().sample(x, z) + yoff, z};
+    const Vec3 pos{x, terrain.base_height(x, z) + yoff, z};
     const Quat rot = quat_from_euler(yaw_deg * kDegToRad, pitch_deg * kDegToRad,
                                      roll_deg * kDegToRad);
 
@@ -206,7 +208,7 @@ void spawn_trigger(World& world, const Terrain& terrain, std::string_view line)
     }
     const f32 param = t.next_f32(0.0f);
 
-    const Vec3 pos{x, terrain.heightfield().sample(x, z) + yoff, z};
+    const Vec3 pos{x, terrain.base_height(x, z) + yoff, z};
     const Quat rot = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, yaw_deg * kDegToRad);
     const EntityHandle handle = world.spawn(EntityKind::Trigger, pos, rot, 1.0f, "",
                                             kEntityFlagInteractable);
@@ -242,7 +244,7 @@ void spawn_gravity(World& world, const Terrain& terrain, std::string_view line)
     const i32 mode = t.next_i32(0);
     const f32 sector_deg = t.next_f32(90.0f);
 
-    const Vec3 pos{x, terrain.heightfield().sample(x, z) + yoff, z};
+    const Vec3 pos{x, terrain.base_height(x, z) + yoff, z};
     const Quat rot = quat_from_euler(yaw_deg * kDegToRad, pitch_deg * kDegToRad,
                                      roll_deg * kDegToRad);
     const EntityHandle handle = world.spawn(EntityKind::Gravity, pos, rot, falloff, "", 0);
@@ -252,6 +254,98 @@ void spawn_gravity(World& world, const Terrain& terrain, std::string_view line)
         e->aux_kind = (static_cast<u32>(shape) & 0xFu) | (static_cast<u32>(mode) << 4);
         e->aux_value = strength;
         e->aux_data = static_cast<u32>(f_clamp(sector_deg, 1.0f, 180.0f) + 0.5f);
+    }
+}
+
+void add_box_collision(const Entity& e, PhysWorld& phys)
+{
+    if (e.kind == EntityKind::Prop) {
+        phys.add_static_box(e.pos, e.half, static_cast<u8>(e.aux_kind));
+    } else if (e.kind == EntityKind::Bench) {
+        phys.add_static_box(e.pos - Vec3{0.0f, kBenchHalf.y, 0.0f}, kBenchHalf, surface_from_name("wood"));
+    }
+}
+
+u32 pack_rgb(f32 r, f32 g, f32 b)
+{
+    const auto byte = [](f32 v) { return static_cast<u32>(f_clamp01(v) * 255.0f + 0.5f); };
+    return (byte(r) << 16) | (byte(g) << 8) | byte(b);
+}
+
+void spawn_prop(World& world, PhysWorld& phys, std::string_view line)
+{
+    Tokens t(line);
+    const f32 v[9] = {t.next_f32(), t.next_f32(), t.next_f32(), t.next_f32(), t.next_f32(),
+                      t.next_f32(), t.next_f32(), t.next_f32(), t.next_f32()};
+    const std::string_view surface = t.next();
+    if (t.consumed() < 9) {
+        log_warn("zone: malformed prop line: %.*s", static_cast<int>(line.size()), line.data());
+        return;
+    }
+    const EntityHandle handle = world.spawn(EntityKind::Prop, Vec3{v[0], v[1], v[2]}, quat_identity(), 1.0f, "", 0);
+    if (Entity* e = world.entity(handle)) {
+        e->half = Vec3{v[3], v[4], v[5]};
+        e->aux_data = pack_rgb(v[6], v[7], v[8]);
+        e->aux_kind = surface_from_name(surface);
+        add_box_collision(*e, phys);
+    }
+}
+
+void spawn_spawn_point(World& world, std::string_view line, u32 order)
+{
+    Tokens t(line);
+    const f32 x = t.next_f32();
+    const f32 y = t.next_f32();
+    const f32 z = t.next_f32();
+    const f32 yaw_deg = t.next_f32();
+    if (t.consumed() < 4) {
+        log_warn("zone: malformed spawn_point line: %.*s", static_cast<int>(line.size()), line.data());
+        return;
+    }
+    const Quat rot = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, -yaw_deg * kDegToRad);
+    const EntityHandle handle = world.spawn(EntityKind::SpawnPoint, Vec3{x, y, z}, rot, 1.0f, "", 0);
+    if (Entity* e = world.entity(handle)) {
+        e->half = kSpawnPointHalf;
+        e->aux_kind = order;
+        e->aux_value = yaw_deg;
+    }
+}
+
+void spawn_bench(World& world, PhysWorld& phys, std::string_view line)
+{
+    Tokens t(line);
+    const f32 x = t.next_f32();
+    const f32 y = t.next_f32();
+    const f32 z = t.next_f32();
+    if (t.consumed() < 3) {
+        log_warn("zone: malformed bench line: %.*s", static_cast<int>(line.size()), line.data());
+        return;
+    }
+    const EntityHandle handle = world.spawn(EntityKind::Bench, Vec3{x, y, z}, quat_identity(), 1.0f, "", 0);
+    if (Entity* e = world.entity(handle)) {
+        e->half = kBenchHalf;
+        add_box_collision(*e, phys);
+    }
+}
+
+void spawn_ghost_spawn(World& world, const Terrain& terrain, std::string_view line)
+{
+    Tokens t(line);
+    const std::string_view type = t.next();
+    const f32 x = t.next_f32();
+    const f32 yoff = t.next_f32();
+    const f32 z = t.next_f32();
+    if (t.consumed() < 4 || type.empty()) {
+        log_warn("zone: malformed ghost line: %.*s", static_cast<int>(line.size()), line.data());
+        return;
+    }
+    const i32 count = t.next_i32(1);
+    const Vec3 pos{x, terrain.base_height(x, z) + yoff, z};
+    const EntityHandle handle = world.spawn(EntityKind::GhostSpawn, pos, quat_identity(), 1.0f, "", 0);
+    if (Entity* e = world.entity(handle)) {
+        e->mesh_name.assign(type);
+        e->half = kGhostSpawnHalf;
+        e->aux_kind = static_cast<u32>(std::clamp(count, 1, kZoneMaxGhostsPerSpawn));
     }
 }
 
@@ -365,6 +459,7 @@ u32 spawn_from_config(World& world, PhysWorld& phys, Arena& scratch, const Terra
     }
 
     u32 count = 0;
+    u32 spawn_points = 0;
     for (const Config::Entry& entry : cfg.entries()) {
         if (entry.key == "entities.spawn") {
             spawn_entity(world, phys, scratch, terrain, entry.value);
@@ -380,6 +475,18 @@ u32 spawn_from_config(World& world, PhysWorld& phys, Arena& scratch, const Terra
             count++;
         } else if (entry.key == "entities.gravity") {
             spawn_gravity(world, terrain, entry.value);
+            count++;
+        } else if (entry.key == "entities.ghost") {
+            spawn_ghost_spawn(world, terrain, entry.value);
+            count++;
+        } else if (entry.key == "entities.prop") {
+            spawn_prop(world, phys, entry.value);
+            count++;
+        } else if (entry.key == "entities.spawn_point") {
+            spawn_spawn_point(world, entry.value, spawn_points++);
+            count++;
+        } else if (entry.key == "entities.bench") {
+            spawn_bench(world, phys, entry.value);
             count++;
         } else if (entry.key == "entities.tower") {
             spawn_tower(world, phys, scratch, terrain, entry.value, out_spawn);
@@ -422,7 +529,8 @@ std::string_view line_key(std::string_view line)
 
 bool is_entity_key(std::string_view key)
 {
-    return key == "spawn" || key == "pickup" || key == "trigger" || key == "tower";
+    return key == "spawn" || key == "pickup" || key == "trigger" || key == "tower" || key == "gravity" || key == "island"
+        || key == "link" || key == "ghost" || key == "prop" || key == "spawn_point" || key == "bench";
 }
 
 std::string_view trim_left(std::string_view line)
@@ -434,7 +542,6 @@ std::string_view trim_left(std::string_view line)
 void write_entities(std::FILE* out, const World& world, const PhysWorld& phys,
                     const Terrain& terrain, u32& out_written)
 {
-    const Heightfield& hf = terrain.heightfield();
     const Pool<Entity>& pool = world.entities();
 
     for (u32 idx = 0; idx < pool.capacity(); idx++) {
@@ -452,7 +559,7 @@ void write_entities(std::FILE* out, const World& world, const PhysWorld& phys,
         }
 
         if (e->kind == EntityKind::Trigger) {
-            const f32 ground = hf.sample(e->pos.x, e->pos.z);
+            const f32 ground = terrain.base_height(e->pos.x, e->pos.z);
             std::fprintf(out, "trigger = %s %.3f %.3f %.3f %.3f %.3f %.3f %.2f %d %.3f\n",
                          e->mesh_name.empty() ? "unnamed" : e->mesh_name.c_str(),
                          static_cast<f64>(e->pos.x), static_cast<f64>(e->pos.y - ground),
@@ -469,7 +576,7 @@ void write_entities(std::FILE* out, const World& world, const PhysWorld& phys,
             f32 gpitch = 0.0f;
             f32 groll = 0.0f;
             quat_to_euler(e->rot, gyaw, gpitch, groll);
-            const f32 ground = hf.sample(e->pos.x, e->pos.z);
+            const f32 ground = terrain.base_height(e->pos.x, e->pos.z);
             std::fprintf(out,
                          "gravity = %s %.3f %.3f %.3f %.3f %.3f %.3f %.2f %.2f %.2f %.3f %.3f %d %d %u\n",
                          e->mesh_name.empty() ? "unnamed" : e->mesh_name.c_str(),
@@ -480,6 +587,42 @@ void write_entities(std::FILE* out, const World& world, const PhysWorld& phys,
                          static_cast<f64>(groll * kRadToDeg), static_cast<f64>(e->scale),
                          static_cast<f64>(e->aux_value), static_cast<int>(e->aux_kind & 0xFu),
                          static_cast<int>(e->aux_kind >> 4), e->aux_data ? e->aux_data : 90u);
+            out_written++;
+            continue;
+        }
+
+        if (e->kind == EntityKind::Prop) {
+            const f32 r = static_cast<f32>((e->aux_data >> 16) & 0xFFu) / 255.0f;
+            const f32 g = static_cast<f32>((e->aux_data >> 8) & 0xFFu) / 255.0f;
+            const f32 b = static_cast<f32>(e->aux_data & 0xFFu) / 255.0f;
+            const std::string_view surface = surface_name(static_cast<u8>(e->aux_kind));
+            std::fprintf(out, "prop = %.3f %.3f %.3f %.3f %.3f %.3f %.2f %.2f %.2f %.*s\n", static_cast<f64>(e->pos.x),
+                         static_cast<f64>(e->pos.y), static_cast<f64>(e->pos.z), static_cast<f64>(e->half.x),
+                         static_cast<f64>(e->half.y), static_cast<f64>(e->half.z), static_cast<f64>(r), static_cast<f64>(g),
+                         static_cast<f64>(b), static_cast<int>(surface.size()), surface.data());
+            out_written++;
+            continue;
+        }
+
+        if (e->kind == EntityKind::SpawnPoint) {
+            std::fprintf(out, "spawn_point = %.3f %.3f %.3f %.1f\n", static_cast<f64>(e->pos.x), static_cast<f64>(e->pos.y),
+                         static_cast<f64>(e->pos.z), static_cast<f64>(-quat_yaw(e->rot) * kRadToDeg));
+            out_written++;
+            continue;
+        }
+
+        if (e->kind == EntityKind::Bench) {
+            std::fprintf(out, "bench = %.3f %.3f %.3f\n", static_cast<f64>(e->pos.x), static_cast<f64>(e->pos.y),
+                         static_cast<f64>(e->pos.z));
+            out_written++;
+            continue;
+        }
+
+        if (e->kind == EntityKind::GhostSpawn) {
+            const f32 ground = terrain.base_height(e->pos.x, e->pos.z);
+            std::fprintf(out, "ghost = %s %.3f %.3f %.3f %u\n", e->mesh_name.empty() ? "wisp" : e->mesh_name.c_str(),
+                         static_cast<f64>(e->pos.x), static_cast<f64>(e->pos.y - ground), static_cast<f64>(e->pos.z),
+                         e->aux_kind);
             out_written++;
             continue;
         }
@@ -549,7 +692,7 @@ void write_entities(std::FILE* out, const World& world, const PhysWorld& phys,
         pitch *= kRadToDeg;
         roll *= kRadToDeg;
 
-        const f32 yoff = e->pos.y - hf.sample(e->pos.x, e->pos.z);
+        const f32 yoff = e->pos.y - terrain.base_height(e->pos.x, e->pos.z);
         std::fprintf(out, "spawn = %.*s %s %.3f %.3f %.2f %.3f",
                      static_cast<int>(kind_to_str(e->kind).size()), kind_to_str(e->kind).data(),
                      e->mesh_name.c_str(), static_cast<f64>(e->pos.x),
@@ -600,6 +743,10 @@ bool zone_load(std::string_view zone_dir, Arena& arena, Arena& scratch, World& w
                              terrain.heightfield().sample(car_xz.x, car_xz.y) + 1.0f,
                              car_xz.y};
     out_spawn.car_yaw = cfg.get_f32("spawn.car_yaw_deg", 0.0f) * kDegToRad;
+    const std::string_view kind = cfg.get_str("scene.kind", "zone");
+    out_spawn.scene.kind = kind == "arena" ? SceneKind::Arena : (kind == "range" ? SceneKind::Range : SceneKind::Zone);
+    out_spawn.scene.name.assign(cfg.get_str("scene.name", ""));
+    out_spawn.scene.car = cfg.get_i32("scene.car", 1) != 0;
 
     const Quat car_rot = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, out_spawn.car_yaw);
     const Vec3 beside_door = out_spawn.car_pos + rotate(car_rot, Vec3{-2.6f, 0.0f, -0.3f});
@@ -667,6 +814,52 @@ void zone_add_entity_collision(const World& world, PhysWorld& phys, Arena& scrat
         } else if (e->kind == EntityKind::Building || e->kind == EntityKind::StaticMesh) {
             add_mesh_collision(phys, scratch, e->mesh_name.view(), e->kind, e->pos, e->rot, e->scale);
         }
+    }
+    for (u32 idx : pool.live_indices()) {
+        const Entity* e = pool.at(idx);
+        if (e && (e->kind == EntityKind::Prop || e->kind == EntityKind::Bench)) {
+            add_box_collision(*e, phys);
+        }
+    }
+}
+
+std::string_view scene_kind_name(SceneKind kind)
+{
+    switch (kind) {
+    case SceneKind::Arena:
+        return "arena";
+    case SceneKind::Range:
+        return "range";
+    default:
+        return "zone";
+    }
+}
+
+u8 surface_from_name(std::string_view name)
+{
+    if (name == "concrete") {
+        return static_cast<u8>(ghost::game::Surface::Concrete);
+    }
+    if (name == "wood") {
+        return static_cast<u8>(ghost::game::Surface::Wood);
+    }
+    if (name == "steel") {
+        return static_cast<u8>(ghost::game::Surface::Steel);
+    }
+    return static_cast<u8>(ghost::game::Surface::Ground);
+}
+
+std::string_view surface_name(u8 surface)
+{
+    switch (static_cast<ghost::game::Surface>(surface)) {
+    case ghost::game::Surface::Concrete:
+        return "concrete";
+    case ghost::game::Surface::Wood:
+        return "wood";
+    case ghost::game::Surface::Steel:
+        return "steel";
+    default:
+        return "ground";
     }
 }
 

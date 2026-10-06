@@ -46,6 +46,9 @@ public:
 
     void settle(float dt, const std::function<bool(ElementId)>& settles,
                 const std::function<std::optional<float>(const glm::vec3&)>& groundBelow);
+    void settle(float dt, const std::function<bool(ElementId)>& settles,
+                const std::function<std::optional<float>(const glm::vec3&, const glm::vec3&)>& groundBelow,
+                const std::function<glm::vec3(const glm::vec3&)>& upAt);
     static constexpr float kRestHeight = 0.08f;
     static constexpr float kStepUp = 0.5f;
 

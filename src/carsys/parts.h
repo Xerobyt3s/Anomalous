@@ -21,6 +21,8 @@ enum PartKind : u32 {
     PART_TIRE_FR,
     PART_TIRE_RL,
     PART_TIRE_RR,
+    PART_TANK,
+    PART_PRINTER,
     PART_COUNT,
 };
 

@@ -36,6 +36,7 @@ enum class FsExe : i32 {
     Tapes,
     Dev,
     Travel,
+    Synth,
 };
 
 FsExe fs_exe_from_name(std::string_view name);

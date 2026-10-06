@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -54,6 +55,7 @@ struct Ghost {
     std::int16_t disguise = -1;
     bool attached = true;
     glm::vec3 surfaceNormal{0.0f, 1.0f, 0.0f};
+    glm::vec3 up{0.0f, 1.0f, 0.0f};
     float timer = 0.0f;
 
     float cooldown = 0.0f;
@@ -74,6 +76,9 @@ struct Ghost {
 
     float hitstop = 0.0f;
     bool dying = false;
+    float caught = 0.0f;
+    float calm = 0.0f;
+    glm::vec3 spin{0.0f};
     std::array<GhostHitSource, 4> sources{};
 };
 
@@ -87,6 +92,7 @@ struct GhostQuarry {
     std::uint8_t id = 0;
     bool downed = false;
     bool possessed = false;
+    glm::vec3 up{0.0f, 1.0f, 0.0f};
 };
 
 struct GhostProp {
@@ -109,6 +115,7 @@ struct GhostContext {
     std::function<void(std::uint32_t body, const glm::vec3& velocity)> moveProp;
 
     std::function<std::optional<GhostSurfaceHit>(const glm::vec3& from, const glm::vec3& to)> raycast;
+    std::function<glm::vec3(const glm::vec3&)> gravity;
 };
 
 struct GhostRayHit {
@@ -122,7 +129,7 @@ class GhostWorld {
 public:
     explicit GhostWorld(const GhostData& data) : m_data(&data) {}
 
-    std::uint32_t spawn(GhostTypeId type, const glm::vec3& position);
+    std::uint32_t spawn(GhostTypeId type, const glm::vec3& position, const glm::vec3& up = glm::vec3(0.0f, 1.0f, 0.0f));
     void tick(float dt, const GhostContext& context, EventList& events);
 
     const std::vector<Ghost>& ghosts() const { return m_ghosts; }
@@ -171,6 +178,8 @@ public:
 
 private:
     void sense(Ghost& ghost, const GhostDef& def, const GhostContext& context, float dt);
+    bool tumble(Ghost& ghost, const GhostDef& def, const GhostContext& context, float dt, EventList& events);
+    void release(Ghost& ghost, const GhostDef& def);
     void kill(Ghost& ghost, bool burst, EventList& events);
 
     const GhostData* m_data;
@@ -199,6 +208,16 @@ struct GhostHitSphere {
     float radius = 0.3f;
 };
 GhostHitSphere ghostHitSphere(const Ghost& ghost, const GhostDef& def);
+
+glm::vec3 ghostGravity(const GhostContext& context, const glm::vec3& at);
+glm::vec3 ghostUp(const GhostContext& context, const glm::vec3& at);
+glm::mat3 upBasis(const glm::vec3& up);
+inline float heightOf(const glm::vec3& v, const glm::vec3& up) { return glm::dot(v, up); }
+inline glm::vec3 across(const glm::vec3& v, const glm::vec3& up) { return v - up * glm::dot(v, up); }
+inline glm::vec3 ringAround(const glm::vec3& up, float angle, float lift = 0.0f) {
+    return upBasis(up) * glm::vec3(std::cos(angle), lift, std::sin(angle));
+}
+bool ghostAttacking(const Ghost& ghost, const GhostDef& def);
 
 inline bool ghostUntouchable(const Ghost& ghost) { return ghost.posed || ghost.state == GhostState::Hop || ghost.state == GhostState::Scatter; }
 

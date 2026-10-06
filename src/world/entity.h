@@ -16,6 +16,9 @@ inline constexpr u32 kNoEntityBody = 0xFFFFFFFFu;
 inline constexpr u32 kEntityFlagCollides = 1u << 0;
 inline constexpr u32 kEntityFlagInteractable = 1u << 1;
 inline constexpr u32 kEntityFlagTower = 1u << 2;
+inline constexpr Vec3 kGhostSpawnHalf{0.5f, 0.5f, 0.5f};
+inline constexpr Vec3 kBenchHalf{0.62f, 0.45f, 0.32f};
+inline constexpr Vec3 kSpawnPointHalf{0.3f, 0.9f, 0.3f};
 
 enum class EntityKind : u32 {
     StaticMesh,
@@ -27,6 +30,10 @@ enum class EntityKind : u32 {
     Gravity,
     Island,
     IslandLink,
+    GhostSpawn,
+    Prop,
+    SpawnPoint,
+    Bench,
 };
 
 struct Entity {

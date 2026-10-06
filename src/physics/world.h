@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include "core/pool.h"
 #include "core/types.h"
 #include "math/vmath.h"
@@ -67,14 +69,24 @@ public:
 
     void init(Arena& arena, const Heightfield* hf);
 
-    void statics_reserve(Arena& arena, u32 max_tris) { statics_.reserve(arena, max_tris); }
+    void statics_reserve(Arena& arena, u32 max_tris)
+    {
+        statics_.reserve(arena, max_tris);
+        static_boxes_.clear();
+    }
     void add_static_tri(Vec3 a, Vec3 b, Vec3 c) { statics_.add(a, b, c); }
+    void add_static_box(Vec3 center, Vec3 half, u8 surface) { static_boxes_.push_back({center, half, surface}); }
+    u32 static_box_count() const { return static_cast<u32>(static_boxes_.size()); }
     void statics_build(Arena& arena)
     {
         statics_.build(arena);
         sync_jolt();
     }
-    void statics_clear() { statics_.clear(); }
+    void statics_clear()
+    {
+        statics_.clear();
+        static_boxes_.clear();
+    }
     const StaticGrid& statics() const { return statics_; }
     const Heightfield* heightfield() const { return hf_; }
 
@@ -120,6 +132,12 @@ private:
     void add_contact(const PhysContact& contact);
 
     Pool<RigidBody> bodies_;
+    struct StaticBox {
+        Vec3 center;
+        Vec3 half;
+        u8 surface;
+    };
+    std::vector<StaticBox> static_boxes_;
     StaticGrid statics_;
     const Heightfield* hf_ = nullptr;
     const GravityField* field_ = nullptr;

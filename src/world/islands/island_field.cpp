@@ -1069,7 +1069,8 @@ u64 IslandField::signature(const World& world)
     const Pool<Entity>& pool = world.entities();
     for (u32 idx : pool.live_indices()) {
         const Entity* e = pool.at(idx);
-        if (!e || (e->kind != EntityKind::Island && e->kind != EntityKind::IslandLink)) {
+        if (!e || (e->kind != EntityKind::Island && e->kind != EntityKind::IslandLink && e->kind != EntityKind::Prop
+                   && e->kind != EntityKind::Bench)) {
             continue;
         }
         hash_bytes(h, &e->kind, sizeof(e->kind));

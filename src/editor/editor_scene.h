@@ -7,6 +7,8 @@
 #include "world/entity.h"
 
 #include <span>
+#include <string>
+#include <vector>
 #include <string_view>
 
 namespace anom {
@@ -68,6 +70,11 @@ public:
     EntityHandle add_trigger(Editor& editor, const Camera& cam, World& world, PhysWorld& phys,
                              const Terrain& terrain);
     EntityHandle add_gravity(Editor& editor, const Camera& cam, World& world, PhysWorld& phys);
+    EntityHandle add_ghost_spawn(Editor& editor, const Camera& cam, World& world, PhysWorld& phys,
+                                 const Terrain& terrain);
+    void set_ghost_types(std::vector<std::string> types) { ghost_types_ = std::move(types); }
+    EntityHandle add_scene_thing(Editor& editor, const Camera& cam, World& world, PhysWorld& phys, const Terrain& terrain,
+                                 EntityKind kind);
     EntityHandle add_island(Editor& editor, const Camera& cam, World& world, PhysWorld& phys,
                             const Terrain& terrain);
     EntityHandle add_link(Editor& editor, World& world, PhysWorld& phys, std::string_view from,
@@ -105,6 +112,7 @@ private:
     i32 tape_scroll_ = 0;
     EntityHandle trigger_sync_;
     char trigger_name_[32] = {};
+    std::vector<std::string> ghost_types_;
     char link_target_[32] = {};
 };
 

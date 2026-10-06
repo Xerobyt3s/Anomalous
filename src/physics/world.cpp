@@ -73,6 +73,9 @@ void PhysWorld::sync_jolt()
         }
         jolt_->addStaticMesh(points, ground);
     }
+    for (const StaticBox& box : static_boxes_) {
+        jolt_->addStaticBox(to_glm(box.center), to_glm(box.half), static_cast<std::uint64_t>(box.surface));
+    }
     jolt_->optimize();
 }
 

@@ -1,4 +1,5 @@
 #include "sim/sim.h"
+#include "world/scenes.h"
 #include "world/pickup_body.h"
 #include "core/log.h"
 #include "game/ballistics/surface.h"
@@ -33,6 +34,7 @@ constexpr Vec3 kEngineLocal{0.0f, 0.10f, -1.55f};
 constexpr f32 kSlotSpacing = 1.2f;
 constexpr u32 kCableNearPickups = 12;
 constexpr f32 kVehiclePushShare = 1.0f;
+constexpr f32 kDebugGhostAhead = 8.0f;
 constexpr f32 kDummyAhead = 4.0f;
 
 Vec3 body_point(const RigidBody& body, Vec3 local)
@@ -112,11 +114,23 @@ bool Sim::init(Arena& perm, Arena& scratch, std::string_view zone_dir)
     }
 
     rules_ = ghost::game::loadPlayerRules(ghost::engine::assetPath("data"));
-    for (u32 i = 0; i < kMaxPlayers; i++) {
+    base_rules_ = rules_;
+    ghost::game::GameplayHooks hooks;
+    hooks.push = [this](PlayerId id, const glm::vec3& dv) { push_player(id, dv); };
+    hooks.selfCast = [this](PlayerId id, const ghost::game::ElementDef& def, const glm::vec3& dir) {
+        return self_cast(id, def, dir);
+    };
+    hooks.raiseZombie = [this](PlayerId player) { return raise_zombie(player); };
+    hooks.gravity = [this](const glm::vec3& at) { return to_glm(gravity_.gravity_at(from_glm(at))); };
+    hooks.wind = [this](const glm::vec3&) { return to_glm(weather_.wind_velocity()); };
+    gameplay_.setHooks(std::move(hooks));
+    spawn_zone_ghosts();
+    for (u32 i = 0; i < kMaxSlots; i++) {
         slots_[i] = PlayerSlot{};
-        slots_[i].id = static_cast<PlayerId>(i);
+        slots_[i].id = slot_id(i);
     }
     add_player("Player");
+    apply_scene();
     carsys_.init();
     weather_.init(20260718ull);
     tapes_.init();
@@ -187,6 +201,46 @@ void Sim::apply_weather_grip()
     }
 }
 
+bool own_event(const ghost::game::GameEvent& e, PlayerId local)
+{
+    using namespace ghost::game;
+    if (const auto* shot = std::get_if<ShotFired>(&e)) {
+        return shot->player == local;
+    }
+    if (const auto* cast = std::get_if<SelfCast>(&e)) {
+        return cast->player == local;
+    }
+    return std::holds_alternative<DryFired>(e) || std::holds_alternative<HammerCocked>(e) ||
+           std::holds_alternative<CylinderOpened>(e) || std::holds_alternative<CylinderClosed>(e) ||
+           std::holds_alternative<ChambersEjected>(e) || std::holds_alternative<SpeedloaderUsed>(e) ||
+           std::holds_alternative<RoundLoaded>(e) || std::holds_alternative<RoundPickedUp>(e) ||
+           std::holds_alternative<PlayerHit>(e) || std::holds_alternative<GunHolstered>(e);
+}
+
+bool echo_of_mine(const ghost::game::GameEvent& e, PlayerId local)
+{
+    if (const auto* shot = std::get_if<ghost::game::ShotFired>(&e)) {
+        return shot->player == local;
+    }
+    if (const auto* cast = std::get_if<ghost::game::SelfCast>(&e)) {
+        return cast->player == local;
+    }
+    return false;
+}
+
+void Sim::spawn_debug_ghost(PlayerId id, const PlayerCommand& cmd)
+{
+    const PlayerSlot* s = slot(id);
+    const auto& types = gameplay_.ghostData().types;
+    if (!s || cmd.spawn_ghost < 0 || static_cast<size_t>(cmd.spawn_ghost) >= types.size()) {
+        return;
+    }
+    const MoveState& m = s->player.movement().state();
+    const Vec3 ahead = frame_forward(m.frame, m.yaw);
+    const Vec3 at = s->player.pos() + ahead * kDebugGhostAhead + s->player.up() * 1.5f;
+    gameplay_.spawnGhost(types[static_cast<size_t>(cmd.spawn_ghost)].name, to_glm(at));
+}
+
 void Sim::step_physics(f32 dt)
 {
     RigidBody* car = phys_.body(vehicle_.body());
@@ -227,34 +281,60 @@ void Sim::sync_pickup_transforms()
 
 PlayerSlot* Sim::slot(PlayerId id)
 {
-    return id < kMaxPlayers && slots_[id].active ? &slots_[id] : nullptr;
+    return slot_index(id) < kMaxSlots && slots_[slot_index(id)].active ? &slots_[slot_index(id)] : nullptr;
 }
 
 const PlayerSlot* Sim::slot(PlayerId id) const
 {
-    return id < kMaxPlayers && slots_[id].active ? &slots_[id] : nullptr;
+    return slot_index(id) < kMaxSlots && slots_[slot_index(id)].active ? &slots_[slot_index(id)] : nullptr;
 }
 
 PlayerId Sim::driver() const
 {
     if (role_ == SimRole::Client) {
-        const PlayerSlot& mine = slots_[local_];
-        if (mine.active && mine.player.state() != PlayerState::OnFoot) {
+        const PlayerSlot& mine = slots_[slot_index(local_)];
+        if (mine.active && mine.player.state() != PlayerState::OnFoot && mine.player.seat() == 0) {
             return local_;
         }
         return mirror_driver_ == local_ ? kNoPlayer : mirror_driver_;
     }
-    if (const PlayerSlot* owner = slot(seat_owner_)) {
-        if (owner->player.state() != PlayerState::OnFoot) {
-            return seat_owner_;
+    if (const PlayerSlot* owner = slot(seat_owners_[0])) {
+        if (owner->player.state() != PlayerState::OnFoot && owner->player.seat() == 0) {
+            return seat_owners_[0];
         }
     }
     for (const PlayerSlot& s : slots_) {
-        if (s.active && s.player.state() != PlayerState::OnFoot) {
+        if (s.active && s.player.state() != PlayerState::OnFoot && s.player.seat() == 0) {
             return s.id;
         }
     }
     return kNoPlayer;
+}
+
+u32 Sim::seats_taken_for(PlayerId id) const
+{
+    u32 mask = 0;
+    for (const PlayerSlot& s : slots_) {
+        if (s.active && s.id != id && s.player.state() != PlayerState::OnFoot) {
+            mask |= 1u << s.player.seat();
+        }
+    }
+    for (u32 k = 0; k < kMaxSeats; k++) {
+        if (seat_owners_[k] != kNoPlayer && seat_owners_[k] != id) {
+            mask |= 1u << k;
+        }
+    }
+    return mask;
+}
+
+bool Sim::seat_blocked(u32 seat) const
+{
+    const VehicleConfig& cfg = vehicle_.config();
+    if (seat >= cfg.seat_count) {
+        return true;
+    }
+    const PartKind blocker = cfg.seats[seat].blocked_by;
+    return blocker != PART_COUNT && carsys_.parts[blocker].installed;
 }
 
 const PlayerSlot* Sim::holding(ItemKind kind) const
@@ -269,6 +349,9 @@ const PlayerSlot* Sim::holding(ItemKind kind) const
 
 Vec3 Sim::spawn_point(PlayerId id) const
 {
+    if (const Entity* point = spawn_entity_for(id)) {
+        return point->pos;
+    }
     const Vec3 right = rotate(quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, -spawn_.player_yaw), Vec3{1.0f, 0.0f, 0.0f});
     const f32 offset = static_cast<f32>(id) * kSlotSpacing;
     return spawn_.player_pos + right * offset;
@@ -276,7 +359,7 @@ Vec3 Sim::spawn_point(PlayerId id) const
 
 void Sim::place_player(PlayerSlot& s, Vec3 feet, f32 yaw)
 {
-    s.player.set_character(s.id);
+    s.player.set_character(slot_index(s.id));
     s.player.init(feet, yaw);
     if (role_ == SimRole::Host && s.remote) {
         emit(ghost::game::PlayerPlaced{s.id, to_glm(feet), yaw});
@@ -285,7 +368,8 @@ void Sim::place_player(PlayerSlot& s, Vec3 feet, f32 yaw)
 
 PlayerId Sim::add_player(std::string_view name, bool remote)
 {
-    for (PlayerSlot& s : slots_) {
+    for (u32 i = 0; i < kMaxPlayers; i++) {
+        PlayerSlot& s = slots_[i];
         if (s.active) {
             continue;
         }
@@ -297,8 +381,9 @@ PlayerId Sim::add_player(std::string_view name, bool remote)
         s.remote = remote;
         s.color = kSlotColors[id];
         s.interact.init();
-        place_player(s, spawn_point(id), spawn_.player_yaw);
-        commands_[id] = PlayerCommand{};
+        gameplay_.stockGun(s.gun);
+        place_player(s, spawn_point(id), spawn_yaw(id));
+        commands_[slot_index(id)] = PlayerCommand{};
         roster_.add(id);
         return id;
     }
@@ -320,7 +405,7 @@ void Sim::remove_player(PlayerId id)
     if (terminal_user_ == id) {
         terminal_user_ = kNoPlayer;
     }
-    jolt_.characterDestroy(id);
+    jolt_.characterDestroy(static_cast<int>(slot_index(id)));
     roster_.remove(id);
     *s = PlayerSlot{};
     s->id = id;
@@ -367,18 +452,18 @@ void Sim::reset_player(PlayerId id)
     if (!s) {
         return;
     }
-    place_player(*s, spawn_point(id), spawn_.player_yaw);
+    place_player(*s, spawn_point(id), spawn_yaw(id));
 }
 
 Vec3 Sim::hands_eye(PlayerId id) const
 {
-    const Player& p = slots_[id].player;
+    const Player& p = slots_[slot_index(id)].player;
     return p.pos() + p.up() * kHandsEyeHeight;
 }
 
 Vec3 Sim::hands_pos(PlayerId id) const
 {
-    const PlayerSlot& s = slots_[id];
+    const PlayerSlot& s = slots_[slot_index(id)];
     const bool driving = s.player.driving();
     const f32 reach = driving ? 0.40f : 0.62f;
     const f32 drop = driving ? 0.22f : 0.34f;
@@ -413,8 +498,10 @@ void Sim::gather_commands(std::span<const SlotCommand> commands, f32 dt)
         if (!s.active || (client && s.remote)) {
             continue;
         }
-        PlayerCommand& cmd = commands_[s.id];
-        if (s.dummy && !s.remote) {
+        PlayerCommand& cmd = commands_[slot_index(s.id)];
+        if (s.zombie_of != kNoPlayer && !s.remote) {
+            cmd = zombie_command(s, dt);
+        } else if (s.dummy && !s.remote) {
             cmd = dummy_command(s, dt);
         } else {
             PlayerCommand idle;
@@ -489,7 +576,7 @@ void Sim::apply_car_controls()
         vehicle_.set_input(parked);
         return;
     }
-    const PlayerCommand& cmd = commands_[id];
+    const PlayerCommand& cmd = commands_[slot_index(id)];
     if (!cmd.gameplay || terminal_user_ == id) {
         vehicle_.set_input(VehicleInput{});
         return;
@@ -563,35 +650,88 @@ void Sim::apply_terminal_input(const PlayerCommand& cmd)
     }
 }
 
+void Sim::update_hands_and_gun(PlayerSlot& s, const PlayerCommand& cmd, PlayerCommand& player_cmd, bool took, f32 dt)
+{
+    Interact& interact = s.interact;
+    const MoveState& m = s.player.movement().state();
+    if (took) {
+        s.take_pending = false;
+    }
+    if (interact.take_holster_request() && s.player.state() == PlayerState::OnFoot) {
+        player_cmd.holster = player_cmd.holster || !m.holstered;
+        s.take_pending = true;
+    } else if (s.take_pending && !m.holstered) {
+        s.take_pending = false;
+    }
+    const bool holding = interact.hands().kind != ITEM_NONE;
+    if (cmd.holster && holding && m.holstered && s.lowering < 0.0f && s.player.state() == PlayerState::OnFoot) {
+        s.lowering = 0.0f;
+    }
+    if (s.lowering < 0.0f) {
+        return;
+    }
+    player_cmd.holster = false;
+    if (!holding || s.player.state() != PlayerState::OnFoot) {
+        s.lowering = -1.0f;
+        return;
+    }
+    s.lowering += dt;
+    if (s.lowering < s.player.movement().tuning().lower_item_time) {
+        return;
+    }
+    s.lowering = -1.0f;
+    if (role_ == SimRole::Client) {
+        interact.hands().kind = ITEM_NONE;
+    } else {
+        Vec3 ahead = s.view_dir;
+        ahead.y = f_min(ahead.y, -0.35f);
+        interact.drop(world_, phys_, hands_eye(s.id), normalize(ahead), 0.0f);
+    }
+    player_cmd.holster = true;
+}
+
 void Sim::interact_slot(PlayerSlot& s, const PlayerCommand& cmd, PlayerCommand& player_cmd, f32 dt)
 {
     player_cmd = cmd;
     player_cmd.interact = false;
     const bool busy = !cmd.gameplay || terminal_user_ == s.id;
     if (!busy) {
-        const PlayerId seated = driver();
+        const u32 taken = seats_taken_for(s.id);
         Interact& interact = s.interact;
-        interact.set_tower(true, tower_port_pos());
+        interact.set_tower(spawn_.scene.kind == SceneKind::Zone, tower_port_pos());
         InteractContext ctx;
         ctx.player = &s.player;
-        ctx.veh = &vehicle_;
+        ctx.veh = has_car() ? &vehicle_ : nullptr;
         ctx.sys = &carsys_;
         ctx.world = &world_;
         ctx.phys = &phys_;
         ctx.tapes = &tapes_;
         ctx.view_ray = Ray{s.view_origin, s.view_dir};
-        ctx.e_down = cmd.use_down;
-        ctx.e_pressed = cmd.use_pressed;
-        ctx.seat_taken = seated != kNoPlayer && seated != s.id;
+        const MoveState& hand_state = s.player.movement().state();
+        const bool take_now = s.take_pending && hand_state.holster >= 1.0f;
+        ctx.e_down = cmd.use_down || take_now;
+        ctx.e_pressed = cmd.use_pressed || take_now;
+        ctx.seats_taken = taken;
         ctx.preview = role_ == SimRole::Client;
+        ctx.gun_drawn = s.player.movement().state().holster < 1.0f;
         interact.update(boxes_, ctx, dt);
         if (interact.take_terminal_request() && carsys_.computer_on && terminal_user_ == kNoPlayer) {
             terminal_user_ = s.id;
         }
+        update_hands_and_gun(s, cmd, player_cmd, take_now, dt);
+        if (interact.take_rounds_request() && role_ != SimRole::Client) {
+            take_tray(s);
+        }
         s.player.set_speed_mul(f_max(1.0f - item_mass(interact.hands().kind) * 0.012f, 0.6f));
         if (cmd.use_pressed) {
-            if (interact.action() == InteractAction::EnterCar && !ctx.seat_taken) {
-                player_cmd.interact = true;
+            if (interact.action() == InteractAction::EnterCar) {
+                const VehicleConfig& cfg = vehicle_.config();
+                for (u32 k = 0; k < cfg.seat_count; k++) {
+                    if (cfg.seats[k].door_side == interact.target_side() && !(taken & (1u << k)) && !seat_blocked(k)) {
+                        s.player.set_seat(k);
+                        player_cmd.interact = true;
+                    }
+                }
             } else if (interact.action() == InteractAction::ExitCar) {
                 s.player.set_exit_pref(interact.target_side() == 0 ? -1 : 1);
                 player_cmd.interact = true;
@@ -612,7 +752,7 @@ void Sim::interact_slot(PlayerSlot& s, const PlayerCommand& cmd, PlayerCommand& 
 
 void Sim::tick_roster(f32 dt)
 {
-    std::array<ghost::game::RosterInput, kMaxPlayers> inputs{};
+    std::array<ghost::game::RosterInput, kMaxSlots> inputs{};
     u32 count = 0;
     for (const PlayerSlot& s : slots_) {
         if (s.active) {
@@ -621,9 +761,25 @@ void Sim::tick_roster(f32 dt)
     }
     const size_t first = events_.size();
     roster_.tick(dt, std::span<const ghost::game::RosterInput>(inputs.data(), count), events_);
+    for (size_t i = first; i < events_.size(); i++) {
+        if (const auto* back = std::get_if<ghost::game::PlayerRespawned>(&events_[i])) {
+            respawn_owned(back->player);
+        }
+    }
     bool wiped = false;
     for (size_t i = first; i < events_.size(); i++) {
         wiped = wiped || std::holds_alternative<ghost::game::PlayerDied>(events_[i]);
+    }
+    if (wiped) {
+        for (PlayerSlot& s : slots_) {
+            if (s.active && s.zombie_of != kNoPlayer) {
+                jolt_.characterDestroy(static_cast<int>(slot_index(s.id)));
+                const PlayerId id = s.id;
+                s = PlayerSlot{};
+                s.id = id;
+            }
+        }
+        gameplay_.forgetPlayers();
     }
     for (PlayerSlot& s : slots_) {
         if (!s.active) {
@@ -663,16 +819,28 @@ void Sim::tick(std::span<const SlotCommand> commands, f32 dt)
         apply_host_events();
         host_events_.clear();
     }
+    apply_inbound();
 
     const CarSnapshot before = snapshot_car(carsys_);
     if (!client) {
+        i32 wanted_scene = -1;
+        for (const SlotCommand& in : commands) {
+            if (in.id == local_ && in.cmd.scene >= 0) {
+                wanted_scene = in.cmd.scene;
+            }
+        }
+        if (wanted_scene >= 0) {
+            switch_scene(wanted_scene);
+        }
         for (const SlotCommand& in : commands) {
             if (slot(in.id)) {
                 apply_debug(in.cmd);
+                spawn_debug_ghost(in.id, in.cmd);
             }
         }
         adopt_remote_bodies(commands);
     }
+    gather_world_for_gameplay();
     gather_commands(commands, dt);
 
     if (terminal_user_ != kNoPlayer && !slot(terminal_user_)) {
@@ -684,15 +852,15 @@ void Sim::tick(std::span<const SlotCommand> commands, f32 dt)
     if (!client) {
         for (PlayerSlot& s : slots_) {
             if (s.active) {
-                apply_hands(s, commands_[s.id]);
+                apply_hands(s, commands_[slot_index(s.id)]);
             }
         }
         if (terminal_user_ != kNoPlayer) {
-            apply_terminal_input(commands_[terminal_user_]);
+            apply_terminal_input(commands_[slot_index(terminal_user_)]);
         }
     }
 
-    std::array<PlayerCommand, kMaxPlayers> player_cmds{};
+    std::array<PlayerCommand, kMaxSlots> player_cmds{};
     if (!client) {
         carsys_.crank_request = false;
     }
@@ -700,31 +868,66 @@ void Sim::tick(std::span<const SlotCommand> commands, f32 dt)
         if (!s.active || (client && s.remote)) {
             continue;
         }
-        interact_slot(s, commands_[s.id], player_cmds[s.id], dt);
-        if (commands_[s.id].crank && !client) {
+        interact_slot(s, commands_[slot_index(s.id)], player_cmds[slot_index(s.id)], dt);
+        if (commands_[slot_index(s.id)].crank && !client) {
             carsys_.crank_request = true;
         }
+    }
+
+    const size_t gun_first = events_.size();
+    tick_guns(dt);
+    const size_t gun_last = events_.size();
+    if (client) {
+        gameplay_.tickClient(dt, events_);
+    } else {
+        gameplay_.tickBeforePhysics(dt, events_);
     }
 
     zone_gravity(world_, gravity_);
     islands_.fill_gravity(gravity_);
     weather_.tick(dt);
     carsys_.rain_level = weather_.rain();
-    carsys_.tick(vehicle_, phys_, dt);
-    apply_weather_grip();
-
-    vehicle_.tick(phys_, dt);
+    if (has_car()) {
+        carsys_.tick(vehicle_, phys_, dt);
+        apply_weather_grip();
+        vehicle_.tick(phys_, dt);
+    }
     phys_.tick(dt);
     step_physics(dt);
+    if (!client) {
+        gameplay_.tickAfterPhysics(dt, first_event, events_);
+        fill_tank();
+    }
+    const f32 wind_grip = gameplay_.playerWindGrip();
+    for (PlayerSlot& s : slots_) {
+        if (!s.active || (client && s.remote)) {
+            continue;
+        }
+        const bool interacting = s.use_down && s.player.state() == PlayerState::OnFoot && s.interact.action() == InteractAction::None;
+        if (const auto taken = gameplay_.tickPickups(s.id, s.gun, interacting, dt, events_); taken && s.remote) {
+            gives_out_.push_back({s.id, *taken});
+        }
+    }
     for (PlayerSlot& s : slots_) {
         if (!s.active || s.remote) {
             continue;
         }
-        const PlayerId seated = driver();
-        if (player_cmds[s.id].interact && s.player.state() == PlayerState::OnFoot && seated != kNoPlayer) {
-            player_cmds[s.id].interact = false;
+        const u32 idx = slot_index(s.id);
+        if (player_cmds[idx].interact && s.player.state() == PlayerState::OnFoot
+            && ((seats_taken_for(s.id) & (1u << s.player.seat())) || seat_blocked(s.player.seat()))) {
+            player_cmds[idx].interact = false;
         }
-        s.player.tick(phys_, &vehicle_, player_cmds[s.id], dt);
+        player_cmds[idx].hands_busy = !s.gun.mechanism.state().isClosed();
+        if (wind_grip > 0.0f) {
+            const Vec3 body = s.player.pos() + s.player.up() * 0.9f;
+            player_cmds[idx].wind = from_glm(gameplay_.airVelocityAt(to_glm(body)) * wind_grip);
+        }
+        s.player.tick(phys_, has_car() ? &vehicle_ : nullptr, player_cmds[idx], dt);
+        const bool holstered = s.player.movement().state().holstered;
+        if (holstered != s.was_holstered) {
+            s.was_holstered = holstered;
+            emit(ghost::game::GunHolstered{holstered});
+        }
     }
 
     sync_pickup_transforms();
@@ -733,13 +936,26 @@ void Sim::tick(std::span<const SlotCommand> commands, f32 dt)
         advance_client(dt);
         guard_against_falling();
         watch_islands(dt);
+        ghost::game::EventList kept;
+        for (size_t i = first_event; i < events_.size(); i++) {
+            const bool mine = i >= gun_first && i < gun_last;
+            if (mine || own_event(events_[i], local_)) {
+                kept.push_back(events_[i]);
+            }
+        }
         events_.resize(first_event);
-        events_.insert(events_.end(), from_host.begin(), from_host.end());
+        events_.insert(events_.end(), kept.begin(), kept.end());
+        for (const ghost::game::GameEvent& event : from_host) {
+            if (!echo_of_mine(event, local_)) {
+                events_.push_back(event);
+            }
+        }
         tick_count_++;
         return;
     }
     arbitrate_seat();
     tick_roster(dt);
+    fell_new_zombies(first_event);
     commit_photo();
     update_terminal(dt);
     update_travel(dt);
@@ -800,7 +1016,7 @@ void Sim::guard_against_falling()
     const Heightfield& hf = terrain_.heightfield();
     const PlayerSlot* driving = slot(driver());
     const bool car_ours = role_ == SimRole::Client ? driver() == local_ : !(driving && driving->remote);
-    if (car_ours && car && ((car->pos.y < floor && default_gravity_at(car->pos)) || !body_state_valid(*car)
+    if (has_car() && car_ours && car && ((car->pos.y < floor && default_gravity_at(car->pos)) || !body_state_valid(*car)
                 || zone_out_of_bounds(hf, car->pos))) {
         reset_car();
     }
@@ -942,6 +1158,12 @@ void Sim::update_cables(f32 dt)
                 }
             } else if (k == CABLE_BUS && carsys_.bus_target == kBusTargetTower) {
                 end = tower_port_pos();
+            } else if (k == CABLE_BUS && carsys_.bus_target == kBusTargetPrinter) {
+                if (!carsys_.parts[PART_PRINTER].installed) {
+                    drop_cable(k);
+                    continue;
+                }
+                end = car_origin + rotate(body->rot, kPrinterJackLocal);
             } else {
                 end = car_origin + rotate(body->rot, jacks[k]);
             }
@@ -1033,6 +1255,7 @@ void Sim::build_term_view(const PlayerCommand& cmd, TermView& out) const
     const RigidBody* body = phys_.body(vehicle_.body());
 
     out.sys = &carsys_;
+    out.ammo = &gameplay_.ammo();
     out.veh = &vehicle_;
     out.phys = const_cast<PhysWorld*>(&phys_);
     out.terrain = &terrain_;
@@ -1059,6 +1282,7 @@ void Sim::build_term_view(const PlayerCommand& cmd, TermView& out) const
     out.antenna_tier = !out.coax_camera && carsys_.parts[PART_ANTENNA].installed ? carsys_.parts[PART_ANTENNA].variant
                                                                                  : -1;
     out.bus_tower = carsys_.bus_target == kBusTargetTower;
+    out.bus_printer = carsys_.bus_target == kBusTargetPrinter;
     out.tower_breached = tower_breached_;
     out.tower_pos = tower_pos_;
 }
@@ -1127,6 +1351,9 @@ void Sim::update_terminal(f32 dt)
             carsys_.cables[k].linked = true;
             emit(ghost::game::PortLinked{static_cast<int>(k)});
         }
+    }
+    if (req.synth_print) {
+        queue_print(req.synth_doses, req.synth_dose_count, req.synth_count);
     }
     if (req.power_off) {
         carsys_.computer_on = false;
@@ -1211,6 +1438,7 @@ bool Sim::load_zone(std::string_view dir)
     zone_arena_.reset();
     mirrored_.clear();
     zone_serial_++;
+    gameplay_.clearWorld();
 
     if (!zone_load(dir, zone_arena_, *scratch_, world_, phys_, terrain_, spawn_, &pickups_)) {
         log_error("travel: zone load failed for %.*s", static_cast<int>(dir.size()), dir.data());
@@ -1218,7 +1446,9 @@ bool Sim::load_zone(std::string_view dir)
     }
     zone_gravity(world_, gravity_);
     rebuild_islands();
+    spawn_zone_ghosts();
     zone_dir_.assign(dir);
+    apply_scene();
 
     const f32 tx = spawn_.tower_present ? spawn_.tower_x : 0.0f;
     const f32 tz = spawn_.tower_present ? spawn_.tower_z : 0.0f;
@@ -1236,14 +1466,7 @@ bool Sim::load_zone(std::string_view dir)
     terminal_.mapdata().init(terrain_.heightfield());
     terrain_dirty_ = true;
     tower_breached_ = false;
-    i32 destination = -1;
-    const std::span<const Destination> all = destinations();
-    for (u32 i = 0; i < all.size(); i++) {
-        if (all[i].zone_dir == dir) {
-            destination = static_cast<i32>(i);
-        }
-    }
-    emit(ghost::game::ZoneLoaded{destination});
+    emit(ghost::game::ZoneLoaded{scene_index_of_dir(dir)});
     log_info("travel: arrived in %.*s (zone arena %.1f MB)", static_cast<int>(dir.size()), dir.data(),
              static_cast<double>(zone_arena_.used()) / (1024.0 * 1024.0));
     return true;
@@ -1333,6 +1556,8 @@ u64 Sim::checksum() const
     hash_bytes(h, &travel_charge_, sizeof(travel_charge_));
     const u32 entities = world_.count();
     hash_bytes(h, &entities, sizeof(entities));
+    const u64 play = gameplay_.checksum();
+    hash_bytes(h, &play, sizeof(play));
     return h;
 }
 

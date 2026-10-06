@@ -15,6 +15,6 @@ enum class WormPose {
 };
 
 std::vector<Strands::Point> necromiteWorm(const glm::vec3& ground, const glm::vec3& heading, WormPose pose, float progress, float time,
-                                          float seed, const glm::vec3& into = glm::vec3(0.0f));
+                                          float seed, const glm::vec3& into = glm::vec3(0.0f), const glm::vec3& upward = glm::vec3(0.0f, 1.0f, 0.0f));
 
 }

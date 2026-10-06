@@ -82,6 +82,8 @@ enum class InteractAction : u32 {
     TapeInsert,
     TapeEject,
     Wipers,
+    TakeRounds,
+    CablePlugPrinter,
 };
 
 class InteractBoxes {
@@ -112,8 +114,9 @@ struct InteractContext {
     Ray view_ray;
     bool e_down = false;
     bool e_pressed = false;
-    bool seat_taken = false;
+    u32 seats_taken = 0;
     bool preview = false;
+    bool gun_drawn = false;
 };
 
 class Interact {
@@ -139,6 +142,8 @@ public:
     Vec3 place_pos() const { return place_pos_; }
 
     bool take_terminal_request();
+    bool take_holster_request();
+    bool take_rounds_request();
     void adopt_holdings(const Interact& other);
     void set_tower(bool present, Vec3 port);
 
@@ -179,6 +184,8 @@ private:
     bool crank_latch_ = false;
     bool press_latch_ = false;
     bool use_terminal_request_ = false;
+    bool holster_request_ = false;
+    bool rounds_request_ = false;
     i32 target_cable_ = -1;
     i32 cable_drag_ = -1;
     bool tower_present_ = false;

@@ -8,14 +8,16 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Debug', 'Release', 'RelWithDebInfo')]
+    [ValidateSet('Debug', 'Release', 'RelWithDebInfo', 'Shipping')]
     [string]$Config = 'Debug',
 
     [string]$Target,
 
     [switch]$Test,
 
-    [switch]$Clean
+    [switch]$Clean,
+
+    [switch]$Dist
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,6 +28,7 @@ $presetMap = @{
     'Debug'          = 'ninja-debug'
     'Release'        = 'ninja-release'
     'RelWithDebInfo' = 'ninja-relwithdebinfo'
+    'Shipping'       = 'ninja-shipping'
 }
 $preset = $presetMap[$Config]
 
@@ -73,6 +76,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "cmake configure failed ($LASTEXITCODE)" }
 
     $buildArgs = @('--build', '--preset', $preset)
+    if ($Dist) { $Target = 'dist' }
     if ($Target) { $buildArgs += @('--target', $Target) }
 
     cmake @buildArgs

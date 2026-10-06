@@ -104,6 +104,11 @@ void Terrain::stamp_craters(const CraterStamp* craters, u32 count)
     hf_.recompute_extents();
 }
 
+f32 Terrain::base_height(f32 x, f32 z) const
+{
+    return base_heights_ ? hf_.sample_from(base_heights_, x, z) : hf_.sample(x, z);
+}
+
 f32 Terrain::road_amount(f32 x, f32 z) const
 {
     if (!roadmask_ || mask_size_ == 0) {

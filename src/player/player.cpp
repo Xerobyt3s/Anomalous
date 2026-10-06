@@ -24,14 +24,19 @@ f32 smooth01(f32 t)
     return t * t * (3.0f - 2.0f * t);
 }
 
-Vec3 seat_eye_world(const Vehicle& veh, const RigidBody& body)
+const SeatConfig& seat_of(const Vehicle& veh, u32 seat)
 {
-    return body.pos + rotate(body.rot, veh.config().seat_eye);
+    return veh.config().seats[seat < veh.config().seat_count ? seat : 0];
 }
 
-Vec3 seat_foot_world(const Vehicle& veh, const RigidBody& body)
+Vec3 seat_eye_world(const Vehicle& veh, const RigidBody& body, u32 seat)
 {
-    return seat_eye_world(veh, body) - rotate(body.rot, Vec3{0.0f, kPlayerEyeHeight, 0.0f});
+    return body.pos + rotate(body.rot, seat_of(veh, seat).eye);
+}
+
+Vec3 seat_foot_world(const Vehicle& veh, const RigidBody& body, u32 seat)
+{
+    return seat_eye_world(veh, body, seat) - rotate(body.rot, Vec3{0.0f, kPlayerEyeHeight, 0.0f});
 }
 
 Vec3 gravity_up(const PhysWorld& phys, Vec3 p)
@@ -140,7 +145,8 @@ bool Player::probe_exit(PhysWorld& phys, const Vehicle& veh, Vec3* out_foot) con
     }
     const Vec3 up = gravity_up(phys, body->pos);
     const Vec3 he = body->half_extents;
-    f32 side = veh.config().seat_eye.x < 0.0f ? -1.0f : 1.0f;
+    const SeatConfig& seat = seat_of(veh, seat_);
+    f32 side = seat.door_side == 0 ? -1.0f : 1.0f;
     if (exit_pref_ != 0) {
         side = static_cast<f32>(exit_pref_);
     }
@@ -149,8 +155,8 @@ bool Player::probe_exit(PhysWorld& phys, const Vehicle& veh, Vec3* out_foot) con
 
     Vec3 candidates[4];
     u32 candidate_count = 4;
-    candidates[0] = Vec3{side * out_x, 0.0f, veh.config().seat_eye.z};
-    candidates[1] = Vec3{-side * out_x, 0.0f, veh.config().seat_eye.z};
+    candidates[0] = Vec3{side * out_x, 0.0f, seat.eye.z};
+    candidates[1] = Vec3{-side * out_x, 0.0f, seat.eye.z};
     candidates[2] = Vec3{0.0f, 0.0f, out_z};
     candidates[3] = Vec3{0.0f, 0.0f, -out_z};
     if (exit_pref_ != 0) {
@@ -184,7 +190,7 @@ bool Player::probe_exit(PhysWorld& phys, const Vehicle& veh, Vec3* out_foot) con
     return false;
 }
 
-bool Player::can_enter(PhysWorld& phys, const Vehicle* veh) const
+bool Player::can_enter(PhysWorld& phys, const Vehicle* veh, u32 seat_index) const
 {
     if (state_ != PlayerState::OnFoot || !veh) {
         return false;
@@ -195,8 +201,9 @@ bool Player::can_enter(PhysWorld& phys, const Vehicle* veh) const
     }
     const Vec3 he = body->half_extents;
     const Vec3 waist = movement_.state().pos + movement_.up() * 0.9f;
-    const f32 side = veh->config().seat_eye.x < 0.0f ? -1.0f : 1.0f;
-    const Vec3 anchor_local{side * (he.x + 0.4f), 0.0f, veh->config().seat_eye.z};
+    const SeatConfig& seat = seat_of(*veh, seat_index);
+    const f32 side = seat.door_side == 0 ? -1.0f : 1.0f;
+    const Vec3 anchor_local{side * (he.x + 0.4f), 0.0f, seat.eye.z};
     const Vec3 anchor = body->pos + rotate(body->rot, anchor_local);
     return distance(waist, anchor) < kEnterRange;
 }
@@ -232,7 +239,7 @@ void Player::tick(PhysWorld& phys, Vehicle* veh, const PlayerCommand& cmd, f32 d
 
     switch (state_) {
     case PlayerState::OnFoot:
-        if (cmd.interact && can_enter(phys, veh)) {
+        if (cmd.interact && can_enter(phys, veh, seat_)) {
             state_ = PlayerState::Entering;
             transition_t_ = 0.0f;
             transition_eye_ = movement_.eye();
@@ -255,6 +262,7 @@ void Player::tick(PhysWorld& phys, Vehicle* veh, const PlayerCommand& cmd, f32 d
             move.aim = cmd.aim;
             move.holster = cmd.holster;
             move.hands_busy = cmd.hands_busy;
+            move.wind = cmd.wind;
             movement_.tick(move, phys.gravity_field(), dt);
         }
         break;
@@ -262,7 +270,8 @@ void Player::tick(PhysWorld& phys, Vehicle* veh, const PlayerCommand& cmd, f32 d
     case PlayerState::Entering:
         transition_t_ += dt / kEnterTime;
         if (body && veh) {
-            seat_pos_ = seat_foot_world(*veh, *body);
+            seat_pos_ = seat_foot_world(*veh, *body, seat_);
+            movement_.tick_hands(false, false, cmd.hands_busy, seat_of(*veh, seat_).drives, dt);
         }
         if (transition_t_ >= 1.0f) {
             transition_t_ = 1.0f;
@@ -272,7 +281,8 @@ void Player::tick(PhysWorld& phys, Vehicle* veh, const PlayerCommand& cmd, f32 d
 
     case PlayerState::Driving:
         if (body && veh) {
-            seat_pos_ = seat_foot_world(*veh, *body);
+            seat_pos_ = seat_foot_world(*veh, *body, seat_);
+            movement_.tick_hands(cmd.holster, cmd.aim, cmd.hands_busy, seat_of(*veh, seat_).drives, dt);
             seat_vel_ = body->vel;
             if (cmd.interact && length(body->vel) <= kExitMaxSpeed) {
                 Vec3 foot;
@@ -280,7 +290,7 @@ void Player::tick(PhysWorld& phys, Vehicle* veh, const PlayerCommand& cmd, f32 d
                     state_ = PlayerState::Exiting;
                     transition_t_ = 0.0f;
                     exit_pos_ = foot;
-                    transition_eye_ = seat_eye_world(*veh, *body);
+                    transition_eye_ = seat_eye_world(*veh, *body, seat_);
                     const Vec3 fwd = rotate(body->rot, Vec3{0.0f, 0.0f, -1.0f});
                     f32 car_yaw = 0.0f;
                     f32 car_pitch = 0.0f;
@@ -296,7 +306,7 @@ void Player::tick(PhysWorld& phys, Vehicle* veh, const PlayerCommand& cmd, f32 d
     case PlayerState::Exiting: {
         transition_t_ += dt / kExitTime;
         const f32 s = smooth01(transition_t_);
-        const Vec3 from = (body && veh) ? seat_foot_world(*veh, *body) : exit_pos_;
+        const Vec3 from = (body && veh) ? seat_foot_world(*veh, *body, seat_) : exit_pos_;
         seat_pos_ = lerp(from, exit_pos_, s);
         if (transition_t_ >= 1.0f) {
             state_ = PlayerState::OnFoot;

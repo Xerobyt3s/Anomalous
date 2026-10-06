@@ -3,12 +3,16 @@
 #include "core/types.h"
 #include "math/vmath.h"
 
+#include <memory>
 #include <span>
 #include <string_view>
 
+namespace ghost::engine {
+class AudioEngine;
+}
+
 namespace anom {
 
-class Arena;
 struct AudioBackend;
 
 inline constexpr u32 kEngineLayerMax = 8;
@@ -31,7 +35,12 @@ void engine_crossfade(std::span<const f32> base_rpm, f32 rpm, std::span<f32> out
 
 class Audio {
 public:
-    bool init(Arena& arena);
+    Audio();
+    ~Audio();
+    Audio(const Audio&) = delete;
+    Audio& operator=(const Audio&) = delete;
+
+    bool init(ghost::engine::AudioEngine& engine);
     void shutdown();
 
     bool ok() const { return backend_ != nullptr; }
@@ -60,7 +69,7 @@ public:
     bool sfx_available(SfxKind kind) const;
 
 private:
-    AudioBackend* backend_ = nullptr;
+    std::unique_ptr<AudioBackend> backend_;
 };
 
-} // namespace anom
+}

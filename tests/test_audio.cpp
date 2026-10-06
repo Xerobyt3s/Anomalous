@@ -3,6 +3,11 @@
 #include "audio/audio.h"
 #include "audio/tapes.h"
 #include "core/arena.h"
+#include "engine/audio/audio_engine.h"
+
+#include <cmath>
+#include <memory>
+#include <vector>
 
 using namespace anom;
 
@@ -115,13 +120,11 @@ TEST(audio, an_uninitialised_system_is_inert)
     CHECK_NEAR(audio.occlusion(), 1.0f, 1e-6);
 }
 
-TEST(audio, a_device_backed_system_loads_its_engine_layers)
+TEST(audio, the_car_loads_its_engine_layers_on_the_shared_engine)
 {
-    Arena arena(megabytes(4));
+    ghost::engine::AudioEngine engine;
     Audio audio;
-    if (!audio.init(arena)) {
-        return;
-    }
+    CHECK(audio.init(engine));
 
     CHECK(audio.ok());
     CHECK(audio.sfx_available(SFX_HOOD));
@@ -150,11 +153,9 @@ TEST(audio, a_device_backed_system_loads_its_engine_layers)
 
 TEST(audio, occlusion_settles_toward_its_target)
 {
-    Arena arena(megabytes(4));
+    ghost::engine::AudioEngine engine;
     Audio audio;
-    if (!audio.init(arena)) {
-        return;
-    }
+    CHECK(audio.init(engine));
 
     for (i32 i = 0; i < 240; i++) {
         audio.set_occlusion(0.25f, kDt);
@@ -170,11 +171,9 @@ TEST(audio, occlusion_settles_toward_its_target)
 
 TEST(audio, a_missing_tape_leaves_the_deck_empty)
 {
-    Arena arena(megabytes(4));
+    ghost::engine::AudioEngine engine;
     Audio audio;
-    if (!audio.init(arena)) {
-        return;
-    }
+    CHECK(audio.init(engine));
 
     CHECK(!audio.tape_play("assets/audio/definitely_missing.wav"));
     CHECK(!audio.tape_playing());
@@ -182,6 +181,52 @@ TEST(audio, a_missing_tape_leaves_the_deck_empty)
     audio.tape_stop();
     CHECK(!audio.tape_playing());
     audio.shutdown();
+}
+
+TEST(audio, the_car_mixes_into_the_shared_engine)
+{
+    ghost::engine::AudioEngine engine;
+    Audio audio;
+    CHECK(audio.init(engine));
+    CHECK(engine.voiceCount() >= audio.engine_layer_count() + 9);
+    audio.set_listener(Vec3{}, Vec3{0.0f, 0.0f, -1.0f}, Vec3{0.0f, 1.0f, 0.0f}, Vec3{});
+    audio.set_car(Vec3{2.0f, 0.0f, 0.0f}, Vec3{2.0f, 0.0f, 0.0f}, Vec3{2.0f, 0.0f, 0.0f}, Vec3{});
+    for (i32 i = 0; i < 240; i++) {
+        audio.set_engine(2500.0f, 0.6f, true, false, kDt);
+    }
+    std::vector<f32> out(2 * 4800);
+    engine.mix(out.data(), 4800);
+    f32 peak = 0.0f;
+    for (f32 v : out) {
+        peak = f_max(peak, f_abs(v));
+    }
+    CHECK(peak > 0.01f);
+    audio.shutdown();
+    engine.mix(out.data(), 4800);
+    engine.mix(out.data(), 4800);
+    CHECK(engine.voiceCount() == 0);
+}
+
+TEST(audio, a_lowpass_voice_quiets_high_frequencies)
+{
+    auto tone = std::make_shared<ghost::engine::SoundBuffer>();
+    for (i32 i = 0; i < 4800; i++) {
+        tone->samples.push_back(std::sin(static_cast<f32>(i) * kTau * 8000.0f / 48000.0f));
+    }
+    const auto loudness = [&](f32 lowpass) {
+        ghost::engine::AudioEngine engine;
+        ghost::engine::PlayParams params;
+        params.lowpass = lowpass;
+        engine.play(tone, params);
+        std::vector<f32> out(2 * 4800);
+        engine.mix(out.data(), 4800);
+        f32 sum = 0.0f;
+        for (size_t i = 2400; i < out.size(); i++) {
+            sum += out[i] * out[i];
+        }
+        return sum;
+    };
+    CHECK(loudness(500.0f) < loudness(0.0f) * 0.05f);
 }
 
 TEST(audio, a_streamed_tape_plays_and_stops)
@@ -192,11 +237,9 @@ TEST(audio, a_streamed_tape_plays_and_stops)
         return;
     }
 
-    Arena arena(megabytes(4));
+    ghost::engine::AudioEngine engine;
     Audio audio;
-    if (!audio.init(arena)) {
-        return;
-    }
+    CHECK(audio.init(engine));
 
     CHECK(audio.tape_play(tapes.path(0)));
     CHECK(audio.tape_playing());

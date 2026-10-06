@@ -50,8 +50,8 @@ void tickPoltergeist(Ghost& ghost, const GhostDef& def, const GhostContext& cont
             : nullptr;
 
     const float a = ghost.age * 0.31f + ghost.seed;
-    const glm::vec3 drift{std::cos(a) * std::sin(a * 0.7f + 1.0f), 0.0f, std::sin(a * 1.2f)};
-    const glm::vec3 haunt = ghost.home + drift * p.wanderRadius + glm::vec3(0.0f, bob, 0.0f);
+    const glm::vec3 drift = upBasis(ghost.up) * glm::vec3(std::cos(a) * std::sin(a * 0.7f + 1.0f), 0.0f, std::sin(a * 1.2f));
+    const glm::vec3 haunt = ghost.home + drift * p.wanderRadius + ghost.up * bob;
 
     if (ghost.state != GhostState::Lift && ghost.heldProp != kNoProp) {
         ghost.heldProp = kNoProp;
@@ -78,7 +78,7 @@ void tickPoltergeist(Ghost& ghost, const GhostDef& def, const GhostContext& cont
             ghost.heldProp = prop->body;
             enter(ghost, GhostState::Lift);
         } else if (const GhostProp* far = nearestProp(context, ghost.position, p.grabRange * 4.0f)) {
-            seek(ghost, far->position + glm::vec3(0.0f, p.hoverHeight, 0.0f), p.speed, 2.0f, dt);
+            seek(ghost, far->position + ghostUp(context, far->position) * p.hoverHeight, p.speed, 2.0f, dt);
             if (glm::distance(ghost.position, far->position) < p.grabRange) {
                 ghost.home = ghost.position;
             }
@@ -98,12 +98,12 @@ void tickPoltergeist(Ghost& ghost, const GhostDef& def, const GhostContext& cont
         }
         const glm::vec3 chest = glm::mix(quarry->feet, quarry->eye, 0.7f);
         if (ghost.stateTime < p.holdTime) {
-            const glm::vec3 hold{prop->position.x, std::max(prop->position.y, 0.0f), prop->position.z};
             const float lift = p.liftHeight * std::min(1.0f, ghost.stateTime / (p.holdTime * 0.6f));
-            const glm::vec3 target{ghost.liftFrom.x, ghost.liftFrom.y + lift, ghost.liftFrom.z};
             if (ghost.stateTime <= dt * 1.5f) {
-                ghost.liftFrom = hold;
+                ghost.liftFrom = context.raycast ? prop->position
+                                                 : glm::vec3(prop->position.x, std::max(prop->position.y, 0.0f), prop->position.z);
             }
+            const glm::vec3 target = ghost.liftFrom + ghostUp(context, ghost.liftFrom) * lift;
             const glm::vec3 shake{std::sin(ghost.age * 47.0f), std::sin(ghost.age * 53.0f + 1.0f), std::sin(ghost.age * 41.0f + 2.0f)};
             glm::vec3 velocity = (target - prop->position) * 7.0f + shake * 0.6f;
             if (glm::length(velocity) > 6.0f) {
@@ -116,8 +116,8 @@ void tickPoltergeist(Ghost& ghost, const GhostDef& def, const GhostContext& cont
             const glm::vec3 to = chest - prop->position;
             const float distance = glm::length(to);
             const float flight = distance / std::max(p.throwSpeed, 1.0f);
-            const glm::vec3 velocity = (distance > 1e-3f ? to / distance : glm::vec3(0.0f, 0.0f, -1.0f)) * p.throwSpeed +
-                                       glm::vec3(0.0f, 0.5f * 9.81f * flight, 0.0f);
+            const glm::vec3 velocity = (distance > 1e-3f ? to / distance : glm::vec3(0.0f, 0.0f, -1.0f)) * p.throwSpeed -
+                                       ghostGravity(context, prop->position) * (0.5f * flight);
             if (context.moveProp) {
                 context.moveProp(prop->body, velocity);
             }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "carsys/carsys.h"
+
 #include "core/fixed_string.h"
 #include "core/types.h"
 #include "math/vmath.h"
@@ -30,6 +32,18 @@ struct WheelConfig {
     f32 brake_share = 1.0f;
     bool steered = false;
     bool driven = false;
+};
+
+inline constexpr u32 kMaxSeats = 2;
+
+struct SeatConfig {
+    Vec3 eye{-0.4f, 0.35f, -0.3f};
+    Vec3 hips{-0.4f, -0.12f, -0.25f};
+    Vec3 feet{-0.4f, -0.3f, -0.6f};
+    i32 door_side = 0;
+    bool drives = false;
+    PartKind blocked_by = PART_COUNT;
+    f32 window_cos = 0.3f;
 };
 
 struct VehicleConfig {
@@ -96,6 +110,15 @@ struct VehicleConfig {
     f32 steer_rate_deg = 240.0f;
 
     Vec3 seat_eye{-0.4f, 0.35f, -0.3f};
+    Vec3 seat_hips{-0.4f, -0.12f, -0.25f};
+    Vec3 pedals{-0.4f, -0.3f, -0.6f};
+    Vec3 wheel_center{-0.4f, 0.2f, -0.6f};
+    Vec3 wheel_normal{0.0f, 0.4f, 0.92f};
+    f32 wheel_radius = 0.18f;
+    Vec3 shifter{0.0f, 0.1f, -0.2f};
+    SynthTuning synth;
+    SeatConfig seats[kMaxSeats];
+    u32 seat_count = 1;
 
     FixedString<32> body_mesh;
     FixedString<32> wheel_mesh;

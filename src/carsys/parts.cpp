@@ -17,6 +17,8 @@ constexpr PartDef kPartDefs[PART_COUNT] = {
     {"tire fr", true, 16.0f, {0.72f, -0.31f, -1.24f}, {0.14f, 0.31f, 0.31f}, "excel_wheel", false},
     {"tire rl", true, 16.0f, {-0.72f, -0.31f, 1.24f}, {0.14f, 0.31f, 0.31f}, "excel_wheel", false},
     {"tire rr", true, 16.0f, {0.72f, -0.31f, 1.24f}, {0.14f, 0.31f, 0.31f}, "excel_wheel", false},
+    {"material tank", true, 9.0f, {0.33f, 0.06f, 0.88f}, {0.12f, 0.13f, 0.12f}, "part_tank", false},
+    {"printer", true, 15.0f, {0.33f, -0.22f, 0.88f}, {0.22f, 0.15f, 0.18f}, "part_printer", false},
 };
 
 } // namespace
@@ -42,7 +44,7 @@ bool part_kind_is_tire(PartKind kind)
 void parts_init(PartSlot* parts)
 {
     for (u32 i = 0; i < PART_COUNT; i++) {
-        parts[i].installed = i != PART_COMPUTER && i != PART_ANTENNA && i != PART_COIL;
+        parts[i].installed = i != PART_COMPUTER && i != PART_ANTENNA && i != PART_COIL && i != PART_TANK && i != PART_PRINTER;
         parts[i].condition = 1.0f;
         parts[i].variant = 0;
     }

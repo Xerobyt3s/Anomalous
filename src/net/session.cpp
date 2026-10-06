@@ -1,4 +1,5 @@
 #include "net/session.h"
+#include "engine/net/steam.h"
 #include "core/log.h"
 #include "math/glm_bridge.h"
 #include "sim/sim.h"
@@ -18,9 +19,22 @@ ghost::game::net::Msg tag(Msg msg)
 
 }
 
+bool ownHandsOnly(const ghost::game::GameEvent& event)
+{
+    using namespace ghost::game;
+    return std::holds_alternative<DryFired>(event) || std::holds_alternative<HammerCocked>(event) ||
+           std::holds_alternative<CylinderOpened>(event) || std::holds_alternative<CylinderClosed>(event) ||
+           std::holds_alternative<ChambersEjected>(event) || std::holds_alternative<SpeedloaderUsed>(event) ||
+           std::holds_alternative<RoundLoaded>(event) || std::holds_alternative<RoundPickedUp>(event) ||
+           std::holds_alternative<PlayerHit>(event) || std::holds_alternative<GunHolstered>(event);
+}
+
+constexpr std::size_t kPackRun = 128;
+constexpr std::uint32_t kPackLimit = 1u << 20;
+
 std::uint32_t protocolVersion()
 {
-    constexpr std::uint32_t kRevision = 1;
+    constexpr std::uint32_t kRevision = 2;
     return ghost::game::net::protocolVersion() * 31u + kRevision * 1000003u
          + static_cast<std::uint32_t>(sizeof(SlotWire) * 7 + sizeof(PickupWire) * 11 + sizeof(WorldHeader) * 13
                                       + sizeof(PlayerCommand) * 17 + sizeof(BodyMsg) * 19 + sizeof(TermMirror) * 23);
@@ -90,6 +104,7 @@ std::vector<std::uint8_t> encodeBody(const BodyMsg& body)
     Writer w(tag(Msg::Body));
     w.pod(body.body);
     w.pod(body.command);
+    w.pod(body.gun);
     w.pod(body.hasCar);
     if (body.hasCar) {
         w.pod(body.car);
@@ -111,6 +126,11 @@ std::vector<std::uint8_t> encodeWorld(const WorldSnapshot& s)
     w.list(s.players);
     w.list(s.roster);
     w.list(s.pickups);
+    w.list(s.gameplay.ghosts);
+    w.list(s.gameplay.volumes);
+    w.list(s.gameplay.materialDrops);
+    w.list(s.gameplay.rounds);
+    w.list(s.gameplay.materials);
     return std::move(w.bytes);
 }
 
@@ -121,10 +141,82 @@ std::optional<WorldSnapshot> decodeWorld(Reader& reader)
     s.players = reader.list<SlotWire>();
     s.roster = reader.list<ghost::game::RosterEntry>();
     s.pickups = reader.list<PickupWire>();
+    s.gameplay.ghosts = reader.list<ghost::game::Ghost>();
+    s.gameplay.volumes = reader.list<ghost::game::ElementVolume>();
+    s.gameplay.materialDrops = reader.list<ghost::game::net::DropWire>();
+    s.gameplay.rounds = reader.list<ghost::game::net::RoundWire>();
+    s.gameplay.materials = reader.list<std::int32_t>();
     if (!reader.ok()) {
         return std::nullopt;
     }
     return s;
+}
+
+std::vector<std::uint8_t> pack(const std::vector<std::uint8_t>& raw)
+{
+    std::vector<std::uint8_t> out;
+    out.reserve(raw.size() / 3 + 8);
+    out.push_back(static_cast<std::uint8_t>(Msg::Packed));
+    const auto size = static_cast<std::uint32_t>(raw.size());
+    for (int b = 0; b < 4; ++b) {
+        out.push_back(static_cast<std::uint8_t>(size >> (8 * b)));
+    }
+    std::size_t i = 0;
+    const std::size_t n = raw.size();
+    while (i < n) {
+        std::size_t j = i;
+        if (raw[i] == 0) {
+            while (j < n && raw[j] == 0 && j - i < kPackRun) {
+                ++j;
+            }
+            out.push_back(static_cast<std::uint8_t>(0x80u | (j - i - 1)));
+        } else {
+            while (j < n && j - i < kPackRun && !(raw[j] == 0 && j + 1 < n && raw[j + 1] == 0)) {
+                ++j;
+            }
+            out.push_back(static_cast<std::uint8_t>(j - i - 1));
+            out.insert(out.end(), raw.begin() + static_cast<std::ptrdiff_t>(i), raw.begin() + static_cast<std::ptrdiff_t>(j));
+        }
+        i = j;
+    }
+    return out;
+}
+
+std::optional<std::vector<std::uint8_t>> unpack(std::span<const std::uint8_t> packed)
+{
+    if (packed.size() < 5 || packed[0] != static_cast<std::uint8_t>(Msg::Packed)) {
+        return std::nullopt;
+    }
+    std::uint32_t size = 0;
+    for (int b = 0; b < 4; ++b) {
+        size |= static_cast<std::uint32_t>(packed[1 + b]) << (8 * b);
+    }
+    if (size > kPackLimit) {
+        return std::nullopt;
+    }
+    std::vector<std::uint8_t> out;
+    out.reserve(size);
+    std::size_t i = 5;
+    while (i < packed.size()) {
+        const std::uint8_t control = packed[i++];
+        const std::size_t count = static_cast<std::size_t>(control & 0x7Fu) + 1;
+        if (out.size() + count > size) {
+            return std::nullopt;
+        }
+        if (control & 0x80u) {
+            out.insert(out.end(), count, std::uint8_t{0});
+        } else {
+            if (i + count > packed.size()) {
+                return std::nullopt;
+            }
+            out.insert(out.end(), packed.begin() + static_cast<std::ptrdiff_t>(i), packed.begin() + static_cast<std::ptrdiff_t>(i + count));
+            i += count;
+        }
+    }
+    if (out.size() != size) {
+        return std::nullopt;
+    }
+    return out;
 }
 
 std::vector<std::uint8_t> encodeScreen(const TermMirror& mirror)
@@ -189,6 +281,70 @@ bool NetSession::join(Sim& sim, const std::string& address, std::uint16_t port, 
     return true;
 }
 
+bool NetSession::hostSteam(Sim& sim)
+{
+    if (m_role != Role::Solo) {
+        return false;
+    }
+    auto transport = ghost::engine::steam::listen(kMaxPlayers - 1);
+    if (!transport) {
+        m_status = "Could not host on Steam (is Steam running?)";
+        return false;
+    }
+    ghost::engine::steam::createLobby(kMaxPlayers, std::to_string(net::protocolVersion()));
+    attach(std::move(transport), Role::Host, sim, m_name);
+    m_viaSteam = true;
+    m_status = "Hosting on Steam: friends can join";
+    log_info("net: %s", m_status.c_str());
+    return true;
+}
+
+void NetSession::joinSteam(Sim& sim, std::uint64_t lobby)
+{
+    if (m_role != Role::Solo) {
+        leave(sim, "Left to join a friend");
+    }
+    ghost::engine::steam::joinLobby(lobby);
+    m_steamJoining = true;
+    m_status = "Joining a friend on Steam...";
+}
+
+void NetSession::steamUpdate(Sim& sim, float dt, bool menuOpen)
+{
+    if (!ghost::engine::steam::available()) {
+        return;
+    }
+    if (const auto asked = ghost::engine::steam::takePendingJoin()) {
+        joinSteam(sim, *asked);
+    }
+    if (m_steamJoining) {
+        const ghost::engine::steam::JoinState state = ghost::engine::steam::joinState();
+        if (state == ghost::engine::steam::JoinState::Ready) {
+            m_steamJoining = false;
+            if (auto transport = ghost::engine::steam::connectToLobbyOwner()) {
+                attach(std::move(transport), Role::Client, sim, m_name);
+                m_viaSteam = true;
+                m_status = "Connecting to a friend on Steam...";
+            } else {
+                ghost::engine::steam::leaveLobby();
+                m_status = "Could not connect to that game";
+            }
+        } else if (state != ghost::engine::steam::JoinState::Entering) {
+            m_steamJoining = false;
+            m_status = "Could not join that game";
+        }
+    }
+    m_friendsRefresh -= dt;
+    if (m_role == Role::Solo && menuOpen && m_friendsRefresh <= 0.0f) {
+        m_friendsRefresh = 2.0f;
+        m_friendGames.clear();
+        for (const ghost::engine::steam::FriendGame& game :
+             ghost::engine::steam::friendsPlaying(std::to_string(net::protocolVersion()))) {
+            m_friendGames.push_back({game.lobby, game.name});
+        }
+    }
+}
+
 void NetSession::attach(std::unique_ptr<ghost::engine::Transport> transport, Role role, Sim& sim,
                         const std::string& name)
 {
@@ -232,10 +388,23 @@ void NetSession::leave(Sim& sim, const std::string& why)
     }
     m_net.reset();
     m_remotes.clear();
+    if (m_viaSteam) {
+        ghost::engine::steam::leaveLobby();
+        m_viaSteam = false;
+    }
     m_role = Role::Solo;
     m_welcomed = false;
     m_status = why;
     log_info("net: %s", why.c_str());
+}
+
+void NetSession::sendTo(PlayerId id, const std::vector<std::uint8_t>& message)
+{
+    for (const Remote& r : m_remotes) {
+        if (r.id == id && m_net) {
+            m_net->send(r.peer, message, true);
+        }
+    }
 }
 
 NetSession::Remote* NetSession::remoteByPeer(ghost::engine::PeerId peer)
@@ -274,6 +443,13 @@ void NetSession::receive(Sim& sim)
             }
             break;
         case NetEvent::Type::Message: {
+            if (!event.data.empty() && event.data[0] == static_cast<std::uint8_t>(net::Msg::Packed)) {
+                auto raw = net::unpack(event.data);
+                if (!raw) {
+                    break;
+                }
+                event.data = std::move(*raw);
+            }
             Reader reader(event.data);
             if (m_role == Role::Host) {
                 hostHandle(sim, event.peer, reader);
@@ -315,17 +491,18 @@ void NetSession::hostHandle(Sim& sim, ghost::engine::PeerId peer, Reader& reader
         m_net->send(peer, net::encodeZone(net::ZoneMsg{std::string(sim.zone_dir()), body.yaw()}), true);
         WorldSnapshot snapshot;
         sim.make_snapshot(snapshot);
-        m_net->send(peer, net::encodeWorld(snapshot), true);
+        m_net->send(peer, net::pack(net::encodeWorld(snapshot)), true);
         log_info("net: %s joined as player %u", hello->name.c_str(), static_cast<u32>(id));
         return;
     }
     if (!sender) {
         return;
     }
-    switch (static_cast<net::Msg>(type)) {
-    case net::Msg::Body: {
+    switch (type) {
+    case static_cast<std::uint8_t>(net::Msg::Body): {
         const Player body = reader.pod<Player>();
         const PlayerCommand command = reader.pod<PlayerCommand>();
+        const ghost::game::MechanismView gun = reader.pod<ghost::game::MechanismView>();
         const bool hasCar = reader.pod<bool>();
         CarWire car;
         if (hasCar) {
@@ -334,6 +511,8 @@ void NetSession::hostHandle(Sim& sim, ghost::engine::PeerId peer, Reader& reader
         if (reader.ok()) {
             sender->body = body;
             sender->freshBody = true;
+            sender->gun = gun;
+            sender->freshGun = true;
             sender->latest = net::continuousPart(command);
             if (hasCar) {
                 sender->car = car;
@@ -342,14 +521,28 @@ void NetSession::hostHandle(Sim& sim, ghost::engine::PeerId peer, Reader& reader
         }
         break;
     }
-    case net::Msg::Intent: {
+    case static_cast<std::uint8_t>(net::Msg::Intent): {
         const PlayerCommand command = reader.pod<PlayerCommand>();
         if (reader.ok() && sender->intents.size() < 64) {
             sender->intents.push_back(command);
         }
         break;
     }
-    case net::Msg::Photo: {
+    case static_cast<std::uint8_t>(ghost::game::net::Msg::Shot): {
+        const auto shot = reader.pod<ghost::game::net::ShotMsg>();
+        if (reader.ok()) {
+            sim.queue_remote_shot(sender->id, shot);
+        }
+        break;
+    }
+    case static_cast<std::uint8_t>(ghost::game::net::Msg::DropRounds): {
+        auto rounds = reader.list<ghost::game::net::RoundWire>();
+        if (reader.ok() && rounds.size() <= 16) {
+            sim.queue_remote_rounds(std::move(rounds));
+        }
+        break;
+    }
+    case static_cast<std::uint8_t>(net::Msg::Photo): {
         std::vector<u8> rgb(kPhotoBytes);
         for (u32 i = 0; i < kPhotoBytes; i++) {
             rgb[i] = reader.pod<u8>();
@@ -413,6 +606,21 @@ void NetSession::clientHandle(Sim& sim, Reader& reader)
         if (reader.ok()) {
             sim.queue_term_mirror(mirror);
         }
+    } else if (type == static_cast<std::uint8_t>(ghost::game::net::Msg::Projectile)) {
+        const auto projectile = reader.pod<ghost::game::Projectile>();
+        if (reader.ok()) {
+            sim.queue_projectile(projectile);
+        }
+    } else if (type == static_cast<std::uint8_t>(ghost::game::net::Msg::Impulse)) {
+        const auto push = reader.pod<glm::vec3>();
+        if (reader.ok()) {
+            sim.queue_impulse(push);
+        }
+    } else if (type == static_cast<std::uint8_t>(ghost::game::net::Msg::Give)) {
+        const auto round = reader.pod<ghost::game::Round>();
+        if (reader.ok()) {
+            sim.queue_give(round);
+        }
     } else if (type == static_cast<std::uint8_t>(ghost::game::net::Msg::Events)) {
         if (const auto events = ghost::game::net::decodeEvents(reader)) {
             for (const ghost::game::GameEvent& event : *events) {
@@ -444,8 +652,11 @@ void NetSession::commands(const Sim& sim, const PlayerCommand& local, std::vecto
         c.body = r.body;
         c.has_car = r.freshCar;
         c.car = r.car;
+        c.has_gun = r.freshGun;
+        c.gun = r.gun;
         r.freshBody = false;
         r.freshCar = false;
+        r.freshGun = false;
         out.push_back(c);
     }
 }
@@ -462,25 +673,57 @@ void NetSession::afterTick(Sim& sim, const PlayerCommand& local)
             m_told = 0;
         }
         if (m_told < events.size()) {
-            ghost::game::EventList told(events.begin() + static_cast<std::ptrdiff_t>(m_told), events.end());
-            m_net->broadcast(ghost::game::net::encode(told), true);
+            ghost::game::EventList told;
+            for (std::size_t i = m_told; i < events.size(); ++i) {
+                if (!net::ownHandsOnly(events[i])) {
+                    told.push_back(events[i]);
+                }
+            }
+            if (!told.empty()) {
+                m_net->broadcast(ghost::game::net::encode(told), true);
+            }
         }
         m_told = events.size();
+        for (const ghost::game::Projectile& p : sim.gameplay().ballistics().projectiles()) {
+            if (p.id > m_sentProjectile) {
+                m_net->broadcast(ghost::game::net::encode(p), true);
+                m_sentProjectile = p.id;
+            }
+        }
+        for (const auto& [id, push] : sim.take_impulses()) {
+            sendTo(id, ghost::game::net::encodeImpulse(push));
+        }
+        for (const auto& [id, round] : sim.take_gives()) {
+            sendTo(id, ghost::game::net::encodeGive(round));
+        }
         if (!m_remotes.empty() && m_ticks % kSnapshotEvery == 0) {
             WorldSnapshot snapshot;
             sim.make_snapshot(snapshot);
-            m_net->broadcast(net::encodeWorld(snapshot), false);
+            m_net->broadcast(net::pack(net::encodeWorld(snapshot)), false);
         }
         const bool screenOn = sim.terminal().powered();
         if (!m_remotes.empty() && (screenOn || m_screenWasOn) && m_ticks % kScreenEvery == 0) {
             TermMirror mirror;
             sim.terminal().mirror(mirror);
-            m_net->broadcast(net::encodeScreen(mirror), screenOn != m_screenWasOn);
+            std::vector<std::uint8_t> screen = net::encodeScreen(mirror);
+            const bool switched = screenOn != m_screenWasOn;
+            ++m_screenAge;
+            if (switched || screen != m_lastScreen || m_screenAge >= kScreenRefresh) {
+                m_net->broadcast(net::pack(screen), switched);
+                m_lastScreen = std::move(screen);
+                m_screenAge = 0;
+            }
             m_screenWasOn = screenOn;
         }
     } else if (m_role == Role::Client && m_welcomed) {
         if (net::hasEdges(local)) {
             m_net->send(m_hostPeer, net::encodeIntent(local), true);
+        }
+        for (const ghost::game::net::ShotMsg& shot : sim.take_outgoing_shots()) {
+            m_net->send(m_hostPeer, ghost::game::net::encode(shot), true);
+        }
+        if (auto rounds = sim.take_outgoing_rounds(); !rounds.empty()) {
+            m_net->send(m_hostPeer, ghost::game::net::encodeRounds(rounds), true);
         }
         if (m_ticks % kUpdateEvery == 0) {
             const PlayerSlot* mine = sim.slot(sim.local_id());
@@ -488,11 +731,12 @@ void NetSession::afterTick(Sim& sim, const PlayerCommand& local)
                 net::BodyMsg body;
                 body.body = mine->player;
                 body.command = net::continuousPart(local);
+                body.gun = sim.gun_view(sim.local_id(), 1.0f);
                 body.hasCar = sim.driver() == sim.local_id();
                 if (body.hasCar) {
                     body.car = sim.vehicle().wire(sim.phys());
                 }
-                m_net->send(m_hostPeer, net::encodeBody(body), false);
+                m_net->send(m_hostPeer, net::pack(net::encodeBody(body)), false);
             }
         }
     }
@@ -504,7 +748,7 @@ bool NetSession::sendPhoto(std::span<const u8> rgb)
     if (m_role != Role::Client || !m_welcomed || !m_net) {
         return false;
     }
-    m_net->send(m_hostPeer, net::encodePhoto(rgb), true);
+    m_net->send(m_hostPeer, net::pack(net::encodePhoto(rgb)), true);
     return true;
 }
 

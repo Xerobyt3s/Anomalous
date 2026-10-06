@@ -776,3 +776,40 @@ TEST(travel, standing_down_returns_to_the_destination_list)
     rig.term.key(TermKey::Quit);
     CHECK(rig.term.mode() == TermMode::Shell);
 }
+
+TEST(terminal, synth_needs_a_bus_link_to_the_car_or_the_printer)
+{
+    Rig rig;
+    if (!rig.setup()) {
+        FAIL("rig");
+        return;
+    }
+    rig.boot();
+    rig.sys.parts[PART_PRINTER].installed = true;
+    rig.sys.parts[PART_TANK].installed = true;
+    rig.command("synth");
+    CHECK(rig.said("NO BUS LINK"));
+    CHECK(rig.term.mode() != TermMode::Synth);
+
+    rig.view.bus_state = PORT_LINKED;
+    rig.view.bus_printer = true;
+    rig.command("synth");
+    CHECK(rig.term.mode() == TermMode::Synth);
+
+    rig.view.bus_state = PORT_UNPLUGGED;
+    rig.tick(2);
+    rig.term.screen().flush_pending();
+    CHECK(rig.term.mode() == TermMode::Shell);
+    CHECK(rig.said("SYNTH LINK LOST"));
+
+    rig.view.bus_state = PORT_LINKED;
+    rig.view.bus_printer = false;
+    rig.sys.parts[PART_TANK].installed = false;
+    rig.command("synth");
+    CHECK(rig.said("NO MATERIAL TANK ON THE PRINTER"));
+    CHECK(rig.term.mode() != TermMode::Synth);
+
+    rig.view.bus_printer = true;
+    rig.command("status");
+    CHECK(rig.said("BUS FEED IS PRINTER"));
+}

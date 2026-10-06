@@ -15,6 +15,7 @@ constexpr f32 kWallNy = 0.3f;
 constexpr f32 kGroundHug = 1.0f;
 constexpr f32 kSlopeFacingMin = 0.35f;
 constexpr f32 kSettleDt = 1.0f / 60.0f;
+constexpr f32 kRiseFromGround = 0.1f;
 
 Vec3 approach(Vec3 current, Vec3 target, f32 max_delta)
 {
@@ -102,6 +103,14 @@ void Movement::adopt(const Movement& other)
     *this = other;
     jolt_ = jolt;
     character_ = character;
+}
+
+void Movement::add_impulse(Vec3 delta_v)
+{
+    state_.vel += delta_v;
+    if (dot(delta_v, up()) > 0.0f) {
+        state_.grounded = false;
+    }
 }
 
 void Movement::apply_haste(f32 duration, f32 scale)
@@ -385,11 +394,18 @@ void Movement::tick(const MoveCommand& cmd, const GravityField* field, f32 dt)
         speed = f_min(speed, t.busy_speed);
     }
     speed *= speed_mul_;
-    const Vec3 wish = (forward * move.y + right * move.x) * speed;
+    Vec3 wish = (forward * move.y + right * move.x) * speed;
+    const f32 wind_up = dot(cmd.wind, u);
+    const Vec3 drift = cmd.wind - u * wind_up;
+    const bool windy = length_sq(drift) > 1e-4f;
+    wish += drift;
     const bool has_wish = length_sq(wish) > 0.0f;
     f32 accel = s.grounded ? (has_wish ? t.ground_accel : t.ground_decel) : t.air_accel;
     if (s.stance == Stance::Dive) {
         accel = 0.0f;
+    }
+    if (!s.grounded && windy) {
+        accel = f_max(accel, t.wind_air_accel);
     }
 
     const bool belly_sliding = s.stance == Stance::Crawl && s.grounded
@@ -413,6 +429,10 @@ void Movement::tick(const MoveCommand& cmd, const GravityField* field, f32 dt)
         v_up = t.jump_speed;
         s.grounded = false;
         jumped = true;
+    }
+    if (wind_up > t.lift_threshold) {
+        s.grounded = false;
+        v_up += (wind_up - v_up) * t.lift_coupling * dt;
     }
     if (s.grounded) {
         v_up = 0.0f;
@@ -461,12 +481,29 @@ void Movement::tick(const MoveCommand& cmd, const GravityField* field, f32 dt)
             s.vel -= wall * into;
         }
     }
-    if (moved.grounded) {
+    const bool rising = dot(s.vel, u) > kRiseFromGround;
+    const bool landed = moved.grounded && !jumped && !rising;
+    if (landed) {
         s.vel -= u * dot(s.vel, u);
     }
-    s.grounded = moved.grounded && !jumped;
-    s.ground_vel = moved.grounded ? from_glm(moved.groundVelocity) : Vec3{};
-    s.ground_normal = moved.grounded ? from_glm(moved.groundNormal) : u;
+    s.grounded = landed;
+    s.ground_vel = landed ? from_glm(moved.groundVelocity) : Vec3{};
+    s.ground_normal = landed ? from_glm(moved.groundNormal) : u;
+}
+
+void Movement::tick_hands(bool holster, bool aim, bool busy, bool force_holster, f32 dt)
+{
+    MoveState& s = state_;
+    if (force_holster) {
+        s.holstered = true;
+    } else if (holster && !busy && !s.downed) {
+        s.holstered = !s.holstered;
+    }
+    const f32 holster_rate = 1.0f / f_max(s.holstered ? tuning_.holster_time : tuning_.draw_time, 0.01f);
+    s.holster = f_clamp01(s.holster + (s.holstered ? dt : -dt) * holster_rate);
+    s.aiming = aim && !busy && s.holster <= 0.0f;
+    previous_.holster = s.holster;
+    previous_.holstered = s.holstered;
 }
 
 }

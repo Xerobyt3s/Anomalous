@@ -19,6 +19,7 @@ inline constexpr i32 kCoaxTargetAntenna = 0;
 inline constexpr i32 kCoaxTargetCamera = 1;
 inline constexpr i32 kBusTargetCar = 0;
 inline constexpr i32 kBusTargetTower = 1;
+inline constexpr i32 kBusTargetPrinter = 2;
 
 inline constexpr f32 kTrunkMinX = -0.50f;
 inline constexpr f32 kTrunkMaxX = 0.50f;
@@ -26,6 +27,59 @@ inline constexpr f32 kTrunkFloorY = -0.20f;
 inline constexpr f32 kTrunkTopY = 0.16f;
 inline constexpr f32 kTrunkMinZ = 1.45f;
 inline constexpr f32 kTrunkMaxZ = 2.03f;
+
+inline constexpr u32 kSynthMaterials = 16;
+inline constexpr u32 kSynthElements = 32;
+inline constexpr u32 kSynthDoses = 3;
+
+enum class SynthResult : u8 {
+    None,
+    Queued,
+    Unstable,
+    NoPropellant,
+    NoStock,
+    Busy,
+    BadRecipe,
+    NoHardware,
+};
+
+struct SynthBay {
+    u16 tank[kSynthMaterials] = {};
+    u16 tray[kSynthElements] = {};
+    i32 job_element = -1;
+    u16 job_total = 0;
+    u16 job_left = 0;
+    f32 progress = 0.0f;
+    bool stalled = false;
+    u32 serial = 0;
+    SynthResult result = SynthResult::None;
+    u32 result_serial = 0;
+
+    u32 tank_total() const
+    {
+        u32 n = 0;
+        for (u16 c : tank) {
+            n += c;
+        }
+        return n;
+    }
+    u32 tray_total() const
+    {
+        u32 n = 0;
+        for (u16 c : tray) {
+            n += c;
+        }
+        return n;
+    }
+};
+
+struct SynthTuning {
+    f32 print_time = 3.0f;
+    f32 battery_per_round = 0.01f;
+    f32 min_battery = 0.15f;
+    u32 tray_max = 24;
+    u32 tank_capacity = 60;
+};
 
 struct CargoItem {
     Item item;
@@ -53,6 +107,7 @@ public:
     Fluids fluids;
     Cable cables[CABLE_KIND_COUNT];
     CargoItem cargo[kCargoMax];
+    SynthBay synth;
 
     bool engine_on = false;
     f32 crank_timer = 0.0f;
@@ -95,6 +150,7 @@ private:
     f32 crank_time() const;
     void detect_impacts(Vehicle& veh, const struct RigidBody& body, Vec3 dv, f32 dt);
     void cargo_tick(Vec3 apparent, f32 dt);
+    void synth_tick(const SynthTuning& tuning, f32 dt);
 };
 
 } // namespace anom

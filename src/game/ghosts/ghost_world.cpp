@@ -13,6 +13,28 @@
 
 namespace ghost::game {
 namespace {
+constexpr float kUpEase = 4.0f;
+
+void keepAboveFloor(Ghost& ghost, const GhostDef& def, const GhostContext& context) {
+    if (context.raycast) {
+        const glm::vec3 above = ghost.position + ghost.up * def.radius;
+        if (const auto floor = context.raycast(above, ghost.position - ghost.up * def.radius)) {
+            const float clearance = glm::dot(ghost.position - floor->point, floor->normal);
+            if (clearance < def.radius) {
+                ghost.position += floor->normal * (def.radius - clearance);
+                const float into = glm::dot(ghost.velocity, floor->normal);
+                if (into < 0.0f) {
+                    ghost.velocity -= floor->normal * into;
+                }
+            }
+        }
+    } else if (ghost.position.y < def.radius) {
+        ghost.position.y = def.radius;
+        ghost.velocity.y = std::max(ghost.velocity.y, 0.0f);
+    }
+}
+}
+namespace {
 constexpr float kFogBlind = 0.25f;
 constexpr float kSourceMemory = 0.5f;
 
@@ -105,6 +127,34 @@ bool ghostPerceives(const Ghost& ghost, const GhostDef& def, const GhostQuarry& 
     return true;
 }
 
+glm::vec3 ghostGravity(const GhostContext& context, const glm::vec3& at) {
+    return context.gravity ? context.gravity(at) : glm::vec3(0.0f, -9.81f, 0.0f);
+}
+
+glm::vec3 ghostUp(const GhostContext& context, const glm::vec3& at) {
+    const glm::vec3 g = ghostGravity(context, at);
+    const float length = glm::length(g);
+    return length > 1e-4f ? -g / length : glm::vec3(0.0f, 1.0f, 0.0f);
+}
+
+glm::mat3 upBasis(const glm::vec3& up) {
+    const glm::vec3 helper = std::abs(up.z) < 0.9f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+    const glm::vec3 right = glm::normalize(glm::cross(up, helper));
+    return glm::mat3(right, up, glm::cross(right, up));
+}
+
+bool ghostAttacking(const Ghost& ghost, const GhostDef& def) {
+    switch (def.behavior) {
+    case GhostBehavior::Wisp: return ghost.state == GhostState::Rush;
+    case GhostBehavior::BallLightning: return ghost.state == GhostState::Charge;
+    case GhostBehavior::Mimic: return ghost.state == GhostState::Windup || ghost.state == GhostState::Leap;
+    case GhostBehavior::Vasskraka: return ghost.state == GhostState::Stoop;
+    case GhostBehavior::Poltergeist: return ghost.state == GhostState::Lift;
+    case GhostBehavior::Necromite: return ghost.state == GhostState::Bore;
+    }
+    return false;
+}
+
 std::optional<GhostSurfaceHit> castSurface(const GhostContext& context, const glm::vec3& from, const glm::vec3& to) {
     if (context.raycast) {
         return context.raycast(from, to);
@@ -129,11 +179,12 @@ GhostHitSphere ghostHitSphere(const Ghost& ghost, const GhostDef& def) {
     return {ghost.position + ghost.surfaceNormal * (ghost.attached ? def.mimic.standHeight : 0.0f), def.radius};
 }
 
-std::uint32_t GhostWorld::spawn(GhostTypeId type, const glm::vec3& position) {
+std::uint32_t GhostWorld::spawn(GhostTypeId type, const glm::vec3& position, const glm::vec3& up) {
     Ghost ghost;
     ghost.id = m_nextId++;
     ghost.type = type;
     ghost.position = position;
+    ghost.up = up;
     ghost.home = position;
     ghost.health = m_data->types[type].health;
     ghost.seed = std::uniform_real_distribution<float>(0.0f, 100.0f)(m_rng);
@@ -209,7 +260,13 @@ void GhostWorld::tick(float dt, const GhostContext& context, EventList& events) 
         ghost.age += dt;
         ghost.stateTime += dt;
         ghost.dodging = std::max(0.0f, ghost.dodging - dt);
+        const glm::vec3 wantUp = ghostUp(context, ghost.position);
+        const glm::vec3 eased = ghost.up + (wantUp - ghost.up) * std::min(1.0f, kUpEase * dt);
+        ghost.up = glm::length(eased) > 1e-3f ? glm::normalize(eased) : wantUp;
         sense(ghost, def, context, dt);
+        if (tumble(ghost, def, context, dt, events)) {
+            continue;
+        }
 
         switch (def.behavior) {
         case GhostBehavior::BallLightning:
@@ -242,16 +299,93 @@ void GhostWorld::tick(float dt, const GhostContext& context, EventList& events) 
             continue;
         }
 
-        if (context.wind) {
-            ghost.position += context.wind(ghost.position) * ((1.0f - def.weight) * dt);
-        }
         ghost.position += ghost.velocity * dt;
-        ghost.position.y = std::max(ghost.position.y, def.radius);
+        if (context.raycast) {
+            const glm::vec3 above = ghost.position + ghost.up * def.radius;
+            if (const auto floor = context.raycast(above, ghost.position - ghost.up * def.radius)) {
+                const float clearance = glm::dot(ghost.position - floor->point, floor->normal);
+                if (clearance < def.radius) {
+                    ghost.position += floor->normal * (def.radius - clearance);
+                }
+            }
+        } else {
+            ghost.position.y = std::max(ghost.position.y, def.radius);
+        }
     }
     std::erase_if(m_ghosts, [this](const Ghost& g) {
         return std::find(m_dead.begin(), m_dead.end(), g.id) != m_dead.end();
     });
     m_dead.clear();
+}
+
+bool GhostWorld::tumble(Ghost& ghost, const GhostDef& def, const GhostContext& context, float dt, EventList& events) {
+    if (def.windImmune || !context.wind) {
+        ghost.caught = 0.0f;
+        return false;
+    }
+    const CaughtTuning& t = m_data->caught;
+    const glm::vec3 air = context.wind(ghost.position);
+    const bool strong = glm::length(air) > t.catchSpeed;
+    if (ghost.caught <= 0.0f) {
+        if (!strong || ghost.state == GhostState::Scatter || ghost.state == GhostState::Hop) {
+            return false;
+        }
+        std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
+        if (def.behavior == GhostBehavior::Mimic) {
+            if (ghost.state == GhostState::Disguised || ghost.state == GhostState::Conceal) {
+                events.push_back(MimicRevealed{ghost.id, ghost.position, ghost.disguise});
+            }
+            ghost.state = GhostState::Flinch;
+            ghost.stateTime = 0.0f;
+        }
+        ghost.heldProp = kNoProp;
+        ghost.attached = false;
+        ghost.calm = 0.0f;
+        glm::vec3 axis{unit(m_rng), unit(m_rng), unit(m_rng)};
+        axis = glm::length(axis) > 1e-3f ? glm::normalize(axis) : glm::vec3(1.0f, 0.0f, 0.0f);
+        ghost.spin = axis * (t.tumbleSpin * (0.6f + 0.4f * std::abs(unit(m_rng))));
+        ghost.caught = dt * 0.5f;
+    }
+    ghost.caught += dt;
+    ghost.calm = strong ? 0.0f : ghost.calm + dt;
+    if (ghost.calm >= t.releaseTime) {
+        release(ghost, def);
+        return false;
+    }
+    const float grip = std::min(t.grip * (1.0f - def.weight) * dt, 1.0f);
+    ghost.velocity += (air - ghost.velocity) * grip;
+    const bool limp = def.behavior == GhostBehavior::Mimic;
+    ghost.velocity += ghostGravity(context, ghost.position) * ((limp ? 1.0f : t.fallShare) * dt);
+    ghost.position += ghost.velocity * dt;
+    keepAboveFloor(ghost, def, context);
+    if (limp) {
+        const glm::vec3 turned = ghost.surfaceNormal + glm::cross(ghost.spin, ghost.surfaceNormal) * dt;
+        ghost.surfaceNormal = glm::length(turned) > 1e-4f ? glm::normalize(turned) : ghost.up;
+        ghost.spin *= std::exp(-0.3f * dt);
+    }
+    return true;
+}
+
+void GhostWorld::release(Ghost& ghost, const GhostDef& def) {
+    ghost.caught = 0.0f;
+    ghost.calm = 0.0f;
+    ghost.spin = glm::vec3(0.0f);
+    ghost.stateTime = 0.0f;
+    switch (def.behavior) {
+    case GhostBehavior::Vasskraka:
+        ghost.state = GhostState::Circle;
+        ghost.timer = std::max(ghost.timer, 0.8f);
+        break;
+    case GhostBehavior::Mimic:
+        ghost.state = GhostState::Flinch;
+        if (glm::dot(ghost.surfaceNormal, ghost.up) < 0.0f) {
+            ghost.surfaceNormal = ghost.up;
+        }
+        break;
+    default:
+        ghost.state = GhostState::Flinch;
+        break;
+    }
 }
 
 std::optional<GhostRayHit> GhostWorld::raycast(const glm::vec3& from, const glm::vec3& to) const {
@@ -333,11 +467,12 @@ bool GhostWorld::damage(std::uint32_t id, float rounds, DamageKind kind, const g
             ghost.velocity = glm::vec3(0.0f);
         }
     } else if (def.behavior == GhostBehavior::Vasskraka) {
-        if (source == 0 && ghost.state != GhostState::Scatter) {
+        if (source == 0 && ghost.state != GhostState::Scatter && ghost.caught <= 0.0f) {
             const glm::vec3 away = ghost.position - point;
             std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
-            const glm::vec3 aside = glm::normalize((glm::length(away) > 1e-3f ? glm::normalize(away) : glm::vec3(0.0f, 1.0f, 0.0f)) +
-                                                   glm::vec3(unit(m_rng), 0.3f + 0.4f * std::abs(unit(m_rng)), unit(m_rng)));
+            const glm::mat3 frame = upBasis(ghost.up);
+            const glm::vec3 aside = glm::normalize((glm::length(away) > 1e-3f ? glm::normalize(away) : ghost.up) +
+                                                   frame * glm::vec3(unit(m_rng), 0.3f + 0.4f * std::abs(unit(m_rng)), unit(m_rng)));
             ghost.goal = ghost.position + aside * def.vasskraka.scatterDistance;
             ghost.state = GhostState::Scatter;
             ghost.stateTime = 0.0f;
@@ -349,8 +484,8 @@ bool GhostWorld::damage(std::uint32_t id, float rounds, DamageKind kind, const g
         ghost.stateTime = 0.0f;
         const glm::vec3 away = ghost.position - point;
         std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
-        ghost.velocity = glm::normalize((glm::length(away) > 1e-3f ? glm::normalize(away) : glm::vec3(0.0f, 1.0f, 0.0f)) +
-                                        glm::vec3(unit(m_rng), unit(m_rng) * 0.5f, unit(m_rng))) * 6.0f;
+        ghost.velocity = glm::normalize((glm::length(away) > 1e-3f ? glm::normalize(away) : ghost.up) +
+                                        upBasis(ghost.up) * glm::vec3(unit(m_rng), unit(m_rng) * 0.5f, unit(m_rng))) * 6.0f;
     }
 
     if (def.behavior == GhostBehavior::Vasskraka && !killed && attacker != 255 && ghost.quarryId != 255 && attacker != ghost.quarryId &&
@@ -364,7 +499,7 @@ bool GhostWorld::damage(std::uint32_t id, float rounds, DamageKind kind, const g
         half.seed += 37.0f;
         half.sources = {};
         half.hitstop = 0.0f;
-        const glm::vec3 apart = glm::normalize(glm::cross(ghost.goal - ghost.position + glm::vec3(0.0f, 1e-3f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f)) + glm::vec3(1e-3f, 0.0f, 0.0f));
+        const glm::vec3 apart = glm::normalize(glm::cross(ghost.goal - ghost.position + ghost.up * 1e-3f, ghost.up) + upBasis(ghost.up)[0] * 1e-3f);
         half.goal = ghost.position + apart * def.vasskraka.scatterDistance;
         ghost.goal = ghost.position - apart * def.vasskraka.scatterDistance;
         events.push_back(KrakaSplit{ghost.id, half.id, ghost.position});
@@ -404,7 +539,8 @@ void GhostWorld::reactToShot(const glm::vec3& origin, const glm::vec3& direction
                               (def.behavior == GhostBehavior::Vasskraka &&
                                (ghost.state == GhostState::Roost || ghost.state == GhostState::Gather || ghost.state == GhostState::Fall ||
                                 ghost.state == GhostState::Reform || ghost.state == GhostState::Scatter || ghost.state == GhostState::Merge));
-        if (!dodgeable || !ghost.perceives || def.dodgeChance <= 0.0f || ghost.hitstop > 0.0f || ghost.dying || lyingLow) {
+        if (!dodgeable || !ghost.perceives || def.dodgeChance <= 0.0f || ghost.hitstop > 0.0f || ghost.dying || lyingLow ||
+            ghostAttacking(ghost, def) || ghost.caught > 0.0f) {
             continue;
         }
 
@@ -417,11 +553,11 @@ void GhostWorld::reactToShot(const glm::vec3& origin, const glm::vec3& direction
             continue;
         }
 
-        glm::vec3 side = glm::length(off) > 1e-3f ? glm::normalize(off) : glm::cross(direction, glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::vec3 side = glm::length(off) > 1e-3f ? glm::normalize(off) : glm::cross(direction, ghost.up);
         if (glm::length(side) < 1e-3f) {
-            side = glm::vec3(1.0f, 0.0f, 0.0f);
+            side = upBasis(ghost.up)[0];
         }
-        side = glm::normalize(side + glm::vec3(0.0f, 0.3f, 0.0f));
+        side = glm::normalize(side + ghost.up * 0.3f);
         ghost.dodging = 0.3f;
         ghost.velocity = side * 9.0f;
         events.push_back(GhostDodged{ghost.id, ghost.position, side});
@@ -430,6 +566,9 @@ void GhostWorld::reactToShot(const glm::vec3& origin, const glm::vec3& direction
 
 void GhostWorld::push(const glm::vec3& center, float radius, float deltaV) {
     for (Ghost& ghost : m_ghosts) {
+        if (def(ghost).windImmune) {
+            continue;
+        }
         const glm::vec3 d = ghost.position - center;
         const float distance = glm::length(d);
         if (distance < radius && distance > 1e-3f) {

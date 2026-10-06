@@ -55,6 +55,8 @@ Program& Terminal::program(TermMode mode)
         return dev_;
     case TermMode::Travel:
         return travel_;
+    case TermMode::Synth:
+        return synth_;
     case TermMode::Shell:
         break;
     }
@@ -193,6 +195,8 @@ void Terminal::launch(const FsNode& node, const TermView& view)
     case FsExe::Status:
         if (view.bus_tower) {
             s.print("BUS FEED IS RELAY NODE. NO VEHICLE DIAGNOSTICS.\n");
+        } else if (view.bus_printer) {
+            s.print("BUS FEED IS PRINTER. NO VEHICLE DIAGNOSTICS.\n");
         } else if (view.bus_state != PORT_LINKED) {
             s.print(view.bus_state == PORT_PLUGGED ? "BUS PORT NOT INITIALIZED. RUN LINK.\n"
                                                    : "NO VEHICLE BUS CABLE.\n");
@@ -270,6 +274,19 @@ void Terminal::launch(const FsNode& node, const TermView& view)
         set_mode(TermMode::Travel, view);
         break;
 
+    case FsExe::Synth:
+        if (view.bus_tower || view.bus_state != PORT_LINKED) {
+            s.print(view.bus_state == PORT_PLUGGED ? "BUS PORT NOT INITIALIZED. RUN LINK.\n"
+                                                   : "NO BUS LINK. CABLE THE CAR BUS OR THE PRINTER.\n");
+        } else if (!view.sys || !view.sys->parts[PART_PRINTER].installed) {
+            s.print("NO PRINTER ON THE BUS.\n");
+        } else if (!view.sys->parts[PART_TANK].installed) {
+            s.print("NO MATERIAL TANK ON THE PRINTER.\n");
+        } else {
+            set_mode(TermMode::Synth, view);
+        }
+        break;
+
     case FsExe::None:
         s.print("PROGRAM DAMAGED. CANNOT EXECUTE.\n");
         break;
@@ -295,8 +312,13 @@ void Terminal::update(const TermView& view, f32 dt)
     }
 
     Screen& s = shell_.screen();
-    if (mode_ == TermMode::Status && (view.bus_state != PORT_LINKED || view.bus_tower)) {
+    if (mode_ == TermMode::Status && (view.bus_state != PORT_LINKED || view.bus_tower || view.bus_printer)) {
         set_mode(TermMode::Shell, view);
+    }
+    if (mode_ == TermMode::Synth && (view.bus_state != PORT_LINKED || view.bus_tower || !view.sys
+                                     || !view.sys->parts[PART_PRINTER].installed || !view.sys->parts[PART_TANK].installed)) {
+        set_mode(TermMode::Shell, view);
+        shell_.screen().print("SYNTH LINK LOST.\n");
     }
     if (mode_ == TermMode::Map && (view.coax_state != PORT_LINKED || view.antenna_tier < 0)) {
         set_mode(TermMode::Shell, view);

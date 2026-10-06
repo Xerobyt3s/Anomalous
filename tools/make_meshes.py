@@ -1491,7 +1491,67 @@ def main():
     make_car_textures()
 
 
+def disc_y(b, center, radius, sides, normal_sign):
+    cx, cy, cz = center
+    mid = b.vertex((cx, cy, cz), (0.0, normal_sign, 0.0), (0.5, 0.5))
+    ring = []
+    for i in range(sides + 1):
+        angle = i / sides * 2.0 * math.pi
+        ring.append(b.vertex((cx + math.cos(angle) * radius, cy, cz + math.sin(angle) * radius), (0.0, normal_sign, 0.0),
+                             (0.5 + 0.5 * math.cos(angle), 0.5 + 0.5 * math.sin(angle))))
+    for i in range(sides):
+        if normal_sign > 0.0:
+            b.triangle(mid, ring[i + 1], ring[i])
+        else:
+            b.triangle(mid, ring[i], ring[i + 1])
+
+
+def make_synth_parts():
+    b = MeshBuilder()
+    b.begin_material("alloy")
+    add_cylinder(b, (0.0, -0.13, 0.0), 0.12, 0.02, 16)
+    add_cylinder(b, (0.0, 0.11, 0.0), 0.12, 0.02, 16)
+    disc_y(b, (0.0, -0.11, 0.0), 0.12, 16, 1.0)
+    disc_y(b, (0.0, -0.13, 0.0), 0.12, 16, -1.0)
+    disc_y(b, (0.0, 0.13, 0.0), 0.12, 16, 1.0)
+    disc_y(b, (0.0, 0.11, 0.0), 0.12, 16, -1.0)
+    for k in range(3):
+        a = k * 2.0 * math.pi / 3.0 + 0.4
+        b.box((math.cos(a) * 0.115, 0.0, math.sin(a) * 0.115), (0.008, 0.11, 0.008))
+    b.begin_material("car_trim")
+    add_cylinder(b, (0.0, 0.13, 0.0), 0.03, 0.025, 10)
+    b.write(os.path.join(MESH_DIR, "part_tank.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("glass")
+    sides = 20
+    for k in range(sides):
+        a0 = k * 2.0 * math.pi / sides
+        a1 = (k + 1) * 2.0 * math.pi / sides
+        p0 = (math.cos(a0) * 0.11, -0.11, math.sin(a0) * 0.11)
+        p1 = (math.cos(a1) * 0.11, -0.11, math.sin(a1) * 0.11)
+        p2 = (math.cos(a1) * 0.11, 0.11, math.sin(a1) * 0.11)
+        p3 = (math.cos(a0) * 0.11, 0.11, math.sin(a0) * 0.11)
+        mid = (a0 + a1) * 0.5
+        b.quad(p0, p3, p2, p1, (math.cos(mid), 0.0, math.sin(mid)))
+    make_double_sided(b)
+    b.write(os.path.join(MESH_DIR, "part_tank_glass.amsh"))
+
+    b = MeshBuilder()
+    b.begin_material("beige")
+    b.box((0.0, 0.0, 0.0), (0.21, 0.12, 0.17))
+    b.begin_material("car_dash")
+    b.box((0.0, 0.135, 0.02), (0.17, 0.016, 0.12))
+    b.box((0.0, -0.06, 0.175), (0.16, 0.035, 0.012))
+    b.begin_material("crt")
+    b.box((0.12, 0.07, 0.172), (0.05, 0.025, 0.003))
+    b.begin_material("alloy")
+    b.box((0.0, -0.10, 0.20), (0.15, 0.01, 0.035))
+    b.write(os.path.join(MESH_DIR, "part_printer.amsh"))
+
+
 GENERATORS = {
+    "synth_parts": make_synth_parts,
     "telescope": make_telescope,
     "telescope_textures": lambda: __import__("make_dish_textures").main(),
     "relay_tower": make_relay_tower,

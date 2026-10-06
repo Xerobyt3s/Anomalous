@@ -24,6 +24,7 @@ RADIO INTERFERENCE, OR EFFECTS OF PROLONGED
 EXPOSURE.
 )internal5", {}, FsExe::None, 0, false},
     {"STATUS.EXE", {}, {}, FsExe::Status, 24576, false},
+    {"SYNTH.EXE", {}, {}, FsExe::Synth, 15360, false},
     {"TAPES.EXE", {}, {}, FsExe::Tapes, 18944, false},
     {"TRAVEL.EXE", {}, {}, FsExe::Travel, 22528, false},
     {"VIDEO.EXE", {}, {}, FsExe::Video, 12288, false},

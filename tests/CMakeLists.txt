@@ -14,9 +14,13 @@ set(ANOMALOUS_TEST_SOURCES
     test_player.cpp
     test_interact.cpp
     test_audio.cpp
+    test_gameplay.cpp
     test_net.cpp
     test_pickups.cpp
     test_players.cpp
+    test_scene_switch.cpp
+    test_synth.cpp
+    test_seats.cpp
     test_sim.cpp
     test_zone.cpp
     test_editor.cpp
@@ -31,12 +35,14 @@ set(ANOMALOUS_TEST_SOURCES
     test_gravity.cpp
     test_islands.cpp
     test_render_core.cpp
+    test_haze.cpp
     ghost_test_lightning.cpp
     ghost_test_ammo.cpp
     ghost_test_arena_map.cpp
     ghost_test_audio.cpp
     ghost_test_ballistics.cpp
     ghost_test_body_rig.cpp
+    ghost_test_body_rig_hands.cpp
     ghost_test_breath.cpp
     ghost_test_elements_world.cpp
     ghost_test_fog_field.cpp
@@ -55,6 +61,10 @@ set(ANOMALOUS_TEST_SOURCES
     ghost_test_roster.cpp
     ghost_test_shard_flock.cpp
     ghost_test_vortex_field.cpp
+    ghost_test_gravity_fx.cpp
+    ghost_test_body_rig_rebase.cpp
+    ghost_test_ghost_gravity.cpp
+    ghost_test_ghost_wind.cpp
     ghost_test_draw_order.cpp
 )
 

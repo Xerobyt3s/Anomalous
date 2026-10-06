@@ -20,6 +20,7 @@ struct MoveCommand {
     bool aim = false;
     bool holster = false;
     bool hands_busy = false;
+    Vec3 wind{};
 };
 
 struct MoveTuning {
@@ -57,9 +58,13 @@ struct MoveTuning {
     f32 roll_time = 0.3f;
     f32 draw_time = 0.45f;
     f32 holster_time = 0.35f;
+    f32 lower_item_time = 0.3f;
     f32 holstered_speed = 1.1f;
     f32 downed_height = 0.65f;
     f32 downed_eye_height = 0.35f;
+    f32 wind_air_accel = 7.0f;
+    f32 lift_threshold = 1.0f;
+    f32 lift_coupling = 4.0f;
 };
 
 using Stance = ghost::game::Stance;
@@ -111,8 +116,10 @@ public:
     void adopt(const Movement& other);
     u32 character() const { return character_; }
     void apply_haste(f32 duration, f32 scale);
+    void add_impulse(Vec3 delta_v);
     void apply_shroud(f32 duration);
     void set_vitals(f32 health, f32 since_hurt, bool downed);
+    void tick_hands(bool holster, bool aim, bool busy, bool force_holster, f32 dt);
     bool hidden_from_ghosts() const { return state_.shroud_time > 0.0f; }
     void attach(ghost::engine::PhysicsWorld* jolt);
     void teleport(Vec3 feet);

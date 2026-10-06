@@ -20,7 +20,7 @@ void Ballistics::fire(const glm::vec3& origin, const glm::vec3& direction, const
     p.id = m_nextId++;
     p.position = origin;
     p.previousPosition = origin;
-    p.velocity = glm::normalize(direction) * m_tuning.muzzleVelocity * profile.velocityScale;
+    p.velocity = glm::normalize(direction) * m_tuning.muzzleVelocity * profile.velocityScale + profile.inheritVelocity;
     p.dragScale = profile.dragScale;
     p.ethereal = profile.ethereal;
     p.dragPerMetre = profile.dragPerMetre;
@@ -46,11 +46,12 @@ void Ballistics::tick(float dt, const RaycastFn& raycast, EventList& events, con
         }
         p.age += dt;
 
-        const float speedBefore = glm::length(p.velocity);
-
         const float k = p.dragPerMetre > 0.0f ? p.dragPerMetre : m_tuning.dragPerMetre * p.dragScale;
-        p.velocity /= 1.0f + k * speedBefore * dt;
-        p.velocity += gravity * (p.gravityScale * dt);
+        const glm::vec3 air = m_windAt ? m_windAt(p.position) : glm::vec3(0.0f);
+        const glm::vec3 relative = p.velocity - air;
+        p.velocity = air + relative / (1.0f + k * glm::length(relative) * dt);
+        const glm::vec3 pull = m_gravityAt ? m_gravityAt(p.position) * (m_tuning.gravity / 9.81f) : gravity;
+        p.velocity += pull * (p.gravityScale * dt);
         const glm::vec3 target = p.position + p.velocity * dt;
 
         std::optional<engine::RayHit> hit = !p.ethereal ? raycast(p.position, target)

@@ -34,6 +34,8 @@ struct PlayParams {
     int group = 0;
     float delay = 0.0f;
     float fadeIn = 0.0f;
+    float lowpass = 0.0f;
+    float highpass = 0.0f;
 };
 
 using VoiceId = std::uint32_t;
@@ -55,6 +57,7 @@ public:
 
     void set(VoiceId voice, float volume, float pitch, std::optional<glm::vec3> position = std::nullopt);
     void stop(VoiceId voice, float fadeSeconds = 0.05f);
+    void filter(VoiceId voice, float lowpass, float highpass);
     bool playing(VoiceId voice) const;
     std::size_t voiceCount() const;
 
@@ -86,6 +89,11 @@ private:
         float right = 0.0f;
         bool fresh = true;
         bool done = false;
+        float lowpass = 0.0f;
+        float highpass = 0.0f;
+        std::array<float, 4> lowState{};
+        std::array<float, 2> highState{};
+        std::array<float, 2> highLast{};
     };
     struct Device;
 

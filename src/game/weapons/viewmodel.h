@@ -77,6 +77,7 @@ public:
     float reloadBlend() const { return m_reloadBlend; }
 
     ViewmodelTuning& tuning() { return m_tuning; }
+    const ViewmodelTuning& tuning() const { return m_tuning; }
     void debugUi();
 
 private:

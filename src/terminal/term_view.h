@@ -6,6 +6,10 @@
 
 #include <string_view>
 
+namespace ghost::game {
+struct AmmoData;
+}
+
 namespace anom {
 
 class CarSys;
@@ -25,6 +29,7 @@ enum PortState : i32 {
 
 struct TermView {
     const CarSys* sys = nullptr;
+    const ghost::game::AmmoData* ammo = nullptr;
     const Vehicle* veh = nullptr;
     PhysWorld* phys = nullptr;
     const Terrain* terrain = nullptr;
@@ -50,6 +55,7 @@ struct TermView {
     i32 antenna_tier = -1;
     bool coax_camera = false;
     bool bus_tower = false;
+    bool bus_printer = false;
     bool tower_breached = false;
     Vec3 tower_pos;
 };
@@ -124,6 +130,10 @@ struct TermRequest {
     f32 time_value = 0.0f;
     i32 weather_mode = -1;
     bool power_off = false;
+    bool synth_print = false;
+    u8 synth_doses[3] = {};
+    u32 synth_dose_count = 0;
+    u32 synth_count = 0;
 };
 
 } // namespace anom

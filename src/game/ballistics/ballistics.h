@@ -47,12 +47,15 @@ struct ShotProfile {
     float gravityScale = 1.0f;
     float fadeSpeed = 0.0f;
     std::uint8_t owner = 255;
+    glm::vec3 inheritVelocity{0.0f};
 };
 
 using RaycastFn = std::function<std::optional<engine::RayHit>(const glm::vec3& from, const glm::vec3& to)>;
 
 using VolumeReactFn = std::function<std::optional<ElementId>(const glm::vec3& from, const glm::vec3& to,
                                                              ElementId element, glm::vec3* where)>;
+
+using FieldFn = std::function<glm::vec3(const glm::vec3& at)>;
 
 using ProjectileHitFn =
     std::function<std::optional<engine::RayHit>(const Projectile& projectile, const glm::vec3& from, const glm::vec3& to)>;
@@ -82,6 +85,10 @@ public:
             }
         }
     }
+    void setFields(FieldFn gravity, FieldFn wind) {
+        m_gravityAt = std::move(gravity);
+        m_windAt = std::move(wind);
+    }
     BallisticsTuning& tuning() { return m_tuning; }
     const BallisticsTuning& tuning() const { return m_tuning; }
 
@@ -89,6 +96,8 @@ private:
     BallisticsTuning m_tuning;
     std::vector<Projectile> m_projectiles;
     std::uint32_t m_nextId = 1;
+    FieldFn m_gravityAt;
+    FieldFn m_windAt;
 };
 
 }
