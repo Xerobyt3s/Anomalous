@@ -67,7 +67,10 @@ void cable_collide(Vec3& p, const CableSimInput& in)
     const Quat inv = conjugate(in.car_rot);
     Vec3 local = rotate(inv, p - in.car_pos);
     for (u32 b = 0; b < kCableBoxCount; b++) {
-        push_out_of_box(local, kCarBoxes[b].center, kCarBoxes[b].half);
+        const CarLayout& layout = car_layout();
+        const Vec3 center = layout.cable_boxes_set ? layout.cable_boxes[b].center : kCarBoxes[b].center;
+        const Vec3 half = layout.cable_boxes_set ? layout.cable_boxes[b].half : kCarBoxes[b].half;
+        push_out_of_box(local, center, half);
     }
     p = in.car_pos + rotate(in.car_rot, local);
 

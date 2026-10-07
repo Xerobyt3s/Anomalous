@@ -132,6 +132,7 @@ void Sim::make_snapshot(WorldSnapshot& out) const
         wire.use_down = s.use_down;
         std::snprintf(wire.name, sizeof(wire.name), "%s", s.name.c_str());
         wire.color = s.color;
+        wire.cowboy = s.cowboy;
         wire.player = s.player;
         wire.interact = s.interact;
         wire.gun = gun_view(s.id, 1.0f);
@@ -348,6 +349,7 @@ void Sim::apply_snapshot(const WorldSnapshot& snap)
         s.name.assign(std::string_view(w.name, strnlen(w.name, sizeof(w.name))));
         s.color = w.color;
         s.dummy = w.dummy;
+        s.cowboy = w.cowboy;
         if (w.id == local_) {
             s.interact.adopt_holdings(w.interact);
             continue;
@@ -360,6 +362,7 @@ void Sim::apply_snapshot(const WorldSnapshot& snap)
             s.name.assign(std::string_view(w.name, strnlen(w.name, sizeof(w.name))));
             s.color = w.color;
             s.dummy = w.dummy;
+            s.cowboy = w.cowboy;
             s.player.set_character(slot_index(id));
         }
         s.remote = true;

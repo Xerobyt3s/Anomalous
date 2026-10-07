@@ -9,6 +9,7 @@
 
 #include <array>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -35,6 +36,7 @@ struct PlayerRules {
     bool arena = false;
     std::uint8_t arenaMap = 0;
     float arenaRespawn = 3.0f;
+    int arenaHatLead = 5;
 
     float stealthCrouch = 0.6f;
     float stealthCrawl = 0.35f;
@@ -59,6 +61,7 @@ struct PlayerRules {
 };
 
 PlayerRules parsePlayerRules(std::string_view json);
+std::optional<PlayerId> dominantLeader(std::span<const struct RosterEntry> entries, int margin);
 PlayerRules loadPlayerRules(const std::filesystem::path& dataDirectory);
 
 struct RosterEntry {

@@ -1,5 +1,6 @@
 #include "app/game.h"
 #include "carsys/items.h"
+#include "game/ghosts/ghost_poses.h"
 #include "math/glm_bridge.h"
 #include "render/debug_draw.h"
 
@@ -283,3 +284,126 @@ void Game::draw_viewfinder()
 }
 
 }
+
+namespace anom {
+
+void Game::draw_creatures_panel()
+{
+    if (!toggles_.creatures) {
+        return;
+    }
+    using ghost::game::GhostBehavior;
+    ImGui::SetNextWindowPos({16.0f, 120.0f}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({380.0f, 520.0f}, ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Creatures", &toggles_.creatures)) {
+        ImGui::End();
+        return;
+    }
+    const auto& types = sim_.gameplay().ghostData().types;
+    const bool client = net_.role() == NetSession::Role::Client;
+    CreatureUi& ui = creature_ui_;
+    if (client) {
+        ImGui::TextDisabled("Only the host can spawn things (the world is theirs).");
+    } else if (!types.empty()) {
+        if (ImGui::TreeNodeEx("Inspect a pose", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::TextDisabled("One ghost held in a pose in front of you. It does nothing and cannot be hit.");
+            bool changed = false;
+            ui.type = ui.type < 0 ? 0 : (ui.type >= static_cast<i32>(types.size()) ? static_cast<i32>(types.size()) - 1 : ui.type);
+            if (ImGui::BeginCombo("Ghost", types[static_cast<size_t>(ui.type)].display.c_str())) {
+                for (i32 t = 0; t < static_cast<i32>(types.size()); t++) {
+                    if (ImGui::Selectable(types[static_cast<size_t>(t)].display.c_str(), t == ui.type) && t != ui.type) {
+                        ui.type = t;
+                        ui.pose = 0;
+                        changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            const auto poses = ghost::game::posesOf(types[static_cast<size_t>(ui.type)].behavior);
+            ui.pose = ui.pose < 0 ? 0 : (ui.pose >= static_cast<i32>(poses.size()) ? static_cast<i32>(poses.size()) - 1 : ui.pose);
+            if (ImGui::BeginCombo("Pose", poses[static_cast<size_t>(ui.pose)].label)) {
+                for (i32 p = 0; p < static_cast<i32>(poses.size()); p++) {
+                    if (ImGui::Selectable(poses[static_cast<size_t>(p)].label, p == ui.pose)) {
+                        ui.pose = p;
+                        changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (types[static_cast<size_t>(ui.type)].behavior == GhostBehavior::Vasskraka) {
+                changed = ImGui::SliderFloat("Size (health)", &ui.size, 0.3f, 1.5f, "%.2f") || changed;
+            }
+            const bool out = sim_.specimen().id != 0;
+            if (ImGui::Button(out ? "Bring in front of me" : "Place in front of me")) {
+                pending_.specimen_place = true;
+                changed = true;
+            }
+            if (out) {
+                ImGui::SameLine();
+                if (ImGui::Button("Remove")) {
+                    pending_.specimen_remove = true;
+                }
+            }
+            if (changed) {
+                pending_.specimen_type = ui.type;
+                pending_.specimen_pose = ui.pose;
+                pending_.specimen_size = ui.size;
+            }
+            ImGui::TreePop();
+        }
+        ImGui::SliderInt("How many", &ui.count, 1, 10);
+        if (ImGui::TreeNodeEx("Spawn", ImGuiTreeNodeFlags_DefaultOpen)) {
+            for (size_t t = 0; t < types.size(); t++) {
+                ImGui::PushID(static_cast<int>(t));
+                if (ImGui::Button(types[t].display.c_str())) {
+                    pending_.spawn_ghost = static_cast<i32>(t);
+                    pending_.spawn_ghost_count = ui.count;
+                }
+                ImGui::PopID();
+                if (t % 3 != 2 && t + 1 < types.size()) {
+                    ImGui::SameLine();
+                }
+            }
+            ImGui::TreePop();
+        }
+    }
+    if (ImGui::CollapsingHeader("Ghosts", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const glm::vec3 me = to_glm(sim_.player(local_).pos());
+        const auto& world = sim_.gameplay().ghosts();
+        if (world.ghosts().empty()) {
+            ImGui::TextDisabled("None out.");
+        }
+        for (const ghost::game::Ghost& g : world.ghosts()) {
+            ImGui::Text("%s #%u  %s  hp %.0f  %s  %.1f m%s", world.def(g).display.c_str(), g.id,
+                        ghost::game::ghostStateName(g.state), g.health, g.perceives ? "sees someone" : "unaware",
+                        glm::distance(g.position, me), g.posed ? "  (posed)" : "");
+        }
+    }
+    if (ImGui::CollapsingHeader("Players", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextDisabled("Cowboy hat and poncho: Auto gives it to an arena player %d kills ahead.",
+                            sim_.player_rules().arenaHatLead);
+        for (PlayerId id = 0; id < kMaxPlayers; id++) {
+            const PlayerSlot* s = sim_.slot(id);
+            if (!s || !s->active) {
+                continue;
+            }
+            const ghost::game::RosterEntry* entry = sim_.roster().find(id);
+            ImGui::PushID(static_cast<int>(id));
+            ImGui::Text("%s  %d kills%s", s->name.c_str(), entry ? entry->kills : 0, sim_.wears_cowboy(id) ? "  [hat]" : "");
+            if (!client) {
+                const char* modes[3] = {"Auto", "Hat on", "Hat off"};
+                for (u8 m = 0; m < 3; m++) {
+                    ImGui::SameLine();
+                    if (ImGui::RadioButton(modes[m], s->cowboy == m) && s->cowboy != m) {
+                        pending_.cowboy_target = static_cast<i32>(id);
+                        pending_.cowboy_mode = m;
+                    }
+                }
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::End();
+}
+
+} // namespace anom

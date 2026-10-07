@@ -3,6 +3,7 @@
 #include "carsys/items.h"
 #include "core/types.h"
 #include "game/fx/blob_body.h"
+#include "game/fx/poncho_cloth.h"
 #include "game/player/body_rig.h"
 #include "game/weapons/mechanism_view.h"
 #include "math/vmath.h"
@@ -54,6 +55,7 @@ public:
 
 private:
     struct Shown;
+    void update_bodies(const Sim& sim, PlayerId local, bool show_local, f32 alpha, f32 dt);
     void update_seated(const Sim& sim, const PlayerSlot& slot, Shown& shown, f32 alpha, f32 dt);
     static void place_rig(Shown& shown, Quat frame, Vec3 anchor);
 
@@ -77,12 +79,16 @@ private:
         glm::vec3 gun_aim{0.0f};
         ghost::game::MechanismView gun;
         bool downed = false;
+        bool cowboy = false;
+        ghost::game::PonchoCloth poncho;
         bool active = false;
         bool visible = false;
     };
 
     std::array<Shown, kMaxSlots> shown_{};
     std::unique_ptr<ghost::game::BlobBody> blob_;
+    ghost::game::PonchoTuning poncho_tuning_;
+    bool poncho_loaded_ = false;
     bool blob_failed_ = false;
     GunPoints gun_points_;
 };

@@ -77,6 +77,7 @@ struct PlayerSlot {
     f32 bench_time = 0.0f;
     bool at_bench = false;
     bool window_blocked = false;
+    u8 cowboy = 0;
 };
 
 struct SlotCommand {

@@ -1354,10 +1354,11 @@ void Gameplay::tickNecromiteSpawns(float dt) {
     }
 }
 
-void Gameplay::spawnGhost(std::string_view type, const glm::vec3& at) {
+std::uint32_t Gameplay::spawnGhost(std::string_view type, const glm::vec3& at) {
     if (const auto def = m_ghostData.find(type)) {
-        m_ghosts.spawn(*def, at, upAt(at));
+        return m_ghosts.spawn(*def, at, upAt(at));
     }
+    return 0;
 }
 
 void Gameplay::clearWorld() {

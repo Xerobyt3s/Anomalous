@@ -78,6 +78,14 @@ struct PlayerCommand {
     bool dummy_cycle = false;
     i32 dummy_script = -1;
     i32 spawn_ghost = -1;
+    i32 spawn_ghost_count = 1;
+    i32 specimen_type = -1;
+    i32 specimen_pose = 0;
+    f32 specimen_size = 1.0f;
+    bool specimen_place = false;
+    bool specimen_remove = false;
+    i32 cowboy_target = -1;
+    u8 cowboy_mode = 0;
     i32 scene = -1;
 
     bool trigger = false;

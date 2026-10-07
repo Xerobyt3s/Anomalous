@@ -9,6 +9,7 @@
 #include "game/ammo/ammo_data.h"
 #include "game/audio/game_audio.h"
 #include "game/fx/blob_body.h"
+#include "game/fx/car_fx.h"
 #include "game/fx/comet.h"
 #include "game/fx/draw_order.h"
 #include "game/fx/fire_fx.h"
@@ -150,6 +151,12 @@ struct PlayFrame {
     const ghost::game::SpeedloaderRack* speedloaders = nullptr;
     float walkSpeed = 3.6f;
     float hasteFov = 0.0f;
+};
+
+struct LampGlare {
+    glm::vec3 position{0.0f};
+    glm::vec3 direction{0.0f, 0.0f, -1.0f};
+    glm::vec3 color{1.0f};
 };
 
 struct FrameLights {
@@ -582,6 +589,27 @@ private:
     void drawFlash(const glm::mat4& viewProj, const glm::mat4& invView, const glm::vec3& center, float size,
                    const glm::vec3& color, float intensity, float seed, float spikes);
     void setFrameLights(const glm::vec3& muzzleWorld);
+
+public:
+    const std::vector<FogLight>& frameLights() {
+        setFrameLights(m_lastMuzzleWorld);
+        return m_frameLights;
+    }
+    void setLampGlare(std::vector<LampGlare> lamps, float haze) {
+        m_lampGlare = std::move(lamps);
+        m_lampHaze = haze;
+    }
+    void setCarFx(const CarSmoke* smoke, const SkidMarks* marks, float smokeThickness) {
+        m_carSmoke = smoke;
+        m_carMarks = marks;
+        m_carSmokeThickness = smokeThickness;
+    }
+
+private:
+    void drawSkids(const glm::mat4& viewProj);
+    void replayPosed();
+    void drawCarSmoke(const glm::mat4& viewProj, const glm::vec3& cameraPos, const glm::vec3& cameraForward);
+    bool carSmokeBounds(glm::vec3& center, glm::vec3& half) const;
     void consumeEvents();
     bool wispLike(const Ghost& ghost) const
     {
@@ -666,6 +694,7 @@ private:
     MaterialOrb m_materialOrb;
     MimicFx m_mimicFx;
     std::unordered_map<std::uint32_t, MimicShown> m_mimics;
+    std::unordered_map<std::uint32_t, float> m_poseClock;
     std::uint32_t m_nextSmokeId = 1;
     std::vector<Puff> m_puffs;
     float m_revealDim = 0.0f;
@@ -709,6 +738,15 @@ private:
     ghost::engine::Shader m_litShader;
     ghost::engine::Shader m_flashShader;
     ghost::engine::Shader m_decalShader;
+    ghost::engine::Shader m_carSmokeShader;
+    ghost::engine::Shader m_skidShader;
+    engine::GlBuffer m_skidBuffer;
+    std::size_t m_skidCapacity = 0;
+    const CarSmoke* m_carSmoke = nullptr;
+    const SkidMarks* m_carMarks = nullptr;
+    float m_carSmokeThickness = 5.0f;
+    std::vector<LampGlare> m_lampGlare;
+    float m_lampHaze = 0.0f;
     ghost::engine::Mesh m_quad;
     CameraRecoilTuning m_cameraRecoil;
     EffectsTuning m_effects;

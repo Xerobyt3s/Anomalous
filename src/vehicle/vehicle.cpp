@@ -526,13 +526,20 @@ void Vehicle::apply_tire(RigidBody& body, u32 i, const WheelFrame& frame, const 
         const f32 slow = 1.0f - f_clamp01((f_abs(v_long) - half) / f_max(half, 0.05f));
         climb = 1.0f + (cfg_.climb_grip - 1.0f) * steep * slow;
     }
+    f32 spin = 1.0f;
+    if (wc.driven && cfg_.spin_grip > 1.0f && input_.throttle > 0.0f && w.slip_ratio > cfg_.tire_peak_slip
+        && v_wheel > 0.0f) {
+        const f32 fade = f_clamp01((f_abs(v_long) - cfg_.tc_fade_start)
+                                   / f_max(cfg_.tc_fade_full - cfg_.tc_fade_start, 0.01f));
+        spin = 1.0f + (cfg_.spin_grip - 1.0f) * input_.throttle * (1.0f - fade);
+    }
     const f32 grip_mul = effects_.tire_grip_mul[i] * load_sens * climb;
     const f32 lat_grip_mul = (input_.handbrake && !wc.steered) ? cfg_.handbrake_grip_mul
                                                               : 1.0f;
     const f32 limit = tp.peak_mu * tire_load * grip_mul;
     const TireForces tf = tire_compute(tp, w.slip_ratio, w.slip_angle, slip_vel, v_lat,
                                        tire_load, grip_mul, lat_grip_mul);
-    const Vec3 force_pacejka = long_dir * tf.fx + lat_dir * tf.fy;
+    const Vec3 force_pacejka = long_dir * (tf.fx * spin) + lat_dir * tf.fy;
 
     Vec3 force_tire = force_pacejka;
     if (patch_speed < cfg_.tire_low_speed) {
@@ -546,7 +553,7 @@ void Vehicle::apply_tire(RigidBody& body, u32 i, const WheelFrame& frame, const 
         const f32 spin_mass = wheel_inertia / f_max(r_eff * r_eff, 1e-4f);
         const f32 m_eff_long = locked ? patch_mass
                                       : (patch_mass * spin_mass) / (patch_mass + spin_mass);
-        f32 fx_low = f_clamp(slip_vel * m_eff_long / dt, -limit, limit);
+        f32 fx_low = f_clamp(slip_vel * m_eff_long / dt, -limit, limit * spin);
         const f32 fy_limit = limit * lat_grip_mul;
         const f32 fy_low = f_clamp(-v_lat * patch_mass / dt, -fy_limit, fy_limit);
 
@@ -574,8 +581,8 @@ void Vehicle::apply_tire(RigidBody& body, u32 i, const WheelFrame& frame, const 
     }
 
     const f32 tire_mag = length(force_tire);
-    if (tire_mag > limit && tire_mag > 1e-6f) {
-        force_tire *= limit / tire_mag;
+    if (tire_mag > limit * spin && tire_mag > 1e-6f) {
+        force_tire *= limit * spin / tire_mag;
     }
     body_apply_force_at_point(body, force_tire, w.contact_point);
 
@@ -678,6 +685,14 @@ void Vehicle::tick(PhysWorld& world, f32 dt)
     }
 
     train_.brake_hold = input_.brake > 0.1f && planar_speed(world) < kBrakeHoldSpeed;
+    train_.declutch = false;
+    if (input_.handbrake && cfg_.handbrake_declutch) {
+        for (u32 i = 0; i < kWheelCount; i++) {
+            if (cfg_.wheels[i].driven && !cfg_.wheels[i].steered) {
+                train_.declutch = true;
+            }
+        }
+    }
     drivetrain_tick(train_, cfg_, wheels_, input_.throttle, effects_.engine_power_mul,
                     effects_.ignition_ok, dt);
 

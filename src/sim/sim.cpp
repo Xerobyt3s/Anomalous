@@ -4,6 +4,7 @@
 #include "core/log.h"
 #include "game/ballistics/surface.h"
 #include "engine/assets/asset_path.h"
+#include "game/ghosts/ghost_poses.h"
 #include "math/glm_bridge.h"
 #include "physics/heightfield.h"
 #include "terminal/program.h"
@@ -30,9 +31,6 @@ constexpr Vec3 kTowerPortLocal{0.0f, 1.35f, 0.62f};
 constexpr f32 kHandsEyeHeight = 1.38f;
 constexpr f32 kRefuelNotice = 0.005f;
 constexpr f32 kHornMinCharge = 0.05f;
-constexpr Vec3 kHoodLocal{0.0f, 0.45f, -1.4f};
-constexpr Vec3 kTrunkLocal{0.0f, 0.45f, 1.6f};
-constexpr Vec3 kEngineLocal{0.0f, 0.10f, -1.55f};
 constexpr f32 kSlotSpacing = 1.2f;
 constexpr u32 kCableNearPickups = 12;
 constexpr f32 kDebugGhostAhead = 8.0f;
@@ -122,7 +120,7 @@ bool Sim::init(Arena& perm, Arena& scratch, std::string_view zone_dir)
     tower_pos_ = Vec3{tx, terrain_.heightfield().sample(tx, tz), tz};
     tower_rot_ = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, tyaw * kDegToRad);
 
-    if (!vehicle_.init(phys_, scratch, "assets/cars/excel.cfg", spawn_.car_pos, spawn_.car_yaw)) {
+    if (!vehicle_.init(phys_, scratch, "assets/cars/mustang.cfg", spawn_.car_pos, spawn_.car_yaw)) {
         return false;
     }
 
@@ -147,7 +145,7 @@ bool Sim::init(Arena& perm, Arena& scratch, std::string_view zone_dir)
     carsys_.init();
     weather_.init(20260718ull);
     tapes_.init();
-    boxes_.init(scratch, "assets/cars/excel_interact.cfg");
+    boxes_.init(scratch, "assets/cars/mustang_interact.cfg");
     interact_spawn_zone_pickups(world_, phys_, terrain_, pickups_);
     stock_fresh_tanks();
 
@@ -257,10 +255,92 @@ void Sim::spawn_debug_ghost(PlayerId id, const PlayerCommand& cmd)
     if (!s || cmd.spawn_ghost < 0 || static_cast<size_t>(cmd.spawn_ghost) >= types.size()) {
         return;
     }
+    const ghost::game::GhostDef& def = types[static_cast<size_t>(cmd.spawn_ghost)];
     const MoveState& m = s->player.movement().state();
     const Vec3 ahead = frame_forward(m.frame, m.yaw);
-    const Vec3 at = s->player.pos() + ahead * kDebugGhostAhead + s->player.up() * 1.5f;
-    gameplay_.spawnGhost(types[static_cast<size_t>(cmd.spawn_ghost)].name, to_glm(at));
+    const Vec3 up = s->player.up();
+    const Vec3 side = normalize(cross(ahead, up));
+    const bool mimic = def.behavior == ghost::game::GhostBehavior::Mimic;
+    const f32 reach = mimic ? 3.0f : def.behavior == ghost::game::GhostBehavior::BallLightning ? 7.0f : kDebugGhostAhead;
+    const f32 lift = mimic ? 0.6f : 1.5f;
+    const i32 count = cmd.spawn_ghost_count < 1 ? 1 : (cmd.spawn_ghost_count > 10 ? 10 : cmd.spawn_ghost_count);
+    for (i32 n = 0; n < count; n++) {
+        const f32 angle = static_cast<f32>(n) * 2.4f;
+        const Vec3 spread = n == 0 ? Vec3{} : side * std::cos(angle) + ahead * std::sin(angle);
+        const Vec3 at = s->player.pos() + ahead * reach + spread + up * lift;
+        gameplay_.spawnGhost(def.name, to_glm(at));
+    }
+}
+
+bool Sim::wears_cowboy(PlayerId id) const
+{
+    const PlayerSlot* s = slot(id);
+    if (!s) {
+        return false;
+    }
+    if (s->cowboy == 1) {
+        return true;
+    }
+    if (s->cowboy == 2 || !rules_.arena) {
+        return false;
+    }
+    const auto leader = ghost::game::dominantLeader(roster_.entries(), rules_.arenaHatLead);
+    return leader && *leader == id;
+}
+
+void Sim::pose_specimen()
+{
+    const auto& types = gameplay_.ghostData().types;
+    if (specimen_.id == 0 || specimen_.type < 0 || static_cast<size_t>(specimen_.type) >= types.size()) {
+        return;
+    }
+    gameplay_.poseGhost(specimen_.id, ghost::game::specimenPose(types[static_cast<size_t>(specimen_.type)], specimen_.pose,
+                                                                to_glm(specimen_.at), to_glm(specimen_.forward),
+                                                                to_glm(specimen_.up), specimen_.size));
+}
+
+void Sim::apply_host_debug(PlayerId id, const PlayerCommand& cmd)
+{
+    if (cmd.cowboy_target >= 0) {
+        if (PlayerSlot* target = slot(static_cast<PlayerId>(cmd.cowboy_target))) {
+            target->cowboy = cmd.cowboy_mode <= 2 ? cmd.cowboy_mode : 0;
+        }
+    }
+    const auto& types = gameplay_.ghostData().types;
+    if (specimen_.id != 0 && !gameplay_.ghosts().find(specimen_.id)) {
+        specimen_.id = 0;
+    }
+    if (cmd.specimen_remove && specimen_.id != 0) {
+        gameplay_.removeGhost(specimen_.id);
+        specimen_.id = 0;
+    }
+    bool changed = false;
+    if (cmd.specimen_type >= 0 && static_cast<size_t>(cmd.specimen_type) < types.size()) {
+        if (cmd.specimen_type != specimen_.type && specimen_.id != 0) {
+            gameplay_.removeGhost(specimen_.id);
+            specimen_.id = gameplay_.spawnGhost(types[static_cast<size_t>(cmd.specimen_type)].name,
+                                                to_glm(specimen_.at + specimen_.up));
+        }
+        specimen_.type = cmd.specimen_type;
+        specimen_.pose = cmd.specimen_pose;
+        specimen_.size = cmd.specimen_size;
+        changed = true;
+    }
+    const PlayerSlot* s = slot(id);
+    if (cmd.specimen_place && s && static_cast<size_t>(specimen_.type) < types.size()) {
+        const MoveState& m = s->player.movement().state();
+        specimen_.up = s->player.up();
+        specimen_.forward = frame_forward(m.frame, m.yaw);
+        specimen_.at = s->player.pos() + specimen_.forward * 3.0f;
+        if (specimen_.id == 0) {
+            specimen_.id = gameplay_.spawnGhost(types[static_cast<size_t>(specimen_.type)].name,
+                                                to_glm(specimen_.at + specimen_.up));
+        }
+        changed = true;
+    }
+    if (changed) {
+        pose_specimen();
+    }
 }
 
 void Sim::sync_pickup_transforms()
@@ -942,6 +1022,9 @@ void Sim::tick(std::span<const SlotCommand> commands, f32 dt)
                 apply_debug(in.cmd);
                 spawn_debug_ghost(in.id, in.cmd);
             }
+            if (in.id == local_) {
+                apply_host_debug(in.id, in.cmd);
+            }
         }
         adopt_remote_bodies(commands);
     }
@@ -1087,12 +1170,12 @@ void Sim::emit_car_events(const CarSnapshot& before)
         }
     }
     if (carsys_.hood_target != before.hood_target) {
-        emit(ghost::game::HoodMoved{carsys_.hood_target, to_glm(body_point(*body, kHoodLocal - com))});
+        emit(ghost::game::HoodMoved{carsys_.hood_target, to_glm(body_point(*body, car_layout().hood_point - com))});
     }
     if (carsys_.trunk_target != before.trunk_target) {
-        emit(ghost::game::TrunkMoved{carsys_.trunk_target, to_glm(body_point(*body, kTrunkLocal - com))});
+        emit(ghost::game::TrunkMoved{carsys_.trunk_target, to_glm(body_point(*body, car_layout().trunk_point - com))});
     }
-    const glm::vec3 engine_at = to_glm(body_point(*body, kEngineLocal - com));
+    const glm::vec3 engine_at = to_glm(body_point(*body, car_layout().engine_point - com));
     if (carsys_.engine_on && !before.engine_on) {
         emit(ghost::game::EngineStarted{engine_at});
     }
@@ -1138,7 +1221,7 @@ void Sim::emit_car_events(const CarSnapshot& before)
     }
     if (carsys_.cargo_count() != before.cargo_count) {
         emit(ghost::game::CargoMoved{carsys_.cargo_count() > before.cargo_count,
-                                     to_glm(body_point(*body, kTrunkLocal - com))});
+                                     to_glm(body_point(*body, car_layout().trunk_point - com))});
     }
     if ((carsys_.floppy_disk >= 0) != (before.floppy_disk >= 0)) {
         emit(ghost::game::DiskMoved{carsys_.floppy_disk >= 0});
@@ -1266,7 +1349,7 @@ void Sim::update_cables(f32 dt)
 
     const Vec3 car_origin = body->pos + rotate(body->rot, -vehicle_.config().com_offset);
     const Vec3 roots[2] = {kConnectorCoaxLocal, kConnectorBusLocal};
-    const Vec3 jacks[2] = {kAntennaJackLocal, kBayJackLocal};
+    const Vec3 jacks[2] = {car_layout().antenna_jack, car_layout().bay_jack};
 
     CableObstacle term_obstacle;
     term_obstacle.pos = term_pos;
@@ -1324,7 +1407,7 @@ void Sim::update_cables(f32 dt)
                     drop_cable(k);
                     continue;
                 }
-                end = car_origin + rotate(body->rot, kPrinterJackLocal);
+                end = car_origin + rotate(body->rot, car_layout().printer_jack);
             } else {
                 end = car_origin + rotate(body->rot, jacks[k]);
             }
@@ -1601,6 +1684,7 @@ bool Sim::load_zone(std::string_view dir)
     zone_arena_.reset();
     mirrored_.clear();
     zone_serial_++;
+    specimen_.id = 0;
     gameplay_.clearWorld();
 
     if (!zone_load(dir, zone_arena_, *scratch_, world_, phys_, terrain_, spawn_, &pickups_)) {

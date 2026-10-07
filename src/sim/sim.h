@@ -153,6 +153,17 @@ public:
     ghost::game::Roster& roster() { return roster_; }
     const ghost::game::Roster& roster() const { return roster_; }
     const ghost::game::PlayerRules& player_rules() const { return rules_; }
+    bool wears_cowboy(PlayerId id) const;
+    struct Specimen {
+        u32 id = 0;
+        i32 type = 0;
+        i32 pose = 0;
+        f32 size = 1.0f;
+        Vec3 at{};
+        Vec3 forward{0.0f, 0.0f, -1.0f};
+        Vec3 up{0.0f, 1.0f, 0.0f};
+    };
+    const Specimen& specimen() const { return specimen_; }
     CarSys& carsys() { return carsys_; }
     const CarSys& carsys() const { return carsys_; }
     InteractBoxes& boxes() { return boxes_; }
@@ -194,6 +205,8 @@ private:
     void gather_commands(std::span<const SlotCommand> commands, f32 dt);
     void gather_world_for_gameplay();
     void spawn_debug_ghost(PlayerId id, const PlayerCommand& cmd);
+    void apply_host_debug(PlayerId id, const PlayerCommand& cmd);
+    void pose_specimen();
     void tick_guns(f32 dt);
     void spawn_shot(PlayerSlot& slot, const ghost::game::ShotFired& shot);
     void drop_ejected(PlayerSlot& slot, const ghost::game::ChambersEjected& ejected);
@@ -302,6 +315,7 @@ private:
     PlayerId mirror_driver_ = kNoPlayer;
     u32 host_zone_serial_ = 0;
     u32 zone_serial_ = 0;
+    Specimen specimen_;
     PlayerId photo_by_ = 0;
 
     f32 travel_charge_ = 0.0f;

@@ -4,6 +4,7 @@
 #include "core/types.h"
 #include "engine/render/gl_handle.h"
 #include "render/gpu_mesh.h"
+#include "render/mesh_glow.h"
 
 #include <string_view>
 
@@ -63,6 +64,7 @@ private:
     u32 instance_vbo_ = 0;
     ghost::engine::GlTexture white_texture_;
     u32 reload_count_ = 0;
+    MeshGlowTable glow_;
 };
 
 } // namespace anom

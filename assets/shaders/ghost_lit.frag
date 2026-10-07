@@ -14,10 +14,6 @@ in vec3 vObjNormal;
 out vec4 fragColor;
 
 uniform vec3 uCameraPos;
-const int kMaxLights = 8;
-uniform int uPointCount;
-uniform vec3 uPointPos[kMaxLights];
-uniform vec3 uPointColor[kMaxLights];
 uniform vec3 uBaseColor;
 uniform float uMetallic;
 uniform float uRoughness;
@@ -115,13 +111,6 @@ void main() {
     float lit = shadow_factor(vWorldPos, max(dot(N, L), 0.0)) * cloudShadow(vWorldPos);
     vec3 color = shade(N, V, L, u_sun_color_ambient.rgb, F0) * lit;
     color += shadePoints(vWorldPos, N, V, F0);
-
-    for (int i = 0; i < min(uPointCount, kMaxLights); ++i) {
-        vec3 toLight = uPointPos[i] - vWorldPos;
-        float d2 = max(dot(toLight, toLight), 1e-6);
-        float attenuation = min(1.0 / (0.6 + 0.32 * d2), 1.6);
-        color += shade(N, V, toLight * inversesqrt(d2), uPointColor[i] * attenuation, F0);
-    }
 
     float NdotV = max(dot(N, V), 1e-4);
     color += ambientLight(N, V, F0);

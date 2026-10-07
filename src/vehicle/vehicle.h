@@ -23,6 +23,7 @@ struct Drivetrain {
     bool manual = false;
     i32 shift_request = 0;
     f32 tc_cut = 0.0f;
+    bool declutch = false;
     bool brake_hold = false;
 };
 

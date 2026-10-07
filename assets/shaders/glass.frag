@@ -8,6 +8,8 @@ in vec3 v_local;
 in vec3 v_lnormal;
 
 layout(location = 4) uniform vec4 u_rain;
+layout(location = 5) uniform vec4 u_wipers;
+layout(location = 6) uniform float u_wiper_reach;
 
 layout(binding = 2) uniform sampler2D u_scene;
 
@@ -73,11 +75,11 @@ void main()
         if (windshield > 0.5) {
             float wiper_arm = 1.17 - u_rain.y * 1.30;
             for (int w = 0; w < 2; w++) {
-                vec2 pivot = vec2(w == 0 ? -0.38 : 0.10, 0.094);
+                vec2 pivot = vec2(w == 0 ? u_wipers.x : u_wipers.y, u_wipers.z);
                 vec2 rel = vec2(v_local.x - pivot.x,
-                                dot(v_local - vec3(pivot.x, pivot.y, -0.60), -pane_down));
+                                dot(v_local - vec3(pivot.x, pivot.y, u_wipers.w), -pane_down));
                 float ang = atan(rel.x, rel.y);
-                float within = step(length(rel), 0.52);
+                float within = step(length(rel), u_wiper_reach);
                 wiped = max(wiped, smoothstep(0.30, 0.10, abs(ang - wiper_arm)) * within);
             }
             film *= 1.0 - wiped;

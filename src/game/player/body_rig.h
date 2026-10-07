@@ -111,6 +111,22 @@ struct BodyShape {
     float headRadius = 0.26f;
     float neck = 0.035f;
     float armSegment() const { return (upperArm + forearm) / static_cast<float>(kArmPoints - 1); }
+    BodyShape scaled(float s) const {
+        BodyShape out = *this;
+        out.hip *= s;
+        out.hipWidth *= s;
+        out.thigh *= s;
+        out.shin *= s;
+        out.radius *= s;
+        out.depth *= s;
+        out.core *= s;
+        out.shoulderWidth *= s;
+        out.upperArm *= s;
+        out.forearm *= s;
+        out.headRadius *= s;
+        out.neck *= s;
+        return out;
+    }
 };
 
 Limb solveTwoBone(const glm::vec3& root, const glm::vec3& target, float upper, float lower, const glm::vec3& pole);
@@ -124,6 +140,7 @@ public:
     void jolt(const glm::vec3& direction, float strength = 1.0f, bool head = false);
     void rebase(const glm::mat3& rotation, const glm::vec3& shift);
     const BodyShape& shape() const { return m_shape; }
+    void setShape(const BodyShape& shape) { m_shape = shape; }
 
     int stepsTaken() const { return m_steps; }
     int lastStepFoot() const { return m_lastStep; }

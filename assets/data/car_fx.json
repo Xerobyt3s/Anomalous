@@ -1,0 +1,7 @@
+{
+  "_comment": "Car smoke and skid marks. smoke: puffs per second per wheel at full skid, seconds a puff lives, radius it starts and ends at (m), how fast it rises (m/s), how fast it loses the car's speed, how thick dust off the road is next to tire smoke, and how opaque the smoke is overall. skid: what counts as a real skid; a tire smokes and marks only past driftAngleStart degrees of slip angle (full at driftAngleFull), or when spinning or locked past spinRatioStart slip ratio (full at spinRatioFull); steered wheels need steeredAngleExtra more, so front tires scrubbing in understeer leave nothing; ordinary hard cornering keeps the rear under about 11 degrees. steam: the same for an overheating engine, rate per degree over 105 C. marks: how hard a wheel must skid to leave a mark or any smoke (0..1), half the mark width, the longest straight piece (m), how sharp a turn starts a new piece (degrees), how far a wheel can jump before the mark breaks (m), and when marks start fading and are gone (s).",
+  "smoke": {"rate": 22.0, "life": 2.6, "startRadius": 0.3, "endRadius": 1.6, "rise": 0.55, "drag": 1.6, "dustDensity": 0.7, "thickness": 3.0},
+  "skid": {"driftAngleStart": 14.0, "driftAngleFull": 30.0, "steeredAngleExtra": 16.0, "spinRatioStart": 0.35, "spinRatioFull": 1.0},
+  "steam": {"rate": 0.6, "life": 1.8, "rise": 1.2, "startRadius": 0.15, "endRadius": 0.8},
+  "marks": {"threshold": 0.18, "halfWidth": 0.08, "maxLength": 1.5, "turnDeg": 6.0, "jump": 1.0, "fadeStart": 45.0, "life": 60.0}
+}

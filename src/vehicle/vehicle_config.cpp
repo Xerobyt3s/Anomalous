@@ -61,6 +61,7 @@ bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view pa
     out.tire_low_speed = cfg.get_f32("tire.low_speed", 0.6f);
     out.tire_grass_grip = cfg.get_f32("tire.grass_grip", 0.80f);
     out.climb_grip = f_max(cfg.get_f32("tire.climb_grip", 1.0f), 1.0f);
+    out.spin_grip = f_max(cfg.get_f32("tire.spin_grip", 1.0f), 1.0f);
     out.climb_slope_start = cfg.get_f32("tire.climb_slope_start", 12.0f);
     out.climb_slope_full = cfg.get_f32("tire.climb_slope_full", 25.0f);
     out.climb_speed = f_max(cfg.get_f32("tire.climb_speed", 6.0f), 0.1f);
@@ -120,11 +121,15 @@ bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view pa
     out.diff_coast_ramp = f_max(cfg.get_f32("gearbox.diff_coast_ramp", 0.18f), 0.0f);
     out.tc_strength = f_clamp01(cfg.get_f32("gearbox.traction_control", 0.0f));
     out.tc_slip = f_max(cfg.get_f32("gearbox.traction_slip", 1.3f), 0.1f);
+    out.tc_low = f_clamp01(cfg.get_f32("gearbox.traction_control_low", out.tc_strength));
+    out.tc_fade_start = f_max(cfg.get_f32("gearbox.traction_fade_start", 0.0f), 0.0f);
+    out.tc_fade_full = f_max(cfg.get_f32("gearbox.traction_fade_full", out.tc_fade_start), out.tc_fade_start);
 
     out.brake_torque = cfg.get_f32("brakes.torque", 1700.0f);
     out.handbrake_torque = cfg.get_f32("brakes.handbrake_torque", 2500.0f);
     out.handbrake_grip_mul = cfg.get_f32("brakes.handbrake_grip_mul", 0.85f);
     out.park_latch_speed = f_max(cfg.get_f32("brakes.park_latch_speed", 2.0f), 0.0f);
+    out.handbrake_declutch = cfg.get_i32("brakes.handbrake_declutch", 0) != 0;
 
     out.drag_coef = cfg.get_f32("aero.drag_coef", 0.8f);
     out.rolling_resist = cfg.get_f32("aero.rolling_resist", 0.012f);
@@ -145,6 +150,7 @@ bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view pa
     out.wheel_normal = normalize(cfg.get_vec3("cabin.wheel_normal", Vec3{0.0f, 0.4f, 0.92f}));
     out.wheel_radius = cfg.get_f32("cabin.wheel_radius", 0.18f);
     out.shifter = cfg.get_vec3("cabin.shifter", Vec3{0.0f, 0.1f, 0.11f});
+    out.body_scale = f_clamp(cfg.get_f32("cabin.body_scale", 1.0f), 0.5f, 1.2f);
     out.seat_count = 1;
     SeatConfig& driver = out.seats[0];
     driver.eye = out.seat_eye;
@@ -186,6 +192,11 @@ bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view pa
 
     out.body_mesh.assign(cfg.get_str("render.body_mesh", ""));
     out.wheel_mesh.assign(cfg.get_str("render.wheel_mesh", ""));
+    car_layout_parse(out.layout, cfg);
+    if (!out.wheel_mesh.empty()) {
+        out.layout.tire_mesh = out.wheel_mesh;
+    }
+    set_car_layout(out.layout);
     return true;
 }
 

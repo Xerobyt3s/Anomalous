@@ -2178,7 +2178,170 @@ void PlayView::drawPuffs(const glm::mat4& viewProj, const glm::mat4& invView) {
         m_quad.draw();
     }
 }
+void PlayView::replayPosed() {
+    for (auto it = m_poseClock.begin(); it != m_poseClock.end();) {
+        const Ghost* ghost = m_ghosts.find(it->first);
+        it = ghost && ghost->posed ? std::next(it) : m_poseClock.erase(it);
+    }
+    for (const Ghost& ghost : m_ghosts.ghosts()) {
+        if (!ghost.posed) {
+            continue;
+        }
+        const auto [entry, fresh] = m_poseClock.try_emplace(ghost.id, 1e9f);
+        const bool restarted = ghost.stateTime < entry->second;
+        entry->second = ghost.stateTime;
+        if (!restarted) {
+            continue;
+        }
+        const GhostDef& def = m_ghosts.def(ghost);
+        if (def.behavior == GhostBehavior::Mimic && ghost.state == GhostState::Windup) {
+            glm::vec3 toward = m_world.position - ghost.position;
+            toward = glm::dot(toward, toward) > 1e-4f ? glm::normalize(toward) : glm::vec3(0.0f, 0.0f, 1.0f);
+            MimicShown& shown = m_mimics[ghost.id];
+            shown.lashAge = 0.0f;
+            shown.lashAt = ghost.position + toward * 1.2f + glm::vec3(0.0f, 0.8f, 0.0f);
+            m_audio.play("mimic.lash", SoundGroup::Ghosts, 1.0f, ghost.position);
+        } else if (def.behavior == GhostBehavior::Mimic && ghost.state == GhostState::Reveal) {
+            m_audio.play("mimic.reveal", SoundGroup::Ghosts, 1.0f, ghost.position);
+        } else if (def.behavior == GhostBehavior::Vasskraka && ghost.state == GhostState::Reform) {
+            if (const auto flock = m_flocks.find(ghost.id); flock != m_flocks.end()) {
+                flock->second.burst(ghost.position);
+            }
+            m_audio.play("kraka.burst", SoundGroup::Ghosts, 1.0f, ghost.position);
+        }
+    }
+}
+void PlayView::drawSkids(const glm::mat4& viewProj) {
+    if (m_sceneDepthCopy == 0 || !m_carMarks || m_carMarks->segments().empty()) {
+        return;
+    }
+    struct SkidGpu {
+        glm::vec4 centerStrength;
+        glm::vec4 alongHalfLength;
+        glm::vec4 normalHalfWidth;
+        glm::vec4 color;
+    };
+    std::vector<SkidGpu> skids;
+    skids.reserve(m_carMarks->segments().size());
+    for (const SkidSegment& s : m_carMarks->segments()) {
+        const float fade = m_carMarks->fade(s);
+        if (fade <= 0.0f || s.strength <= 0.0f) {
+            continue;
+        }
+        const glm::vec4 color = s.road ? glm::vec4(0.012f, 0.011f, 0.01f, 0.78f) : glm::vec4(0.05f, 0.038f, 0.025f, 0.55f);
+        skids.push_back({glm::vec4(s.center, std::min(0.35f + s.strength * 2.0f, 1.0f) * fade), glm::vec4(s.along, s.halfLength),
+                         glm::vec4(s.normal, s.halfWidth), color});
+    }
+    if (skids.empty()) {
+        return;
+    }
+    if (m_skidCapacity < skids.size()) {
+        GLuint buffer = 0;
+        glCreateBuffers(1, &buffer);
+        m_skidCapacity = std::max<std::size_t>(skids.size(), SkidMarks::kMaxSegments);
+        glNamedBufferStorage(buffer, static_cast<GLsizeiptr>(m_skidCapacity * sizeof(SkidGpu)), nullptr, GL_DYNAMIC_STORAGE_BIT);
+        m_skidBuffer = engine::GlBuffer(buffer);
+    }
+    glNamedBufferSubData(m_skidBuffer.id(), 0, static_cast<GLsizeiptr>(skids.size() * sizeof(SkidGpu)), skids.data());
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_skidBuffer.id());
+
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_FRONT);
+    m_skidShader.use();
+    glBindTextureUnit(0, m_sceneDepthCopy);
+    m_skidShader.set("uSceneDepth", 0);
+    m_skidShader.set("uSplit", engine::PostProcess::depthSplit());
+    m_skidShader.set("uViewProj", viewProj);
+    m_skidShader.set("uInvViewProj", glm::inverse(viewProj));
+    m_skidShader.set("uDepth", 0.3f);
+    glBindVertexArray(m_unitBox.vao());
+    glDrawElementsInstanced(GL_TRIANGLES, m_unitBox.indexCount(), GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(skids.size()));
+    glBindVertexArray(0);
+    glCullFace(GL_BACK);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+bool PlayView::carSmokeBounds(glm::vec3& center, glm::vec3& half) const {
+    if (!m_carSmoke || m_carSmoke->puffs().empty()) {
+        return false;
+    }
+    glm::vec3 lo(1e9f);
+    glm::vec3 hi(-1e9f);
+    for (const CarPuff& p : m_carSmoke->puffs()) {
+        const float r = p.radius();
+        lo = glm::min(lo, p.center - glm::vec3(r));
+        hi = glm::max(hi, p.center + glm::vec3(r));
+    }
+    center = (lo + hi) * 0.5f;
+    half = (hi - lo) * 0.5f;
+    return true;
+}
+void PlayView::drawCarSmoke(const glm::mat4& viewProj, const glm::vec3& cameraPos, const glm::vec3& cameraForward) {
+    glm::vec3 center;
+    glm::vec3 half;
+    if (m_sceneDepthCopy == 0 || !carSmokeBounds(center, half)) {
+        return;
+    }
+    constexpr std::size_t kMaxCarPuffs = 64;
+    std::vector<glm::vec4> spheres;
+    std::vector<glm::vec4> looks;
+    for (const CarPuff& p : m_carSmoke->puffs()) {
+        if (spheres.size() >= kMaxCarPuffs) {
+            break;
+        }
+        const float opacity = p.opacity();
+        if (opacity <= 0.002f) {
+            continue;
+        }
+        glm::vec3 tint(0.8f, 0.8f, 0.82f);
+        if (p.kind == PuffKind::Dust) {
+            tint = glm::vec3(0.55f, 0.46f, 0.34f);
+        } else if (p.kind == PuffKind::Steam) {
+            tint = glm::vec3(0.95f, 0.95f, 0.97f);
+        }
+        spheres.emplace_back(p.center, p.radius());
+        looks.emplace_back(tint, opacity);
+    }
+    if (spheres.empty()) {
+        return;
+    }
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_FRONT);
+    m_carSmokeShader.use();
+    const GLuint program = m_carSmokeShader.id();
+    m_carSmokeShader.set("uViewProj", viewProj);
+    m_carSmokeShader.set("uBoxCenter", center);
+    m_carSmokeShader.set("uBoxHalf", half);
+    m_carSmokeShader.set("uCameraForward", cameraForward);
+    glBindTextureUnit(0, m_sceneDepthCopy);
+    m_carSmokeShader.set("uSceneDepth", 0);
+    m_carSmokeShader.set("uNF", glm::vec2(m_post->zNear(), m_post->zFar()));
+    m_carSmokeShader.set("uSplit", engine::PostProcess::depthSplit());
+    m_carSmokeShader.set("uTime", m_fxTime);
+    m_carSmokeShader.set("uDensity", m_carSmokeThickness);
+    m_carSmokeShader.set("uPuffCount", static_cast<int>(spheres.size()));
+    glProgramUniform4fv(program, glGetUniformLocation(program, "uPuff"), static_cast<GLsizei>(spheres.size()), &spheres[0].x);
+    glProgramUniform4fv(program, glGetUniformLocation(program, "uPuffLook"), static_cast<GLsizei>(looks.size()), &looks[0].x);
+    (void)cameraPos;
+    m_unitBox.draw();
+    glCullFace(GL_BACK);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
 void PlayView::drawDecals(const glm::mat4& viewProj) {
+    drawSkids(viewProj);
     if (m_sceneDepthCopy == 0 || (m_scorches.empty() && m_marks.empty())) {
         return;
     }
@@ -2264,6 +2427,12 @@ void PlayView::drawSeeThrough(const glm::mat4& viewProj, const glm::mat4& invVie
     for (const SmokePuff& puff : m_smoke) {
         at(puff.cloud.center);
     }
+    glm::vec3 carSmokeCenter;
+    glm::vec3 carSmokeHalf;
+    const bool carSmoke = carSmokeBounds(carSmokeCenter, carSmokeHalf);
+    if (carSmoke) {
+        at(carSmokeCenter);
+    }
     for (const Ghost& ghost : m_ghosts.ghosts()) {
         const GhostBehavior behavior = m_ghosts.def(ghost).behavior;
         if (wispLike(ghost) || behavior == GhostBehavior::BallLightning) {
@@ -2287,6 +2456,9 @@ void PlayView::drawSeeThrough(const glm::mat4& viewProj, const glm::mat4& invVie
         m_window = window;
         drawTornadoes(viewProj, cameraPos, cameraForward);
         drawFog(viewProj, cameraPos, cameraForward);
+        if (carSmoke && m_window.holds(glm::distance(carSmokeCenter, cameraPos))) {
+            drawCarSmoke(viewProj, cameraPos, cameraForward);
+        }
         drawWisps(viewProj, cameraPos, cameraForward);
         drawMaterialOrbs(viewProj, cameraPos);
         drawEffects(viewProj, invView);
@@ -2349,6 +2521,22 @@ void PlayView::drawEffects(const glm::mat4& viewProj, const glm::mat4& invView) 
         drawFlash(viewProj, invView, sp.position, sp.size * (1.0f - 0.4f * t), color, 2.6f * (1.0f - t * t), 0.0f,
                   0.0f);
     }
+    const glm::vec3 eye = glm::vec3(invView[3]);
+    for (const LampGlare& lamp : m_lampGlare) {
+        const glm::vec3 at = lamp.position + lamp.direction * 0.12f;
+        const glm::vec3 toEye = eye - at;
+        const float distance = glm::length(toEye);
+        if (distance < 0.3f) {
+            continue;
+        }
+        const float facing = glm::smoothstep(0.15f, 0.97f, glm::dot(lamp.direction, toEye / distance));
+        if (facing <= 0.0f) {
+            continue;
+        }
+        const float haze = 1.0f + 0.5f * m_lampHaze;
+        drawFlash(viewProj, invView, at, (0.1f + 0.3f * facing) * haze, lamp.color, (2.0f + 4.0f * facing) * facing, 0.0f,
+                  0.7f);
+    }
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
 }
@@ -2408,8 +2596,6 @@ void PlayView::drawFlashAxes(const glm::mat4& viewProj, const glm::vec3& center,
     m_quad.draw();
 }
 void PlayView::setFrameLights(const glm::vec3& muzzleWorld) {
-    m_litShader.use();
-
     struct Light {
         glm::vec3 position;
         glm::vec3 color;
@@ -2476,12 +2662,6 @@ void PlayView::setFrameLights(const glm::vec3& muzzleWorld) {
     m_frameLights.clear();
     for (const Light& light : lights) {
         m_frameLights.push_back({light.position, light.color});
-    }
-    m_litShader.set("uPointCount", static_cast<int>(lights.size()));
-    for (std::size_t i = 0; i < lights.size(); ++i) {
-        const std::string index = std::to_string(i);
-        m_litShader.set(("uPointPos[" + index + "]").c_str(), lights[i].position);
-        m_litShader.set(("uPointColor[" + index + "]").c_str(), lights[i].color);
     }
 }
 void PlayView::consumeEvents() {

@@ -38,12 +38,23 @@ float pointAttenuation(float distanceSquared) {
     return min(1.0 / (0.6 + 0.32 * distanceSquared), 1.6);
 }
 
+vec3 pointLightAt(int i, vec3 toLight, float d2) {
+    float reach = u_point_color[i].w > 0.0 ? u_point_color[i].w : 1.0;
+    vec3 radiance = u_point_color[i].rgb * pointAttenuation(d2 * reach);
+    float cone = u_point_dir[i].w;
+    if (cone > -1.0) {
+        float along = dot(-toLight * inversesqrt(d2), u_point_dir[i].xyz);
+        radiance *= smoothstep(cone, mix(cone, 1.0, 0.35), along);
+    }
+    return radiance;
+}
+
 vec3 shadePoints(vec3 world, vec3 N, vec3 V, vec3 F0) {
     vec3 color = vec3(0.0);
     for (int i = 0; i < min(u_point_count, 8); ++i) {
         vec3 toLight = u_point_pos[i].xyz - world;
         float d2 = max(dot(toLight, toLight), 1e-6);
-        color += shade(N, V, toLight * inversesqrt(d2), u_point_color[i].rgb * pointAttenuation(d2), F0);
+        color += shade(N, V, toLight * inversesqrt(d2), pointLightAt(i, toLight, d2), F0);
     }
     return color;
 }
@@ -52,7 +63,7 @@ vec3 pointRadiance(vec3 world) {
     vec3 light = vec3(0.0);
     for (int i = 0; i < min(u_point_count, 8); ++i) {
         vec3 toLight = u_point_pos[i].xyz - world;
-        light += u_point_color[i].rgb * pointAttenuation(max(dot(toLight, toLight), 1e-6));
+        light += pointLightAt(i, toLight, max(dot(toLight, toLight), 1e-6));
     }
     return light;
 }

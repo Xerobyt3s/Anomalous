@@ -22,6 +22,7 @@ PlayerRules parsePlayerRules(std::string_view text) {
     rules.regenDelay = doc.value("regenDelay", rules.regenDelay);
     rules.regenRate = doc.value("regenRate", rules.regenRate);
     rules.friendlyFire = doc.value("friendlyFire", rules.friendlyFire);
+    rules.arenaHatLead = doc.value("arenaHatLead", rules.arenaHatLead);
     if (doc.contains("pvp")) {
         const json& pvp = doc.at("pvp");
         rules.bodyDamage = pvp.value("body", rules.bodyDamage);
@@ -54,6 +55,28 @@ PlayerRules parsePlayerRules(std::string_view text) {
         throw std::runtime_error("player.json: revive time and health must be above zero");
     }
     return rules;
+}
+
+std::optional<PlayerId> dominantLeader(std::span<const RosterEntry> entries, int margin) {
+    const RosterEntry* best = nullptr;
+    int second = 0;
+    for (const RosterEntry& e : entries) {
+        if (e.zombie || e.id >= kZombieIdBase) {
+            continue;
+        }
+        if (!best || e.kills > best->kills) {
+            if (best) {
+                second = std::max(second, best->kills);
+            }
+            best = &e;
+        } else {
+            second = std::max(second, e.kills);
+        }
+    }
+    if (!best || best->kills - second < margin) {
+        return std::nullopt;
+    }
+    return best->id;
 }
 
 PlayerRules loadPlayerRules(const std::filesystem::path& dataDirectory) {

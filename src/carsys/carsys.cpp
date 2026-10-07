@@ -77,7 +77,7 @@ f32 CarSys::cargo_place_y(ItemKind kind, f32 x, f32 z, bool* out_ok) const
 {
     const Vec3 half = item_cargo_half(kind);
     const Vec3 at{x, 0.0f, z};
-    f32 y = kTrunkFloorY + half.y;
+    f32 y = car_layout().trunk_min.y + half.y;
     for (u32 j = 0; j < kCargoMax; j++) {
         const CargoItem& other = cargo[j];
         if (!other.used) {
@@ -89,7 +89,7 @@ f32 CarSys::cargo_place_y(ItemKind kind, f32 x, f32 z, bool* out_ok) const
         }
     }
     if (out_ok) {
-        *out_ok = y + half.y <= kTrunkTopY + 0.12f;
+        *out_ok = y + half.y <= car_layout().trunk_max.y + 0.12f;
     }
     return y;
 }
@@ -110,10 +110,10 @@ void CarSys::cargo_tick(Vec3 apparent, f32 dt)
         }
         c.pos += c.vel * dt;
 
-        const f32 lo_x = kTrunkMinX + half.x;
-        const f32 hi_x = f_max(kTrunkMaxX - half.x, lo_x);
-        const f32 lo_z = kTrunkMinZ + half.z;
-        const f32 hi_z = f_max(kTrunkMaxZ - half.z, lo_z);
+        const f32 lo_x = car_layout().trunk_min.x + half.x;
+        const f32 hi_x = f_max(car_layout().trunk_max.x - half.x, lo_x);
+        const f32 lo_z = car_layout().trunk_min.z + half.z;
+        const f32 hi_z = f_max(car_layout().trunk_max.z - half.z, lo_z);
         if (c.pos.x < lo_x || c.pos.x > hi_x) {
             c.pos.x = f_clamp(c.pos.x, lo_x, hi_x);
             c.vel.x *= -0.2f;
@@ -166,7 +166,7 @@ void CarSys::cargo_tick(Vec3 apparent, f32 dt)
             continue;
         }
         const Vec3 half = item_cargo_half(c.item.kind);
-        f32 rest_y = kTrunkFloorY + half.y;
+        f32 rest_y = car_layout().trunk_min.y + half.y;
         for (u32 j = 0; j < kCargoMax; j++) {
             const CargoItem& other = cargo[j];
             if (j == i || !other.used) {
@@ -182,7 +182,7 @@ void CarSys::cargo_tick(Vec3 apparent, f32 dt)
             c.pos.y = rest_y;
             c.vel.y *= -0.2f;
         }
-        const f32 hi_y = f_max(kTrunkTopY - half.y, rest_y);
+        const f32 hi_y = f_max(car_layout().trunk_max.y - half.y, rest_y);
         if (c.pos.y > hi_y && c.vel.y > 0.0f) {
             c.pos.y = hi_y;
             c.vel.y *= -0.2f;

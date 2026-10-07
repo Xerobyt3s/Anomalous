@@ -26,6 +26,9 @@ struct Environment {
 struct PointLight {
     Vec3 pos{};
     Vec3 color{};
+    Vec3 dir{};
+    f32 cone = -2.0f;
+    f32 reach = 1.0f;
 };
 
 struct ScreenFx {
@@ -101,6 +104,14 @@ public:
     void draw_island_haze(f32 near_d, f32 far_d, u32 depth_texture);
     void bind_procedural_ground();
     void draw_glass(const GpuMesh* mesh, const Mat4& model, f32 time);
+    void set_wipers(f32 left_x, f32 right_x, f32 pivot_y, f32 pivot_z, f32 reach)
+    {
+        wipers_[0] = left_x;
+        wipers_[1] = right_x;
+        wipers_[2] = pivot_y;
+        wipers_[3] = pivot_z;
+        wiper_reach_ = reach;
+    }
     void draw_rain(f32 intensity, f32 wind, Vec3 cam_vel, f32 time);
     void draw_snow(f32 intensity, f32 wind, f32 time);
     void scene_grab();
@@ -190,6 +201,8 @@ private:
 
     PointLight point_lights_[kMaxPointLights]{};
     u32 point_count_ = 0;
+    f32 wipers_[4] = {-0.38f, 0.10f, 0.094f, -0.60f};
+    f32 wiper_reach_ = 0.52f;
 
     f32 weather_overcast_ = 0.0f;
     f32 weather_wetness_ = 0.0f;

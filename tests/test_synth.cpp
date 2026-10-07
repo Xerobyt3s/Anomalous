@@ -330,7 +330,7 @@ TEST(synth, the_bus_cable_can_plug_straight_into_the_printer)
     sys.bus_target = kBusTargetPrinter;
     bay.run(60);
     const RigidBody* car = bay.sim->phys().body(bay.sim->vehicle().body());
-    const Vec3 jack = car->pos + rotate(car->rot, kPrinterJackLocal - bay.sim->vehicle().config().com_offset);
+    const Vec3 jack = car->pos + rotate(car->rot, car_layout().printer_jack - bay.sim->vehicle().config().com_offset);
     const Cable& bus = sys.cables[CABLE_BUS];
     CHECK(bus.state == CableState::Plugged);
     CHECK(length(bus.p[kCablePoints - 1] - jack) < 0.1f);

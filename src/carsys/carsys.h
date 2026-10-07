@@ -24,12 +24,6 @@ inline constexpr i32 kBusTargetTower = 1;
 inline constexpr i32 kBusTargetPrinter = 2;
 inline constexpr i32 kBusTargetLoosePrinter = 3;
 
-inline constexpr f32 kTrunkMinX = -0.50f;
-inline constexpr f32 kTrunkMaxX = 0.50f;
-inline constexpr f32 kTrunkFloorY = -0.20f;
-inline constexpr f32 kTrunkTopY = 0.16f;
-inline constexpr f32 kTrunkMinZ = 1.45f;
-inline constexpr f32 kTrunkMaxZ = 2.03f;
 
 inline constexpr u32 kSynthMaterials = 16;
 inline constexpr u32 kSynthElements = 32;

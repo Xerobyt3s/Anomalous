@@ -43,6 +43,7 @@ struct PartSlot {
 };
 
 const PartDef& part_def(PartKind kind);
+void apply_part_layout(const struct CarLayout& layout);
 Quat part_computer_rest_rot();
 bool part_kind_is_tire(PartKind kind);
 void parts_init(PartSlot* parts);

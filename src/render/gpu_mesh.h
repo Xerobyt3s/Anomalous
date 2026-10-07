@@ -27,6 +27,7 @@ struct GpuMesh {
     GpuSubmesh submeshes[kAmshMaxSubmeshes];
     u32 submesh_count = 0;
     Aabb bounds = aabb_empty();
+    f32 glow = 0.0f;
     bool loaded = false;
 
     u32 vao() const { return gpu ? gpu->vao() : 0u; }

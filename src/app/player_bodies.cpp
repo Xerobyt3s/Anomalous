@@ -1,5 +1,6 @@
 #include "app/player_bodies.h"
 #include "core/log.h"
+#include "engine/assets/asset_path.h"
 #include "engine/render/post_process.h"
 #include "math/glm_bridge.h"
 #include "render/debug_draw.h"
@@ -79,6 +80,28 @@ ghost::game::BodyPose rotate_pose(const ghost::game::BodyPose& pose, Quat frame,
 
 void PlayerBodies::update(const Sim& sim, PlayerId local, bool show_local, f32 alpha, f32 dt)
 {
+    if (!poncho_loaded_) {
+        poncho_loaded_ = true;
+        if (const auto text = ghost::engine::readAsset("assets/data/cosmetics.json")) {
+            poncho_tuning_ = ghost::game::parsePonchoTuning(*text);
+        }
+    }
+    update_bodies(sim, local, show_local, alpha, dt);
+    const glm::vec3 wind = to_glm(sim.weather().wind_velocity());
+    for (u32 i = 0; i < kMaxSlots; i++) {
+        Shown& shown = shown_[i];
+        if (!shown.active || !shown.cowboy) {
+            shown.poncho.reset();
+            continue;
+        }
+        shown.poncho.setTuning(poncho_tuning_);
+        const glm::vec3 up = to_glm(rotate(shown.frame, Vec3{0.0f, 1.0f, 0.0f}));
+        shown.poncho.step(shown.world.body, shown.world.bodyBasis, -up * 9.81f, wind, dt);
+    }
+}
+
+void PlayerBodies::update_bodies(const Sim& sim, PlayerId local, bool show_local, f32 alpha, f32 dt)
+{
     for (u32 i = 0; i < kMaxSlots; i++) {
         Shown& shown = shown_[i];
         const PlayerSlot& slot = sim.slots()[i];
@@ -97,6 +120,7 @@ void PlayerBodies::update(const Sim& sim, PlayerId local, bool show_local, f32 a
         shown.color = slot.color;
         shown.seed = static_cast<f32>(slot.id) * 17.3f;
         shown.downed = sim.roster().downed(slot.id);
+        shown.cowboy = sim.wears_cowboy(slot.id);
         const f32 hidden = now.shroud_time > 0.0f ? 1.0f : 0.0f;
         const f32 fade_step = kShroudFadeRate * dt;
         shown.shroud_fade = f_clamp(hidden, shown.shroud_fade - fade_step, shown.shroud_fade + fade_step);
@@ -109,6 +133,7 @@ void PlayerBodies::update(const Sim& sim, PlayerId local, bool show_local, f32 a
 
         const Quat frame = normalize(slerp(before.frame, now.frame, alpha));
         const Vec3 feet = lerp(player.prev_pos(), player.pos(), alpha);
+        shown.rig.setShape(ghost::game::BodyShape{});
         place_rig(shown, frame, feet);
         shown.frame = frame;
         const Quat to_local = conjugate(frame);
@@ -262,7 +287,8 @@ void PlayerBodies::draw(const Mat4& view_proj, Vec3 camera_pos, Vec3 light_dir, 
             continue;
         }
         const Vec3 color = shown.downed ? shown.color * kDownedShade : shown.color;
-        blob_->draw(shown.world, shown.rig.shape().headRadius, to_glm(color), shown.seed, shown.shroud_fade);
+        blob_->draw(shown.world, shown.rig.shape().headRadius, to_glm(color), shown.seed, shown.shroud_fade, shown.cowboy,
+                    shown.poncho.offsets());
     }
     blob_->end();
 }
@@ -301,6 +327,7 @@ void PlayerBodies::update_seated(const Sim& sim, const PlayerSlot& slot, Shown& 
     shown.gear = gear;
     shown.shift_time = f_max(shown.shift_time - dt, 0.0f);
 
+    shown.rig.setShape(ghost::game::BodyShape{}.scaled(f_lerp(1.0f, cfg.body_scale, seated)));
     ghost::game::BodyInput in;
     in.feet = to_glm(rotate(to_local, feet - car_pos));
     in.yaw = player.state() == PlayerState::Driving ? player.look_yaw() : 0.0f;

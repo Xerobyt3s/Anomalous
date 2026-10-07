@@ -1,0 +1,12 @@
+{
+  "_comment": "How brightly a mesh glows on its own, as a multiple of its texture colour (0 = not at all; above 1 blooms). Keyed by mesh name, so a lamp must be its own mesh.",
+  "meshes": {
+    "excel_brakelight": 6.0,
+    "excel_revlight": 3.5,
+    "mustang_brakelight": 6.0,
+    "mustang_revlight": 3.5,
+    "warn_red": 5.0,
+    "warn_amber": 5.0,
+    "computer_glow": 2.0
+  }
+}

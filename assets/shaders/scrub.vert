@@ -1,5 +1,6 @@
 #version 460 core
 #include "common.glsl"
+#include "terrain_rock.glsl"
 #include "frame.glsl"
 
 layout(location = 1) uniform vec4 u_cam;
@@ -42,9 +43,18 @@ const float WIND_STRENGTH = 0.5;
 const float TAPER_POWER = 1.4;
 const float SNOW_FLATTEN = 0.55;
 
+vec2 height_uv(vec2 uv)
+{
+    if (u_patch != 0) {
+        return uv;
+    }
+    vec2 texels = vec2(textureSize(u_height, 0));
+    return (uv * (texels - 1.0) + 0.5) / texels;
+}
+
 float ground_at(vec2 xz)
 {
-    return texture(u_height, (xz - u_field.xy) * u_field.zw).r;
+    return texture(u_height, height_uv((xz - u_field.xy) * u_field.zw)).r;
 }
 
 void collapse()
@@ -78,7 +88,7 @@ void main()
     if (u_patch != 0) {
         vec2 patch_uv = (clump_centre - u_field.xy) * u_field.zw;
         if (any(lessThan(patch_uv, vec2(0.0))) || any(greaterThan(patch_uv, vec2(1.0)))
-            || textureLod(u_height, patch_uv, 0.0).r < -7.5) {
+            || textureLod(u_height, height_uv(patch_uv), 0.0).r < -7.5) {
             collapse();
             return;
         }
@@ -127,10 +137,10 @@ void main()
     float yaw = lone ? b3 * TAU : around + (b3 - 0.5) * 2.0 * FAN;
 
     vec2 uv = (base_xz - u_field.xy) * u_field.zw;
-    float ground = texture(u_height, uv).r;
+    float ground = texture(u_height, height_uv(uv)).r;
     float road = texture(u_roadmask, uv).r;
 
-    const float e = 1.0;
+    const float e = 2.0;
     float hl = ground_at(base_xz - vec2(e, 0.0));
     float hr = ground_at(base_xz + vec2(e, 0.0));
     float hb = ground_at(base_xz - vec2(0.0, e));
@@ -172,8 +182,8 @@ void main()
     keep *= u_patch != 0 ? 1.0 : smoothstep(0.0, 70.0, min(to_edge.x, to_edge.y));
     keep *= ring_keep;
     keep *= step(road, 0.30);
-    keep *= step(0.72, terrain_normal.y);
-    keep *= u_patch != 0 ? step(-7.5, ground) : 1.0 - smoothstep(24.0, 32.0, ground);
+    keep *= u_patch != 0 ? step(0.72, terrain_normal.y) * step(-7.5, ground)
+                         : 1.0 - smoothstep(0.02, 0.2, terrain_rockiness(base_xz, terrain_normal.y, ground));
     if (fract(phase * 0.7071 + 0.37) > keep) {
         collapse();
         return;

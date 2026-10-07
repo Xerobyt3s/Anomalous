@@ -10,6 +10,7 @@
 #include "core/types.h"
 #include "editor/editor.h"
 #include "engine/core/game_loop.h"
+#include "game/fx/car_fx.h"
 #include "game/fx/lightning.h"
 #include "math/vmath.h"
 #include "net/session.h"
@@ -62,6 +63,7 @@ struct GameToggles {
     bool slow_mo = false;
     bool free_cam = false;
     bool chase_cam = false;
+    bool creatures = false;
 };
 
 class Game {
@@ -118,6 +120,7 @@ private:
     void terminal_input(const Input& input);
     void clear_pending_edges();
     void consume_events();
+    void sample_car_fx(bool tick, f32 dt);
     void update_camera(f32 frame_dt);
     void track_camera_velocity(f32 frame_dt);
     void update_chroma(f32 frame_dt);
@@ -137,6 +140,7 @@ private:
     Vec3 car_dash_pos() const;
     void draw_play_hud();
     void draw_debug_panels();
+    void draw_creatures_panel();
     void draw_coil_arcs(RenderDevice& device, DebugDraw& debug);
     void draw_debug_overlays(DebugDraw& debug);
     void bind_entity_meshes(RenderDevice& device);
@@ -151,6 +155,9 @@ private:
 
     Sim sim_;
     CarSysRenderer car_render_;
+    ghost::game::CarFxTuning car_fx_tuning_;
+    ghost::game::CarSmoke car_smoke_;
+    ghost::game::SkidMarks skid_marks_;
     TreeRenderer tree_render_;
     std::optional<ghost::game::Lightning> lightning_;
     TermRenderer term_render_;
@@ -205,6 +212,13 @@ private:
     std::vector<SlotCommand> slot_cmds_;
     bool menu_open_ = false;
     i32 pending_scene_ = -1;
+    struct CreatureUi {
+        i32 count = 1;
+        i32 type = 0;
+        i32 pose = 0;
+        f32 size = 1.0f;
+    };
+    CreatureUi creature_ui_;
     char join_address_[64] = "127.0.0.1";
     char name_edit_[24] = "Player";
     f32 alpha_ = 0.0f;

@@ -3,6 +3,7 @@
 #include "core/arena.h"
 #include "math/glm_bridge.h"
 #include "sim/sim.h"
+#include "world/scenes.h"
 #include "world/pickup_body.h"
 #include "game/ballistics/ballistics.h"
 
@@ -645,4 +646,132 @@ TEST(gameplay, a_player_put_back_holstered_mid_reload_is_not_stuck)
     aim.aim = true;
     range.run(aim, 30);
     CHECK(me->player.movement().state().aiming);
+}
+
+TEST(gameplay, an_arena_player_five_kills_ahead_wears_the_cowboy_hat)
+{
+    Range range;
+    if (!range.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    Sim& sim = *range.sim;
+    CHECK(!sim.wears_cowboy(0));
+    CHECK(sim.switch_scene(scene_index("yard")));
+    range.run(PlayerCommand{}, 2);
+    std::vector<ghost::game::RosterEntry> entries = sim.roster().entries();
+    for (ghost::game::RosterEntry& e : entries) {
+        if (e.id == 0) {
+            e.kills = 4;
+        }
+    }
+    sim.roster().replace(entries);
+    CHECK(!sim.wears_cowboy(0));
+    for (ghost::game::RosterEntry& e : entries) {
+        if (e.id == 0) {
+            e.kills = 5;
+        }
+    }
+    sim.roster().replace(entries);
+    CHECK(sim.wears_cowboy(0));
+
+    PlayerCommand off;
+    off.cowboy_target = 0;
+    off.cowboy_mode = 2;
+    range.run(off, 1);
+    CHECK(!sim.wears_cowboy(0));
+
+    CHECK(sim.switch_scene(scene_index("testzone")));
+    PlayerCommand on;
+    on.cowboy_target = 0;
+    on.cowboy_mode = 1;
+    range.run(on, 1);
+    CHECK(sim.wears_cowboy(0));
+    PlayerCommand back;
+    back.cowboy_target = 0;
+    back.cowboy_mode = 0;
+    range.run(back, 1);
+    CHECK(!sim.wears_cowboy(0));
+}
+
+TEST(gameplay, a_specimen_is_held_in_its_pose_swapped_and_removed)
+{
+    Range range;
+    if (!range.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    Sim& sim = *range.sim;
+    const auto& types = sim.gameplay().ghostData().types;
+    i32 mimic = -1;
+    i32 wisp = -1;
+    for (size_t t = 0; t < types.size(); t++) {
+        if (types[t].behavior == ghost::game::GhostBehavior::Mimic) {
+            mimic = static_cast<i32>(t);
+        } else if (types[t].behavior == ghost::game::GhostBehavior::Wisp) {
+            wisp = static_cast<i32>(t);
+        }
+    }
+    CHECK(mimic >= 0);
+    CHECK(wisp >= 0);
+    if (mimic < 0 || wisp < 0) {
+        return;
+    }
+    PlayerCommand place;
+    place.specimen_type = mimic;
+    place.specimen_pose = 3;
+    place.specimen_place = true;
+    range.run(place, 1);
+    const u32 first = sim.specimen().id;
+    CHECK(first != 0u);
+    const ghost::game::Ghost* ghost = sim.gameplay().ghosts().find(first);
+    CHECK(ghost != nullptr);
+    if (!ghost) {
+        return;
+    }
+    CHECK(ghost->posed);
+    CHECK(ghost->state == ghost::game::GhostState::Hunt);
+    CHECK(ghost::game::ghostUntouchable(*ghost));
+    const glm::vec3 at = ghost->position;
+    range.run(PlayerCommand{}, 240);
+    ghost = sim.gameplay().ghosts().find(first);
+    CHECK(ghost != nullptr);
+    if (ghost) {
+        CHECK(glm::distance(ghost->position, at) < 0.01f);
+    }
+
+    PlayerCommand swap;
+    swap.specimen_type = wisp;
+    swap.specimen_pose = 0;
+    range.run(swap, 1);
+    CHECK(sim.specimen().id != 0u);
+    CHECK(sim.specimen().id != first);
+    CHECK(sim.gameplay().ghosts().find(first) == nullptr);
+    const ghost::game::Ghost* swapped = sim.gameplay().ghosts().find(sim.specimen().id);
+    CHECK(swapped != nullptr);
+    if (swapped) {
+        CHECK(swapped->posed);
+    }
+
+    const u32 second = sim.specimen().id;
+    PlayerCommand remove;
+    remove.specimen_remove = true;
+    range.run(remove, 1);
+    CHECK(sim.specimen().id == 0u);
+    CHECK(sim.gameplay().ghosts().find(second) == nullptr);
+}
+
+TEST(gameplay, the_debug_spawn_puts_down_as_many_ghosts_as_asked)
+{
+    Range range;
+    if (!range.setup()) {
+        FAIL("sim init");
+        return;
+    }
+    const size_t before = range.sim->gameplay().ghosts().ghosts().size();
+    PlayerCommand spawn;
+    spawn.spawn_ghost = 0;
+    spawn.spawn_ghost_count = 4;
+    range.run(spawn, 1);
+    CHECK(range.sim->gameplay().ghosts().ghosts().size() == before + 4u);
 }

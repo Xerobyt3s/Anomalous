@@ -82,6 +82,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/carsys/cables.cpp
     src/carsys/carsys.cpp
     src/carsys/carsys_render.cpp
+    src/carsys/car_layout.cpp
     src/carsys/electrics.cpp
     src/carsys/fluids.cpp
     src/carsys/items.cpp
@@ -134,6 +135,7 @@ set(ANOMALOUS_CORE_SOURCES
     src/render/fontchain.cpp
     src/render/text.cpp
     src/render/asset_cache.cpp
+    src/render/mesh_glow.cpp
     src/render/device.cpp
     src/render/cable_render.cpp
     src/render/entity_meshes.cpp
@@ -186,6 +188,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/carsys/cables.h
     src/carsys/carsys.h
     src/carsys/carsys_render.h
+    src/carsys/car_layout.h
     src/carsys/car_lights.h
     src/carsys/electrics.h
     src/carsys/fluids.h
@@ -246,6 +249,7 @@ set(ANOMALOUS_CORE_HEADERS
     src/render/fontchain.h
     src/render/text.h
     src/render/asset_cache.h
+    src/render/mesh_glow.h
     src/render/device.h
     src/render/cable_render.h
     src/render/entity_meshes.h

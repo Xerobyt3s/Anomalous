@@ -21,6 +21,7 @@ uniform vec3 uBaseColor = vec3(1.0);
 uniform float uMetallic = 0.0;
 uniform float uRoughness = 0.6;
 uniform vec3 uEmissive = vec3(0.0);
+uniform float uGlow = 0.0;
 
 layout(binding = 0) uniform sampler2D uColorMap;
 layout(binding = 4) uniform sampler2D uNormalMap;
@@ -170,7 +171,7 @@ void main() {
     vec3 color = shade(N, V, L, u_sun_color_ambient.rgb, F0) * shadow * gCavity;
     color += shadePoints(vWorldPos, N, V, F0);
     color += ambientLight(N, V, F0) * gCavity;
-    color += uEmissive;
+    color += uEmissive + gBase * uGlow;
 
     if (any(isnan(color)) || any(isinf(color))) {
         color = vec3(0.0);

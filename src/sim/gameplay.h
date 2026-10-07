@@ -139,7 +139,9 @@ public:
     void tickClient(float dt, EventList& events);
     std::optional<Round> tickPickups(PlayerId player, PlayerGun& gun, bool interacting, float dt, EventList& events);
 
-    void spawnGhost(std::string_view type, const glm::vec3& at);
+    std::uint32_t spawnGhost(std::string_view type, const glm::vec3& at);
+    bool poseGhost(std::uint32_t id, const GhostWorld::Pose& pose) { return m_ghosts.pose(id, pose); }
+    bool removeGhost(std::uint32_t id) { return m_ghosts.remove(id); }
     void clearWorld();
 
     void hurtPlayer(PlayerId id, float amount, const glm::vec3& from, EventList& events, bool continuous = false,

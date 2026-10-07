@@ -31,6 +31,9 @@ void AssetCache::init(FileWatcher& watcher, Arena& scratch)
 {
     watcher_ = &watcher;
     scratch_ = &scratch;
+    if (const auto text = ghost::engine::readAsset("assets/data/glow.json")) {
+        glow_ = parse_mesh_glow(*text);
+    }
 
     const u8 white[4] = {255, 255, 255, 255};
     GLuint id = 0;
@@ -128,6 +131,7 @@ bool AssetCache::upload_mesh(MeshEntry& entry)
         return false;
     }
     upload_mesh_data(entry.mesh, data, true);
+    entry.mesh.glow = mesh_glow(glow_, entry.name.view());
     return true;
 }
 

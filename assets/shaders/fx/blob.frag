@@ -31,6 +31,8 @@ uniform vec3 uLegs[6];
 uniform vec3 uFootForward[2];
 uniform vec3 uSkin;
 uniform float uDissolve;
+uniform float uCowboy;
+uniform vec3 uHem[12];
 
 const int kSteps = 96;
 const float kArmRadius = 0.062;
@@ -48,6 +50,16 @@ const float kTop = 1.0;
 const float kBottom = 2.0;
 const float kSleeve = 3.0;
 const float kBoots = 4.0;
+const float kHat = 5.0;
+const float kHatBand = 6.0;
+const float kPoncho = 7.0;
+
+const vec3 kHatFelt = vec3(0.52, 0.35, 0.19);
+const vec3 kHatRibbon = vec3(0.12, 0.07, 0.04);
+const vec3 kPonchoRed = vec3(0.6, 0.17, 0.11);
+const vec3 kPonchoCream = vec3(0.88, 0.8, 0.62);
+const vec3 kPonchoBrown = vec3(0.28, 0.16, 0.09);
+const vec3 kPonchoTeal = vec3(0.12, 0.38, 0.4);
 
 float smin(float a, float b, float k) {
     float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
@@ -139,6 +151,99 @@ vec3 legs(vec3 p) {
     return vec3(d, material, boots);
 }
 
+vec3 hatFrame(vec3 p) {
+    vec3 up = normalize(uHeadUp);
+    vec3 fwd = uHeadForward - up * dot(uHeadForward, up);
+    fwd = dot(fwd, fwd) > 1e-6 ? normalize(fwd) : normalize(cross(up, vec3(1.0, 0.0, 0.0)) + vec3(1e-4));
+    vec3 side = cross(fwd, up);
+    vec3 q = p - (uHead + up * (uHeadRadius * 0.6));
+    return vec3(dot(q, side), dot(q, up), dot(q, fwd));
+}
+
+vec2 hat(vec3 p) {
+    vec3 l = hatFrame(p);
+    float curl = 0.075 * smoothstep(0.1, 0.34, abs(l.x)) - 0.025 * smoothstep(0.15, 0.36, abs(l.z));
+    float r = length(l.xz / vec2(1.0, 1.15));
+    float brim = max(r - 0.34, abs(l.y - curl) - 0.012) * 0.8;
+    vec3 c = l - vec3(0.0, 0.1, 0.0);
+    float crown = max(ellipsoid(c, vec3(0.16, 0.15, 0.19)), -l.y + 0.0);
+    float crease = ellipsoid(l - vec3(0.0, 0.27, 0.0), vec3(0.035, 0.07, 0.15));
+    crown = max(crown, -crease);
+    float pinch = 0.0;
+    for (int s = -1; s <= 1; s += 2) {
+        pinch = min(pinch, ellipsoid(l - vec3(0.15 * float(s), 0.2, 0.12), vec3(0.04, 0.06, 0.05)));
+    }
+    crown = max(crown, -pinch);
+    float d = smin(brim, crown, 0.02);
+    float material = (l.y > 0.0 && l.y < 0.045 && brim > crown) ? kHatBand : kHat;
+    return vec2(d, material);
+}
+
+float ponchoT(vec3 q) {
+    float top = uBodyRadii.y + 0.05;
+    float bottom = -uBodyRadii.y * 0.55;
+    return clamp((top - q.y) / (top - bottom), 0.0, 1.0);
+}
+
+vec3 ponchoSpace(vec3 p) {
+    vec3 q = toBody(p);
+    float around = atan(q.x, q.z) / 6.2831853 * 12.0;
+    around = around < 0.0 ? around + 12.0 : around;
+    int a = int(floor(around)) % 12;
+    int b = (a + 1) % 12;
+    vec3 hem = mix(uHem[a], uHem[b], fract(around));
+    float t = ponchoT(q);
+    return q - hem * (t * sqrt(t));
+}
+
+float poncho(vec3 p) {
+    vec3 q = ponchoSpace(p);
+    float top = uBodyRadii.y + 0.05;
+    float bottom = -uBodyRadii.y * 0.55 + 0.025 * sin(q.x * 38.0) * sin(q.z * 21.0 + 1.3);
+    float t = ponchoT(q);
+    vec2 extent = vec2(mix(0.16, uBodyRadii.x + 0.27, sqrt(t)), mix(0.13, uBodyRadii.z + 0.13, sqrt(t)));
+    float side = (length(q.xz / extent) - 1.0) * min(extent.x, extent.y);
+    float lid = max(q.y - top, bottom - q.y);
+    return max(side, lid) * 0.7;
+}
+
+float armDrape(vec3 p) {
+    vec3 q = ponchoSpace(p);
+    float bottom = -uBodyRadii.y * 0.55;
+    float reach = uBodyRadii.x + 0.36;
+    float d = 1e9;
+    for (int a = 0; a < 2; ++a) {
+        for (int i = 0; i < 4; ++i) {
+            vec3 from = toBody(uArms[a * 6 + i]);
+            vec3 to = toBody(uArms[a * 6 + i + 1]);
+            vec3 span = to - from;
+            float along = clamp(dot(q - from, span) / max(dot(span, span), 1e-6), 0.0, 1.0);
+            vec3 at = from + span * along;
+            float outward = length(at.xz) / reach;
+            vec3 rel = q - at;
+            float hang = mix(0.32, 0.08, clamp(outward, 0.0, 1.0));
+            float dy = rel.y > 0.0 ? rel.y : max(-rel.y - hang, 0.0);
+            float sheet = length(vec2(length(rel.xz), dy)) - 0.09;
+            sheet = max(sheet, (outward - 1.0) * reach);
+            sheet = max(sheet, bottom - q.y);
+            d = min(d, sheet);
+        }
+    }
+    return d * 0.8;
+}
+
+vec3 ponchoColor(vec3 p) {
+    vec3 q = ponchoSpace(p);
+    float t = ponchoT(q);
+    float zig = abs(fract(q.x * 7.0 + q.z * 3.0) - 0.5) * 0.06;
+    float band = fract((t + zig) * 3.2);
+    if (band < 0.07) return kPonchoCream;
+    if (band < 0.11) return kPonchoBrown;
+    if (band > 0.48 && band < 0.55) return kPonchoTeal;
+    if (band > 0.55 && band < 0.59) return kPonchoCream;
+    return kPonchoRed;
+}
+
 vec2 field(vec3 p) {
     vec2 body = torso(p);
     float along;
@@ -157,6 +262,14 @@ vec2 field(vec3 p) {
     if (head < nearest) { nearest = head; material = kSkin; }
     if (leg.x < nearest) { nearest = leg.x; material = leg.y; }
     if (leg.z < nearest) { nearest = leg.z; material = kBoots; }
+    if (uCowboy > 0.5) {
+        vec2 h = hat(p);
+        float wrap = smin(poncho(p), armDrape(p), 0.09);
+        d = min(d, h.x);
+        d = smin(d, wrap, 0.01);
+        if (h.x < nearest) { nearest = h.x; material = h.y; }
+        if (wrap < nearest) { nearest = wrap; material = kPoncho; }
+    }
     return vec2(d, material);
 }
 
@@ -201,6 +314,9 @@ vec4 face(vec3 p) {
 
 vec3 albedoAt(vec3 p, float material) {
     if (material == kBoots) return kBoot;
+    if (material == kHat) return kHatFelt;
+    if (material == kHatBand) return kHatRibbon;
+    if (material == kPoncho) return ponchoColor(p);
     if (material == kBottom) {
         vec3 q = toBody(p);
         float waist = -uBodyRadii.y + 0.24;

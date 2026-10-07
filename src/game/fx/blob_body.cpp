@@ -28,7 +28,8 @@ void BlobBody::begin(const glm::mat4& viewProj, const glm::vec3& cameraPos, cons
     m_shader.set("uTime", time);
 }
 
-void BlobBody::draw(const BodyPose& pose, float headRadius, const glm::vec3& color, float seed, float dissolve) {
+void BlobBody::draw(const BodyPose& pose, float headRadius, const glm::vec3& color, float seed, float dissolve, bool cowboy,
+                    std::span<const glm::vec3> hem) {
     const float reach = pose.bodyRadii.x + pose.bodyRadii.y + 0.05f;
     glm::vec3 low = glm::min(pose.body - glm::vec3(reach), pose.head - glm::vec3(headRadius + 0.04f));
     glm::vec3 high = glm::max(pose.body + glm::vec3(reach), pose.head + glm::vec3(headRadius + 0.04f));
@@ -53,6 +54,21 @@ void BlobBody::draw(const BodyPose& pose, float headRadius, const glm::vec3& col
     }
     for (int l = 0; l < 2; ++l) {
         m_shader.set(("uFootForward[" + std::to_string(l) + "]").c_str(), pose.footForward[static_cast<std::size_t>(l)]);
+    }
+    if (cowboy) {
+        const glm::vec3 crown = pose.head + pose.headUp * (headRadius * 0.6f + 0.1f);
+        low = glm::min(low, crown - glm::vec3(0.45f));
+        high = glm::max(high, crown + glm::vec3(0.45f));
+        low = glm::min(low, pose.body - glm::vec3(pose.bodyRadii.x + 0.4f));
+        high = glm::max(high, pose.body + glm::vec3(pose.bodyRadii.x + 0.4f));
+    }
+    m_shader.set("uCowboy", cowboy ? 1.0f : 0.0f);
+    if (cowboy) {
+        glm::vec3 ring[12]{};
+        for (std::size_t i = 0; i < hem.size() && i < 12; ++i) {
+            ring[i] = hem[i];
+        }
+        m_shader.set("uHem", std::span<const glm::vec3>(ring, 12));
     }
     m_shader.set("uBoxCenter", (low + high) * 0.5f);
     m_shader.set("uBoxHalf", (high - low) * 0.5f);

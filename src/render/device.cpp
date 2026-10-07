@@ -50,6 +50,7 @@ struct CameraUbo {
     Vec4 haze[4];
     Vec4 haze_params;
     Vec4 haze_tint;
+    Vec4 point_dir[RenderDevice::kMaxPointLights];
 };
 
 } // namespace
@@ -265,7 +266,8 @@ void RenderDevice::view_setup(const Camera& cam, f32 width, f32 height)
     for (u32 i = 0; i < kMaxPointLights; i++) {
         const bool on = i < point_count_;
         ubo.point_pos[i] = on ? vec4_from_vec3(point_lights_[i].pos, 1.0f) : Vec4{};
-        ubo.point_color[i] = on ? vec4_from_vec3(point_lights_[i].color, 0.0f) : Vec4{};
+        ubo.point_color[i] = on ? vec4_from_vec3(point_lights_[i].color, point_lights_[i].reach) : Vec4{};
+        ubo.point_dir[i] = on ? vec4_from_vec3(point_lights_[i].dir, point_lights_[i].cone) : Vec4{0.0f, 0.0f, 0.0f, -2.0f};
     }
     ubo.light_params = Vec4{static_cast<f32>(point_count_), 0.0f, 0.0f, 0.0f};
     ubo.shadow_mat = shadow_mat_;
@@ -642,6 +644,7 @@ void RenderDevice::flush_meshes()
         return;
     }
     const GLint maps_location = shadow_pass_ ? -1 : glGetUniformLocation(program, "uMaps");
+    const GLint glow_location = shadow_pass_ ? -1 : glGetUniformLocation(program, "uGlow");
 
     std::sort(mesh_queue_, mesh_queue_ + count, [](const MeshDraw& a, const MeshDraw& b) {
         return a.mesh < b.mesh;
@@ -676,6 +679,9 @@ void RenderDevice::flush_meshes()
         glVertexArrayVertexBuffer(mesh->vao(), 1, instance_vbo_,
                                   static_cast<GLintptr>(base * sizeof(Mat4)), sizeof(Mat4));
         bind_vao(mesh->vao());
+        if (!shadow_pass_) {
+            glProgramUniform1f(program, glow_location, mesh->glow);
+        }
         for (u32 s = 0; s < mesh->submesh_count; s++) {
             const GpuSubmesh& sub = mesh->submeshes[s];
             if (!shadow_pass_) {
@@ -726,6 +732,8 @@ void RenderDevice::draw_glass(const GpuMesh* mesh, const Mat4& model, f32 time)
     }
     glProgramUniformMatrix4fv(program, 0, 1, GL_FALSE, model.m);
     glProgramUniform4f(program, 4, shield_wet_, shield_wiper_, shield_rain_, time);
+    glProgramUniform4f(program, 5, wipers_[0], wipers_[1], wipers_[2], wipers_[3]);
+    glProgramUniform1f(program, 6, wiper_reach_);
     use_program(program);
     bind_vao(mesh->vao());
     set_cull(true);

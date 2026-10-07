@@ -1,0 +1,4 @@
+{
+  "_comment": "The arena cowboy's poncho hem is a ring of springy points that swing behind the body. stiffness pulls each back to rest (higher = snappier), damping calms the swing, inertia is how far it lags when the body speeds up or turns, windDrag how far wind and running blow it, neighbour how much each point drags its neighbours along, flutter how much it ripples in a strong breeze, reach the furthest the hem swings out (m), and drop the hanging length that makes a swung hem rise.",
+  "poncho": {"stiffness": 26.0, "damping": 3.2, "inertia": 0.055, "windDrag": 0.045, "neighbour": 9.0, "flutter": 0.018, "reach": 0.34, "drop": 0.55}
+}

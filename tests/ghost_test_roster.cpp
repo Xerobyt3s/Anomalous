@@ -3,6 +3,7 @@
 #include "game/ammo/ammo_data.h"
 #include "game/player/player_hit.h"
 #include "game/player/roster.h"
+#include "game/ghosts/ghost_poses.h"
 
 #include <doctest/doctest.h>
 
@@ -298,4 +299,33 @@ TEST_CASE("A pressure burst throws those near away from it: straight up from und
     CHECK(ammo.elements[ammo.element("wind")].blastRadius > 2.0f);
     CHECK(ammo.elements[ammo.element("wind")].blastKnockback > 3.0f);
     CHECK(ammo.elements[ammo.element("inferno")].blastRadius == 0.0f);
+}
+
+TEST_CASE("The arena hat goes only to a player far enough ahead of everyone else") {
+    const auto entry = [](PlayerId id, int kills, bool zombie = false) {
+        RosterEntry e;
+        e.id = id;
+        e.kills = kills;
+        e.zombie = zombie;
+        return e;
+    };
+    const std::vector<RosterEntry> alone{entry(0, 5)};
+    CHECK(dominantLeader(alone, 5) == std::optional<PlayerId>(PlayerId{0}));
+    const std::vector<RosterEntry> short_of_it{entry(0, 4)};
+    CHECK_FALSE(dominantLeader(short_of_it, 5).has_value());
+    const std::vector<RosterEntry> ahead{entry(0, 2), entry(1, 7), entry(2, 1)};
+    CHECK(dominantLeader(ahead, 5) == std::optional<PlayerId>(PlayerId{1}));
+    const std::vector<RosterEntry> close{entry(0, 2), entry(1, 6)};
+    CHECK_FALSE(dominantLeader(close, 5).has_value());
+    const std::vector<RosterEntry> tied{entry(0, 9), entry(1, 9), entry(2, 0)};
+    CHECK_FALSE(dominantLeader(tied, 5).has_value());
+    const std::vector<RosterEntry> haunted{entry(0, 6), entry(kZombieIdBase, 20, true)};
+    CHECK(dominantLeader(haunted, 5) == std::optional<PlayerId>(PlayerId{0}));
+}
+
+TEST_CASE("Every kind of ghost has at least one pose to inspect") {
+    for (GhostBehavior b : {GhostBehavior::Wisp, GhostBehavior::Poltergeist, GhostBehavior::BallLightning, GhostBehavior::Mimic,
+                            GhostBehavior::Vasskraka, GhostBehavior::Necromite}) {
+        CHECK_FALSE(posesOf(b).empty());
+    }
 }

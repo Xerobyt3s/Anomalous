@@ -24,6 +24,7 @@ struct SlotWire {
     bool use_down = false;
     char name[kWireNameChars] = {};
     Vec3 color{0.8f, 0.8f, 0.8f};
+    u8 cowboy = 0;
     Player player;
     Interact interact;
     ghost::game::MechanismView gun;

@@ -1,4 +1,5 @@
 #include "carsys/items.h"
+#include "carsys/car_layout.h"
 
 namespace anom {
 namespace {
@@ -42,7 +43,7 @@ static_assert(sizeof(kItems) / sizeof(kItems[0]) == ITEM_KIND_COUNT);
 
 std::string_view item_name(ItemKind kind) { return kItems[kind].name; }
 std::string_view item_id(ItemKind kind) { return kItems[kind].id; }
-std::string_view item_mesh(ItemKind kind) { return kItems[kind].mesh; }
+std::string_view item_mesh(ItemKind kind) { return kind == ITEM_TIRE ? car_layout().tire_mesh.view() : std::string_view(kItems[kind].mesh); }
 f32 item_mass(ItemKind kind) { return kItems[kind].mass; }
 Vec3 item_cargo_half(ItemKind kind) { return kItems[kind].cargo_half; }
 Vec3 item_mesh_center(ItemKind kind) { return kItems[kind].mesh_center; }

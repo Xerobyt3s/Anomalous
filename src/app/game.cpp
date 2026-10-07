@@ -53,14 +53,10 @@ constexpr f32 kHazeDensity = 0.0055f;
 constexpr f32 kHazeChroma = 1.0f;
 constexpr f32 kHazeShimmer = 1.0f;
 constexpr Vec3 kHazeTint{0.42f, 0.44f, 0.72f};
-constexpr f32 kEngineAudioLocal[3] = {0.0f, 0.10f, -1.55f};
-constexpr f32 kDashAudioLocal[3] = {0.0f, 0.35f, -0.35f};
 constexpr f32 kSteerKeyRateIn = 4.0f;
 constexpr f32 kSteerKeyRateOut = 9.0f;
 constexpr f32 kThrottleKeyRate = 4.0f;
 constexpr f32 kTapTime = 0.3f;
-constexpr Vec3 kCarPressLocal{0.0f, 0.60f, 0.0f};
-constexpr Vec3 kCarPressHalf{1.02f, 1.00f, 2.20f};
 constexpr f32 kGrassPressRange = 90.0f;
 constexpr f32 kArcOnsetCharge = 0.30f;
 constexpr f32 kJumpCollapse = 0.85f;
@@ -98,6 +94,11 @@ bool Game::init(RenderDevice& device, FontChain& fonts, Arena& perm, Arena& scra
         log_error("game: terminal renderer init failed");
         return false;
     }
+    if (const auto text = ghost::engine::readAsset("assets/data/car_fx.json")) {
+        car_fx_tuning_ = ghost::game::parseCarFxTuning(*text);
+    }
+    car_smoke_.setTuning(car_fx_tuning_);
+    skid_marks_.setTuning(car_fx_tuning_);
     if (!tree_render_.init(scratch)) {
         return false;
     }
@@ -183,6 +184,10 @@ void Game::clear_pending_edges()
     pending_.dummy_cycle = false;
     pending_.dummy_script = -1;
     pending_.spawn_ghost = -1;
+    pending_.specimen_type = -1;
+    pending_.specimen_place = false;
+    pending_.specimen_remove = false;
+    pending_.cowboy_target = -1;
     pending_.scene = pending_scene_;
     pending_scene_ = -1;
     pending_.holster = false;
@@ -482,6 +487,9 @@ void Game::handle_input(Window& window, const Input& input, f32 frame_dt)
         if (input.pressed(Key::F9)) {
             toggles_.debug_panels = !toggles_.debug_panels;
         }
+        if (input.pressed(Key::F11)) {
+            toggles_.creatures = !toggles_.creatures;
+        }
         if (input.pressed(Key::F10) && !editor_.active()) {
             pending_.dummy_cycle = true;
         }
@@ -573,6 +581,50 @@ void Game::update_camera(f32 frame_dt)
     }
 }
 
+void Game::sample_car_fx(bool tick, f32 dt)
+{
+    const Vehicle& vehicle = sim_.vehicle();
+    const RigidBody* car = sim_.phys().body(vehicle.body());
+    if (!car || !sim_.has_car()) {
+        return;
+    }
+    ghost::game::WheelSample wheels[kWheelCount];
+    for (u32 i = 0; i < kWheelCount; i++) {
+        const Wheel& w = vehicle.wheel(i);
+        wheels[i].contact = to_glm(w.contact_point);
+        wheels[i].normal = to_glm(w.contact_normal);
+        wheels[i].forward = to_glm(rotate(car->rot, Vec3{std::sin(w.steer_rad), 0.0f, -std::cos(w.steer_rad)}));
+        wheels[i].slideLat = w.slide_lat;
+        wheels[i].slideLong = w.slide_long;
+        wheels[i].slipAngle = w.slip_angle;
+        wheels[i].slipRatio = w.slip_ratio;
+        wheels[i].steered = vehicle.config().wheels[i].steered;
+        wheels[i].grounded = w.grounded;
+        wheels[i].road = vehicle.effects().surface_road[i] > 0.5f;
+    }
+    if (tick) {
+        for (u32 i = 0; i < kWheelCount; i++) {
+            skid_marks_.sample(i, wheels[i]);
+        }
+        skid_marks_.update(dt);
+        return;
+    }
+    const Vec3 gravity = sim_.phys().gravity_at(car->pos);
+    const Vec3 up = length_sq(gravity) > 1e-6f ? normalize(gravity) * -1.0f : Vec3{0.0f, 1.0f, 0.0f};
+    car_smoke_.emitWheels(wheels, to_glm(car->vel), to_glm(up), dt);
+    const CarSys& sys = sim_.carsys();
+    const f32 heat = sys.engine_on ? sys.fluids.coolant_temp - 105.0f : 0.0f;
+    const Vec3 hood = lerp(car->prev_pos, car->pos, alpha_)
+                    + rotate(slerp(car->prev_rot, car->rot, alpha_),
+                             car_layout().steam_point - Vec3{0.0f, sys.hood_open > 0.5f ? car_layout().steam_point.y : 0.0f, 0.0f}
+                                 - vehicle.config().com_offset);
+    car_smoke_.emitSteam(to_glm(hood), heat, to_glm(up), dt);
+    car_smoke_.update(dt, to_glm(up), to_glm(sim_.weather().wind_velocity()));
+    if (play_) {
+        play_->setCarFx(&car_smoke_, &skid_marks_, car_fx_tuning_.smokeThickness);
+    }
+}
+
 void Game::advance(f32 frame_dt)
 {
     if (editor_.active() && net_.role() == NetSession::Role::Solo) {
@@ -600,7 +652,9 @@ void Game::advance(f32 frame_dt)
         telem_slip_.push((vehicle.wheel(WHEEL_RL).slip_ratio + vehicle.wheel(WHEEL_RR).slip_ratio) * 0.5f);
         telem_load_.push(vehicle.wheel(WHEEL_FL).load * 0.001f);
         telem_speed_.push(f_abs(vehicle.forward_speed(sim_.phys())) * 3.6f);
+        sample_car_fx(true, kFixedDt);
     }
+    sample_car_fx(false, frame_dt);
     alpha_ = static_cast<f32>(clock_.alpha());
     bodies_.update(sim_, local_, third_person(), alpha_, frame_dt);
     if (play_) {
@@ -690,7 +744,7 @@ Vec3 Game::car_dash_pos() const
     if (!body) {
         return Vec3{};
     }
-    return body_point(*body, Vec3{kDashAudioLocal[0], kDashAudioLocal[1], kDashAudioLocal[2]});
+    return body_point(*body, car_layout().dash_audio);
 }
 
 void Game::consume_events()
@@ -788,6 +842,8 @@ void Game::consume_events()
             audio_.play_at(SFX_RATCHET, 0.5f, 0.8f, from_glm(removed->position));
         } else if (std::holds_alternative<ZoneLoaded>(event)) {
             editor_.snapshot_world(sim_.world(), sim_.phys());
+            car_smoke_.clear();
+            skid_marks_.clear();
         }
     }
     sim_.events().clear();
@@ -827,7 +883,7 @@ void Game::capture_exposure(RenderDevice& device)
 
 void Game::build_input_context(const Input& input)
 {
-    const bool cursor_visible = editor_.active() || toggles_.free_cam || toggles_.tuning;
+    const bool cursor_visible = editor_.active() || toggles_.free_cam || toggles_.tuning || toggles_.creatures;
 
     context_.begin_frame();
     context_.activate(InputLayer::TextField, ui_.text_active());
@@ -878,10 +934,8 @@ void Game::update_audio(f32 frame_dt)
         return;
     }
 
-    const Vec3 engine_pos = body_point(*body, Vec3{kEngineAudioLocal[0], kEngineAudioLocal[1],
-                                                   kEngineAudioLocal[2]});
-    const Vec3 dash_pos = body_point(*body, Vec3{kDashAudioLocal[0], kDashAudioLocal[1],
-                                                 kDashAudioLocal[2]});
+    const Vec3 engine_pos = body_point(*body, car_layout().engine_audio);
+    const Vec3 dash_pos = body_point(*body, car_layout().dash_audio);
     audio_.set_listener(camera_.pos, camera_.forward(), camera_.up(), sim_.player(local_).vel());
     audio_.set_car(engine_pos, body->pos, dash_pos, body->vel);
     audio_.set_occlusion(sim_.player(local_).driving() ? 0.55f : 1.0f, frame_dt);
@@ -1269,9 +1323,9 @@ void Game::update_grass_press(TerrainRenderer& terrain_renderer)
 
     if (const RigidBody* body = sim_.phys().body(sim_.vehicle().body())) {
         const Vec3 com = sim_.vehicle().config().com_offset;
-        const Vec3 centre = body->pos + rotate(body->rot, kCarPressLocal - com);
-        terrain_renderer.add_press_volume(centre, kCarPressHalf, body->rot);
-        terrain_renderer.add_patch_press(centre, kCarPressHalf, body->rot);
+        const Vec3 centre = body->pos + rotate(body->rot, car_layout().press_center - com);
+        terrain_renderer.add_press_volume(centre, car_layout().press_half, body->rot);
+        terrain_renderer.add_patch_press(centre, car_layout().press_half, body->rot);
     }
 
     const Pool<Entity>& pool = sim_.world().entities();
@@ -1393,8 +1447,7 @@ void Game::draw_viewmodel(RenderDevice& device)
     if (sim_.interact(local_).action() == InteractAction::Refuel && held.kind == ITEM_JERRYCAN) {
         if (const RigidBody* body = sim_.phys().body(sim_.vehicle().body())) {
             const f32 pour = sim_.interact(local_).hold_progress();
-            const Vec3 local = Vec3{f_lerp(1.06f, 0.96f, pour), f_lerp(0.38f, 0.30f, pour),
-                                    1.30f}
+            const Vec3 local = lerp(car_layout().jerrycan_from, car_layout().jerrycan_to, pour)
                              - sim_.vehicle().config().com_offset;
             const Quat tilt = quat_from_axis_angle(Vec3{0.0f, 0.0f, 1.0f},
                                                    f_lerp(0.45f, 1.95f, pour));
@@ -1573,7 +1626,32 @@ void Game::render(RenderDevice& device, TerrainRenderer& terrain_renderer, Debug
             light_count = car_lights(lerp(car->prev_pos, car->pos, alpha_), slerp(car->prev_rot, car->rot, alpha_),
                                      sim_.vehicle(), sim_.carsys(), lights);
         }
-        device.set_point_lights(lights, light_count);
+        PointLight extra[RenderDevice::kMaxPointLights];
+        u32 extra_count = 0;
+        if (play_) {
+            for (const ghost::game::FogLight& light : play_->frameLights()) {
+                if (extra_count < RenderDevice::kMaxPointLights) {
+                    extra[extra_count] = PointLight{};
+                    extra[extra_count].pos = from_glm(light.position);
+                    extra[extra_count].color = from_glm(light.color);
+                    extra_count++;
+                }
+            }
+        }
+        if (play_) {
+            std::vector<LampGlare> glare;
+            for (u32 i = 0; i < light_count; i++) {
+                if (lights[i].cone > -1.0f) {
+                    glare.push_back({to_glm(lights[i].pos), to_glm(lights[i].dir),
+                                     glm::normalize(to_glm(lights[i].color) + glm::vec3(1e-4f)) * 1.2f});
+                }
+            }
+            play_->setLampGlare(std::move(glare), sim_.weather().wetness());
+        }
+        PointLight merged[RenderDevice::kMaxPointLights];
+        const u32 merged_count = merge_lights(lights, light_count, extra, extra_count, merged,
+                                              RenderDevice::kMaxPointLights);
+        device.set_point_lights(merged, merged_count);
     }
 
     props_.clear();
@@ -1773,6 +1851,7 @@ void Game::draw_imgui(Window& window)
     draw_viewfinder();
     draw_play_hud();
     draw_debug_panels();
+    draw_creatures_panel();
     const ImVec2 size = ImGui::GetIO().DisplaySize;
     if (net_.role() == NetSession::Role::Client && !net_.welcomed()) {
         const ImVec2 extent = ImGui::CalcTextSize(net_.status().c_str());

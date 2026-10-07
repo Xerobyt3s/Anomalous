@@ -56,6 +56,8 @@ PlayView::PlayView(Gameplay& play, const engine::PhysicsWorld& physics)
       m_litShader(engine::assetPath("shaders/ghost_lit.vert"), engine::assetPath("shaders/ghost_lit.frag")),
       m_flashShader(engine::assetPath("shaders/flash.vert"), engine::assetPath("shaders/flash.frag")),
       m_decalShader(engine::assetPath("shaders/fx/decal.vert"), engine::assetPath("shaders/fx/decal.frag")),
+      m_carSmokeShader(engine::assetPath("shaders/fx/fog.vert"), engine::assetPath("shaders/fx/car_smoke.frag")),
+      m_skidShader(engine::assetPath("shaders/fx/skid.vert"), engine::assetPath("shaders/fx/skid.frag")),
       m_quad(engine::makeQuad()), m_unitBox(engine::makeBox(glm::vec3(1.0f)))
 {
     m_fire.setUpField([this](const glm::vec3& at) { return m_play.upAt(at); });
@@ -252,6 +254,7 @@ void PlayView::update(float dt, const PlayFrame& frame)
     updateItem(dt, frame);
     updateDebris(dt);
     updatePuffs(dt);
+    replayPosed();
     updateElementFx(dt, 1.0f);
     updateAudio(dt);
     m_cameraKick.update(dt, m_cameraRecoil.stiffness, m_cameraRecoil.dampingRatio);

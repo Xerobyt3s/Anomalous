@@ -1,4 +1,5 @@
 #include "app/player_view.h"
+#include "carsys/car_layout.h"
 #include "physics/gravity_field.h"
 #include "physics/world.h"
 #include "player/player.h"
@@ -10,9 +11,6 @@ namespace {
 constexpr f32 kPitchLimit = 89.0f * kDegToRad;
 constexpr f32 kCockpitLagRate = 18.0f;
 constexpr f32 kCockpitLagMax = 0.15f;
-constexpr f32 kChasePivotHeight = 1.30f;
-constexpr f32 kChaseNearDist = 5.0f;
-constexpr f32 kChaseFarDist = 7.2f;
 constexpr f32 kChaseSpeedFull = 38.0f;
 constexpr f32 kChasePitch = 10.0f * kDegToRad;
 constexpr f32 kChaseYawRate = 3.2f;
@@ -114,7 +112,7 @@ void PlayerView::chase_camera(const Player& player, PhysWorld& phys, const Rigid
     if (!chase_valid_) {
         chase_yaw_ = heading;
         chase_prev_yaw_ = heading;
-        chase_dist_ = kChaseNearDist;
+        chase_dist_ = car_layout().chase_near;
         look_idle_ = kChaseLookHold;
         chase_valid_ = true;
     }
@@ -137,8 +135,8 @@ void PlayerView::chase_camera(const Player& player, PhysWorld& phys, const Rigid
     const f32 yaw_rate = dot(body.angular_vel, up_f);
     lat_g_ = f_approach_exp(lat_g_, f_clamp(yaw_rate * speed_plan / 9.81f, -1.0f, 1.0f), kLatGRate, dt);
     const Vec3 right = normalize(cross(dir, up_f));
-    const Vec3 pivot = body_pos + up_f * kChasePivotHeight - right * (kChaseLateral * lat_g_);
-    f32 want = f_lerp(kChaseNearDist, kChaseFarDist, f_clamp01(speed / kChaseSpeedFull));
+    const Vec3 pivot = body_pos + up_f * car_layout().chase_height - right * (kChaseLateral * lat_g_);
+    f32 want = f_lerp(car_layout().chase_near, car_layout().chase_far, f_clamp01(speed / kChaseSpeedFull));
 
     PhysRayHit hit;
     if (phys.raycast(Ray{pivot, dir * -1.0f}, want + kChaseClearance, &hit)) {

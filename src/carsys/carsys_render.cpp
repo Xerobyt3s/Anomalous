@@ -8,16 +8,6 @@
 namespace anom {
 namespace {
 
-constexpr f32 kHoodHingeY = 0.1474f;
-constexpr f32 kHoodHingeZ = -0.62f;
-constexpr f32 kHoodOpenAngle = 1.15f;
-constexpr f32 kDoorHingeX = 0.80f;
-constexpr f32 kDoorHingeZ = -0.55f;
-constexpr f32 kDoorOpenAngle = 1.05f;
-constexpr f32 kTrunkHingeY = 0.2038f;
-constexpr f32 kTrunkHingeZ = 1.42f;
-constexpr f32 kTrunkOpenAngle = 1.35f;
-constexpr Vec3 kLeverPos{-0.13f, -0.17f, 0.44f};
 constexpr f32 kLeverAngleRest = 0.12f;
 constexpr f32 kLeverAngleSet = 0.55f;
 
@@ -28,6 +18,13 @@ constexpr f32 kSmokeBuoyancy = 0.06f;
 Mat4 offset_from(const Mat4& base, Vec3 local, Quat rot = quat_identity())
 {
     return base * mat4_trs(local, rot, kOne);
+}
+
+void draw_named(RenderDevice& device, const FixedString<32>& name, const Mat4& model)
+{
+    if (!name.empty()) {
+        device.draw_mesh(device.assets().mesh(name.view()), model);
+    }
 }
 
 } // namespace
@@ -63,40 +60,8 @@ void CarSysRenderer::spawn_sparks(Vec3 pos, u32 count)
     }
 }
 
-void CarSysRenderer::draw_effects(RenderDevice& device, const CarSys& sys, const Vehicle& veh,
-                                  const Mat4& base, Vec3 gravity, Vec3 car_vel, f32 dt)
+void CarSysRenderer::draw_sparks(RenderDevice& device, Vec3 gravity, f32 dt)
 {
-    const Vec3 up = length_sq(gravity) > 1e-6f ? normalize(gravity) * -1.0f : Vec3{0.0f, 1.0f, 0.0f};
-    for (u32 i = 0; i < kWheelCount; i++) {
-        const Wheel& w = veh.wheel(i);
-        if (!w.grounded) {
-            puff_accum_[i] = 0.0f;
-            continue;
-        }
-        const f32 slide = f_max(f_abs(w.slide_lat), f_abs(w.slide_long));
-        puff_accum_[i] += puff_rate(slide) * dt;
-        const bool road = veh.effects().surface_road[i] > 0.5f;
-        while (puff_accum_[i] >= 1.0f) {
-            puff_accum_[i] -= 1.0f;
-            const Vec3 jitter{(rand01() - 0.5f) * 0.4f, (rand01() - 0.5f) * 0.4f, (rand01() - 0.5f) * 0.4f};
-            spawn_puff(w.contact_point + up * 0.08f, car_vel * -0.15f + up * 0.8f + jitter,
-                       0.8f + rand01() * 0.6f, road ? 0.07f : 0.12f, false);
-        }
-    }
-
-    if (sys.fluids.coolant_temp > 105.0f && sys.engine_on) {
-        smoke_accum_ += (sys.fluids.coolant_temp - 105.0f) * 0.6f * dt;
-        while (smoke_accum_ >= 1.0f) {
-            smoke_accum_ -= 1.0f;
-            const Vec3 local = Vec3{(rand01() - 0.5f) * 0.5f, 0.08f, -1.35f + rand01() * 0.4f}
-                             - veh.config().com_offset;
-            spawn_puff(transform_point(base, local),
-                       Vec3{(rand01() - 0.5f) * 0.5f, 0.9f + rand01() * 0.6f,
-                            (rand01() - 0.5f) * 0.5f},
-                       1.1f + rand01() * 0.6f, 0.05f + rand01() * 0.05f, false);
-        }
-    }
-
     for (Puff& p : puffs_) {
         if (!p.used) {
             continue;
@@ -128,18 +93,23 @@ void CarSysRenderer::draw_glass(RenderDevice& device, const CarSys& sys, const V
     const Mat4 base = mat4_trs(lerp(body->prev_pos, body->pos, alpha),
                                slerp(body->prev_rot, body->rot, alpha), kOne);
 
-    device.draw_glass(device.assets().mesh("excel_glass"), offset_from(base, -com), time);
+    const CarLayout& panes = veh.config().layout;
+    device.set_wipers(panes.wiper_x[0], panes.wiper_x[1], panes.wiper_glass_y, panes.wiper_base.z, panes.wiper_reach);
+    if (!panes.glass_mesh.empty()) {
+        device.draw_glass(device.assets().mesh(panes.glass_mesh.view()), offset_from(base, -com), time);
+    }
     if (sys.parts[PART_TANK].installed) {
         device.draw_glass(device.assets().mesh("part_tank_glass"), offset_from(base, part_def(PART_TANK).socket_pos - com), time);
     }
+    const CarLayout& layout = veh.config().layout;
     for (u32 side = 0; side < 2; side++) {
         const f32 sign = side == 0 ? -1.0f : 1.0f;
-        const Vec3 hinge = Vec3{sign * kDoorHingeX, 0.0f, kDoorHingeZ} - com;
+        const Vec3 hinge = Vec3{sign * layout.door_hinge.x, layout.door_hinge.y, layout.door_hinge.z} - com;
         const Quat swing = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f},
-                                                sign * sys.door_open[side] * kDoorOpenAngle);
-        device.draw_glass(device.assets().mesh(side == 0 ? "excel_door_glass_l"
-                                                         : "excel_door_glass_r"),
-                          offset_from(base, hinge, swing), time);
+                                                sign * sys.door_open[side] * layout.door_angle);
+        if (!layout.door_glass_mesh[side].empty()) {
+            device.draw_glass(device.assets().mesh(layout.door_glass_mesh[side].view()), offset_from(base, hinge, swing), time);
+        }
     }
 }
 
@@ -155,10 +125,12 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
                                slerp(body->prev_rot, body->rot, alpha), kOne);
     AssetCache& assets = device.assets();
 
-    const Mat4 hood = offset_from(base, Vec3{0.0f, kHoodHingeY, kHoodHingeZ} - com,
+    const CarLayout& layout = veh.config().layout;
+    const Mat4 hood = offset_from(base, layout.hood_hinge - com,
                                   quat_from_axis_angle(Vec3{1.0f, 0.0f, 0.0f},
-                                                       sys.hood_open * kHoodOpenAngle));
-    device.draw_mesh(assets.mesh("excel_hood"), hood);
+                                                       sys.hood_open * layout.hood_angle));
+    draw_named(device, layout.hood_mesh, hood);
+    draw_named(device, layout.interior_mesh, offset_from(base, -com));
 
     for (u32 p = 0; p < 2; p++) {
         const f32 sign = p == 0 ? -1.0f : 1.0f;
@@ -166,9 +138,9 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
         if (p == 1 && sys.parts[PART_HEADLIGHTS].condition < 0.4f) {
             pod = f_min(pod, 0.38f);
         }
-        device.draw_mesh(assets.mesh("excel_popup"),
-                         offset_from(hood, Vec3{sign * 0.40f, -0.0934f, -0.88f},
-                                     quat_from_axis_angle(Vec3{1.0f, 0.0f, 0.0f}, pod * 0.7f)));
+        draw_named(device, layout.popup_mesh,
+                   offset_from(hood, Vec3{sign * layout.popup_offset.x, layout.popup_offset.y, layout.popup_offset.z},
+                               quat_from_axis_angle(Vec3{1.0f, 0.0f, 0.0f}, pod * 0.7f)));
     }
 
     static const PartKind kBayParts[4] = {PART_ENGINE, PART_BATTERY, PART_ALTERNATOR,
@@ -183,23 +155,20 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
 
     for (u32 side = 0; side < 2; side++) {
         const f32 sign = side == 0 ? -1.0f : 1.0f;
-        const Vec3 hinge = Vec3{sign * kDoorHingeX, 0.0f, kDoorHingeZ} - com;
+        const Vec3 hinge = Vec3{sign * layout.door_hinge.x, layout.door_hinge.y, layout.door_hinge.z} - com;
         const Quat swing = quat_from_axis_angle(Vec3{0.0f, 1.0f, 0.0f},
-                                                sign * sys.door_open[side] * kDoorOpenAngle);
-        device.draw_mesh(assets.mesh(side == 0 ? "excel_door_l" : "excel_door_r"),
-                         offset_from(base, hinge, swing));
+                                                sign * sys.door_open[side] * layout.door_angle);
+        draw_named(device, layout.door_mesh[side], offset_from(base, hinge, swing));
     }
 
-    device.draw_mesh(assets.mesh("excel_trunk_lid"),
-                     offset_from(base, Vec3{0.0f, kTrunkHingeY, kTrunkHingeZ} - com,
-                                 quat_from_axis_angle(Vec3{1.0f, 0.0f, 0.0f},
-                                                      -sys.trunk_open * kTrunkOpenAngle)));
+    draw_named(device, layout.trunk_mesh,
+               offset_from(base, layout.trunk_hinge - com,
+                           quat_from_axis_angle(Vec3{1.0f, 0.0f, 0.0f}, -sys.trunk_open * layout.trunk_angle)));
 
-    device.draw_mesh(assets.mesh("excel_lever"),
-                     offset_from(base, kLeverPos - com,
-                                 quat_from_axis_angle(Vec3{1.0f, 0.0f, 0.0f},
-                                                      f_lerp(kLeverAngleRest, kLeverAngleSet,
-                                                             sys.lever_anim))));
+    draw_named(device, layout.lever_mesh,
+               offset_from(base, layout.lever - com,
+                           quat_from_axis_angle(Vec3{1.0f, 0.0f, 0.0f},
+                                                f_lerp(kLeverAngleRest, kLeverAngleSet, sys.lever_anim))));
 
     for (const CargoItem& c : sys.cargo) {
         if (!c.used) {
@@ -211,31 +180,29 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
                          offset_from(base, local, cargo_rot));
     }
 
-    device.draw_mesh(assets.mesh("excel_fuelcap"),
-                     offset_from(base, Vec3{0.80f, 0.145f, 1.30f} - com,
-                                 quat_from_axis_angle(Vec3{0.0f, 0.0f, 1.0f},
-                                                      sys.cap_anim * 1.3f)));
+    draw_named(device, layout.fuelcap_mesh,
+               offset_from(base, layout.fuelcap - com,
+                           quat_from_axis_angle(Vec3{0.0f, 0.0f, 1.0f}, sys.cap_anim * 1.3f)));
 
     if (sys.key_inserted) {
         device.draw_mesh(assets.mesh("part_key"),
-                         offset_from(base, Vec3{-0.22f, 0.05f, -0.25f} - com));
+                         offset_from(base, layout.key - com));
     }
 
-    const Vec3 wiper_axis = normalize(Vec3{0.0f, 0.807f, -0.591f});
+    const Vec3 wiper_axis = normalize(layout.wiper_axis);
     const f32 wiper_angle = -(0.20f + sys.wiper_sweep * 1.30f);
-    static const f32 kWiperX[2] = {-0.38f, 0.10f};
-    for (f32 wx : kWiperX) {
+    for (f32 wx : layout.wiper_x) {
         device.draw_mesh(assets.mesh("part_wiper"),
-                         offset_from(base, Vec3{wx, 0.150f, -0.60f} - com,
+                         offset_from(base, Vec3{wx, layout.wiper_base.y, layout.wiper_base.z} - com,
                                      quat_from_axis_angle(wiper_axis, wiper_angle)));
     }
 
     device.draw_mesh(assets.mesh("jack_coax"),
-                     offset_from(base, Vec3{0.35f, 0.515f, 0.36f} - com));
+                     offset_from(base, layout.jack_coax - com));
     device.draw_mesh(assets.mesh("jack_bus"),
-                     offset_from(base, Vec3{0.32f, -0.02f, -0.75f} - com));
+                     offset_from(base, layout.jack_bus - com));
 
-    const Mat4 deck = offset_from(base, Vec3{0.12f, -0.045f, -0.295f} - com);
+    const Mat4 deck = offset_from(base, layout.deck - com);
     device.draw_mesh(assets.mesh("part_deck"), deck);
     if (sys.tape_inserted >= 0) {
         device.draw_mesh(assets.mesh("part_cassette"),
@@ -258,7 +225,7 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
         }
     }
     if (sys.parts[PART_PRINTER].installed) {
-        device.draw_mesh(assets.mesh("jack_bus"), offset_from(base, kPrinterJackLocal - com));
+        device.draw_mesh(assets.mesh("jack_bus"), offset_from(base, car_layout().printer_jack - com));
     }
 
     if (sys.parts[PART_COIL].installed) {
@@ -289,17 +256,14 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
         f_clamp01(sys.fluids.fuel),
         f_clamp01((sys.fluids.coolant_temp - 20.0f) / 106.0f),
     };
-    static const f32 kDialX[4] = {-0.44f, -0.30f, -0.405f, -0.335f};
-    static const f32 kDialY[4] = {0.064f, 0.064f, 0.006f, 0.006f};
-    static const f32 kDialScale[4] = {1.0f, 1.0f, 0.5f, 0.5f};
     static const f32 kDialRate[4] = {8.0f, 14.0f, 1.0f, 1.0f};
     for (u32 d = 0; d < 4; d++) {
         dial_sm_[d] = dial_valid_ ? f_approach_exp(dial_sm_[d], dial_val[d], kDialRate[d], dt) : dial_val[d];
         const f32 needle = 2.27f - dial_sm_[d] * 4.54f;
         device.draw_mesh(assets.mesh("excel_needle"),
-                         base * mat4_trs(Vec3{kDialX[d], kDialY[d], -0.305f} - com,
+                         base * mat4_trs(Vec3{layout.dial_x[d], layout.dial_y[d], layout.dial_z} - com,
                                          quat_from_axis_angle(Vec3{0.0f, 0.0f, 1.0f}, needle),
-                                         Vec3{kDialScale[d], kDialScale[d], kDialScale[d]}));
+                                         Vec3{layout.dial_scale[d], layout.dial_scale[d], layout.dial_scale[d]}));
     }
     dial_valid_ = true;
 
@@ -315,21 +279,19 @@ void CarSysRenderer::draw(RenderDevice& device, const CarSys& sys, const Vehicle
             continue;
         }
         device.draw_mesh(assets.mesh(kWarnAmber[w] ? "warn_amber" : "warn_red"),
-                         base * mat4_trs(Vec3{-0.418f + 0.028f * static_cast<f32>(w), 0.030f,
-                                              -0.304f} - com,
+                         base * mat4_trs(layout.warn_first + Vec3{layout.warn_step * static_cast<f32>(w), 0.0f, 0.0f} - com,
                                          quat_identity(), Vec3{0.014f, 0.014f, 0.008f}));
     }
 
     if (veh.input().brake > 0.05f || veh.input().handbrake) {
-        device.draw_mesh(assets.mesh("excel_brakelight"), offset_from(base, -com));
+        draw_named(device, layout.brakelight_mesh, offset_from(base, -com));
     }
     if (veh.train().gear == -1) {
-        device.draw_mesh(assets.mesh("excel_revlight"), offset_from(base, -com));
+        draw_named(device, layout.revlight_mesh, offset_from(base, -com));
     }
 
     const RigidBody* car = phys.body(veh.body());
-    draw_effects(device, sys, veh, base, car ? phys.gravity_at(car->pos) : phys.gravity(), car ? car->vel : Vec3{},
-                 dt);
+    draw_sparks(device, car ? phys.gravity_at(car->pos) : phys.gravity(), dt);
 }
 
 } // namespace anom

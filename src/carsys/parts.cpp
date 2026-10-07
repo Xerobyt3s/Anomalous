@@ -1,4 +1,5 @@
 #include "carsys/parts.h"
+#include "carsys/car_layout.h"
 
 namespace anom {
 namespace {
@@ -23,9 +24,39 @@ constexpr PartDef kPartDefs[PART_COUNT] = {
 
 } // namespace
 
+PartDef g_part_defs[PART_COUNT] = {};
+bool g_part_defs_ready = false;
+
+void ensure_part_defs()
+{
+    if (!g_part_defs_ready) {
+        for (u32 i = 0; i < PART_COUNT; i++) {
+            g_part_defs[i] = kPartDefs[i];
+        }
+        g_part_defs_ready = true;
+    }
+}
+
 const PartDef& part_def(PartKind kind)
 {
-    return kPartDefs[kind];
+    ensure_part_defs();
+    return g_part_defs[kind];
+}
+
+void apply_part_layout(const CarLayout& layout)
+{
+    static_assert(PART_COUNT <= kLayoutParts);
+    for (u32 i = 0; i < PART_COUNT; i++) {
+        g_part_defs[i] = kPartDefs[i];
+        if (layout.socket_set[i]) {
+            g_part_defs[i].socket_pos = layout.sockets[i].center;
+            g_part_defs[i].socket_half = layout.sockets[i].half;
+        }
+        if (part_kind_is_tire(static_cast<PartKind>(i))) {
+            g_part_defs[i].mesh = layout.tire_mesh.c_str();
+        }
+    }
+    g_part_defs_ready = true;
 }
 
 Quat part_computer_rest_rot()

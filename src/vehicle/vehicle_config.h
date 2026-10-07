@@ -1,5 +1,7 @@
 #pragma once
 
+#include "carsys/car_layout.h"
+
 #include "carsys/carsys.h"
 
 #include "core/fixed_string.h"
@@ -61,6 +63,7 @@ struct VehicleConfig {
     f32 tire_low_speed = 0.6f;
     f32 tire_grass_grip = 0.80f;
     f32 climb_grip = 1.0f;
+    f32 spin_grip = 1.0f;
     f32 climb_slope_start = 12.0f;
     f32 climb_slope_full = 25.0f;
     f32 climb_speed = 6.0f;
@@ -102,11 +105,15 @@ struct VehicleConfig {
     f32 diff_coast_ramp = 0.18f;
     f32 tc_strength = 0.0f;
     f32 tc_slip = 1.3f;
+    f32 tc_low = 0.0f;
+    f32 tc_fade_start = 0.0f;
+    f32 tc_fade_full = 0.0f;
 
     f32 brake_torque = 1700.0f;
     f32 handbrake_torque = 2500.0f;
     f32 handbrake_grip_mul = 0.85f;
     f32 park_latch_speed = 2.0f;
+    bool handbrake_declutch = false;
 
     f32 drag_coef = 0.8f;
     f32 rolling_resist = 0.012f;
@@ -127,12 +134,14 @@ struct VehicleConfig {
     Vec3 wheel_normal{0.0f, 0.4f, 0.92f};
     f32 wheel_radius = 0.18f;
     Vec3 shifter{0.0f, 0.1f, -0.2f};
+    f32 body_scale = 1.0f;
     SynthTuning synth;
     SeatConfig seats[kMaxSeats];
     u32 seat_count = 1;
 
     FixedString<32> body_mesh;
     FixedString<32> wheel_mesh;
+    CarLayout layout;
 };
 
 bool vehicle_config_load(VehicleConfig& out, Arena& scratch, std::string_view path);

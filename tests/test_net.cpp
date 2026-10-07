@@ -780,3 +780,27 @@ TEST(net, a_snapshot_older_than_the_last_one_is_ignored)
     moved.header.zone_serial = base.header.zone_serial + 1;
     CHECK(m.sim->queue_snapshot(std::move(moved)));
 }
+
+TEST(net, the_host_dresses_a_client_as_a_cowboy_and_a_client_cannot)
+{
+    Pair pair;
+    if (!pair.setup()) {
+        FAIL("join");
+        return;
+    }
+    PlayerCommand dress = pair.idle(pair.host);
+    dress.cowboy_target = static_cast<i32>(pair.client.me());
+    dress.cowboy_mode = 1;
+    pair.run(dress, pair.idle(pair.client), 1);
+    pair.run(pair.idle(pair.host), pair.idle(pair.client), 20);
+    CHECK(pair.host.sim->wears_cowboy(pair.client.me()));
+    CHECK(pair.client.sim->wears_cowboy(pair.client.me()));
+    CHECK(!pair.client.sim->wears_cowboy(0));
+
+    PlayerCommand sneaky = pair.idle(pair.client);
+    sneaky.cowboy_target = 0;
+    sneaky.cowboy_mode = 1;
+    pair.run(pair.idle(pair.host), sneaky, 20);
+    CHECK(!pair.host.sim->wears_cowboy(0));
+    CHECK(!pair.client.sim->wears_cowboy(0));
+}

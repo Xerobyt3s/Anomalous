@@ -48,6 +48,11 @@ struct Options {
     bool place = false;
     bool coil = false;
     bool drive = false;
+    bool lights = false;
+    bool cowboy = false;
+    bool creatures = false;
+    bool cockpit = false;
+    i64 burnout_frame = 0;
     bool walk = false;
     bool have_carat = false;
     anom::Vec3 carat{};
@@ -158,6 +163,18 @@ Options parse_options(int argc, char** argv)
             options.steer_frame = std::atoll(argv[i] + 8);
         } else if (std::strcmp(argv[i], "--drive") == 0) {
             options.drive = true;
+        } else if (std::strncmp(argv[i], "--burnout=", 10) == 0) {
+            options.drive = true;
+            options.burnout_frame = std::atoll(argv[i] + 10);
+        } else if (std::strcmp(argv[i], "--cockpit") == 0) {
+            options.drive = true;
+            options.cockpit = true;
+        } else if (std::strcmp(argv[i], "--creatures") == 0) {
+            options.creatures = true;
+        } else if (std::strcmp(argv[i], "--cowboy") == 0) {
+            options.cowboy = true;
+        } else if (std::strcmp(argv[i], "--lights") == 0) {
+            options.lights = true;
         } else if (std::strcmp(argv[i], "--ride") == 0) {
             options.ride = true;
         } else if (std::strcmp(argv[i], "--walk") == 0) {
@@ -347,7 +364,7 @@ int main(int argc, char** argv)
     } else if (options.join) {
         game.net().join(game.sim(), options.join, ghost::game::net::kDefaultPort, game.net().name());
     }
-    game.toggles().chase_cam = options.drive;
+    game.toggles().chase_cam = options.drive && !options.cockpit;
     if (options.drive) {
         const anom::RigidBody* car = game.phys().body(game.vehicle().body());
         if (car) {
@@ -388,6 +405,7 @@ int main(int argc, char** argv)
     game.toggles().carsys = options.panels;
     game.toggles().telemetry = options.panels;
     game.toggles().debug_panels = options.panels;
+    game.toggles().creatures = options.creatures;
     if (options.have_campos) {
         game.camera().pos = options.campos;
     }
@@ -440,7 +458,7 @@ int main(int argc, char** argv)
             } else if (!game.carsys().engine_on) {
                 game.carsys().key_inserted = true;
             } else {
-                game.carsys().handbrake_latched = false;
+                game.carsys().handbrake_latched = static_cast<i64>(frame_index) < options.burnout_frame;
                 window.input().set_key(static_cast<int>(anom::Key::W), true);
             }
             if (options.steer_frame && frame_index >= options.steer_frame
@@ -526,6 +544,16 @@ int main(int argc, char** argv)
         }
         if (options.drive && game.player().driving() && !game.carsys().engine_on) {
             game.pending().crank = true;
+        }
+        if (options.lights) {
+            game.carsys().headlight_switch = true;
+        }
+        if (options.cowboy) {
+            for (anom::PlayerId id = 0; id < anom::kMaxPlayers; id++) {
+                if (anom::PlayerSlot* s = game.sim().slot(id)) {
+                    s->cowboy = 1;
+                }
+            }
         }
         if (options.jump_frame >= 0 && frame_index == options.jump_frame) {
             game.request_travel(anom::destination_index("touge"));

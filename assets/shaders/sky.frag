@@ -35,7 +35,7 @@ void main()
     float overcast = u_shadow_params.w;
     if (overcast > 0.0) {
         float grey = luminance(radiance);
-        radiance = mix(radiance, vec3(grey), overcast * 0.7);
+        radiance = mix(radiance, vec3(grey) * mix(1.0, 0.6, overcast), overcast * 0.7);
     }
 
     o_color = vec4(radiance, 1.0);

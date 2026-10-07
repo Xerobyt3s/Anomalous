@@ -936,7 +936,7 @@ void Interact::resolve_car_targets(Candidate& best, const InteractBoxes& boxes,
             }
         }
         if (sys.parts[PART_PRINTER].installed && sys.bus_target != kBusTargetTower) {
-            const Vec3 jack = kPrinterJackLocal - com;
+            const Vec3 jack = car_layout().printer_jack - com;
             if (ray_vs_local_box(local, jack, kPrinterJackHalf, &t)) {
                 const Cable& bus = sys.cables[CABLE_BUS];
                 if (bus.state == CableState::Plugged && sys.bus_target == kBusTargetPrinter) {
@@ -1000,18 +1000,18 @@ void Interact::resolve_car_targets(Candidate& best, const InteractBoxes& boxes,
 
         if (hands_.kind != ITEM_NONE) {
             const Vec3 half = item_cargo_half(hands_.kind);
-            const f32 plane_y = kTrunkFloorY + half.y - com.y;
+            const f32 plane_y = car_layout().trunk_min.y + half.y - com.y;
             if (local.dir.y < -0.05f) {
                 const f32 hit_t = (plane_y - local.origin.y) / local.dir.y;
                 if (hit_t > 0.0f && hit_t < kInteractRange) {
                     const Vec3 hit_cfg = local.origin + local.dir * hit_t + com;
-                    if (hit_cfg.z > kTrunkMinZ - 0.25f && hit_cfg.z < kTrunkMaxZ + 0.25f
-                        && f_abs(hit_cfg.x) < kTrunkMaxX + 0.25f) {
+                    if (hit_cfg.z > car_layout().trunk_min.z - 0.25f && hit_cfg.z < car_layout().trunk_max.z + 0.25f
+                        && f_abs(hit_cfg.x) < car_layout().trunk_max.x + 0.25f) {
                         Vec3 place;
-                        place.x = f_clamp(hit_cfg.x, kTrunkMinX + half.x,
-                                          f_max(kTrunkMaxX - half.x, kTrunkMinX + half.x));
-                        place.z = f_clamp(hit_cfg.z, kTrunkMinZ + half.z,
-                                          f_max(kTrunkMaxZ - half.z, kTrunkMinZ + half.z));
+                        place.x = f_clamp(hit_cfg.x, car_layout().trunk_min.x + half.x,
+                                          f_max(car_layout().trunk_max.x - half.x, car_layout().trunk_min.x + half.x));
+                        place.z = f_clamp(hit_cfg.z, car_layout().trunk_min.z + half.z,
+                                          f_max(car_layout().trunk_max.z - half.z, car_layout().trunk_min.z + half.z));
                         bool fits = false;
                         place.y = sys.cargo_place_y(hands_.kind, place.x, place.z, &fits);
                         if (fits) {

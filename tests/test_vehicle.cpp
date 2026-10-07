@@ -58,13 +58,14 @@ struct Rig {
     PhysWorld world;
     ghost::engine::PhysicsWorld jolt;
     Vehicle car;
+    const char* path = kCarPath;
 
     bool setup(u32 size = 128, f32 cell = 2.0f)
     {
         hf = make_flat(arena, size, cell);
         world.init(arena, &hf);
         world.set_jolt(&jolt);
-        return car.init(world, arena, kCarPath, Vec3{0.0f, 1.0f, 0.0f}, 0.0f);
+        return car.init(world, arena, path, Vec3{0.0f, 1.0f, 0.0f}, 0.0f);
     }
 
     bool setup_ramp(f32 slope_deg)
@@ -72,7 +73,7 @@ struct Rig {
         hf = make_ramp(arena, 256, 0.5f, -8.0f, slope_deg);
         world.init(arena, &hf);
         world.set_jolt(&jolt);
-        return car.init(world, arena, kCarPath, Vec3{0.0f, 1.0f, 0.0f}, 0.0f);
+        return car.init(world, arena, path, Vec3{0.0f, 1.0f, 0.0f}, 0.0f);
     }
 
     void step(f32 throttle, f32 brake, f32 steer, bool handbrake, i32 ticks)
@@ -1276,4 +1277,185 @@ TEST(handling, a_handbrake_slide_is_caught_by_countersteering)
     }
     CHECK(caught >= 0);
     CHECK(static_cast<f32>(caught) * kDt < 2.5f);
+}
+
+namespace {
+f32 handbrake_turn_around(Rig& rig)
+{
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    if (!reach_speed(rig, 50.0f)) {
+        return 0.0f;
+    }
+    const Vec3 start = rotate(rig.body().rot, Vec3{0.0f, 0.0f, -1.0f});
+    for (i32 i = 0; i < 600; i++) {
+        rig.step(1.0f, 0.0f, 1.0f, true, 1);
+        if (dot(rotate(rig.body().rot, Vec3{0.0f, 0.0f, -1.0f}), start) < -0.85f) {
+            break;
+        }
+    }
+    return drivetrain_rpm(rig.car.train());
+}
+}
+
+TEST(drivetrain, a_drift_exit_burns_rubber_and_pulls_away)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    const f32 rpm = handbrake_turn_around(rig);
+    CHECK(rpm > rig.car.config().max_rpm * 0.55f);
+    const f32 before = rig.car.forward_speed(rig.world);
+    f32 most_spin = 0.0f;
+    for (i32 i = 0; i < 240; i++) {
+        rig.step(1.0f, 0.0f, 0.0f, false, 1);
+        most_spin = f_max(most_spin, rig.car.wheel(WHEEL_RL).slip_ratio);
+    }
+    CHECK(most_spin > rig.car.config().tire_peak_slip * 3.0f);
+    CHECK(rig.car.forward_speed(rig.world) - before > 10.0f);
+}
+
+TEST(drivetrain, a_standing_start_lights_up_the_rear)
+{
+    Rig rig;
+    CHECK(rig.setup(512, 8.0f));
+    rig.step(0.0f, 0.0f, 0.0f, false, 240);
+    f32 most_spin = 0.0f;
+    for (i32 i = 0; i < 60; i++) {
+        rig.step(1.0f, 0.0f, 0.0f, false, 1);
+        most_spin = f_max(most_spin, rig.car.wheel(WHEEL_RL).slip_ratio);
+    }
+    CHECK(most_spin > 0.3f);
+}
+
+namespace {
+constexpr const char* kMustangPath = "assets/cars/mustang.cfg";
+
+bool mesh_bounds(std::string_view name, Arena& arena, Vec3& lo, Vec3& hi)
+{
+    FixedString<96> path;
+    path.format("assets/meshes/%.*s.amsh", static_cast<int>(name.size()), name.data());
+    MeshData data;
+    if (load_mesh(path.view(), arena, data) != MeshParseError::Ok || data.vertices.empty()) {
+        return false;
+    }
+    lo = Vec3{1e9f, 1e9f, 1e9f};
+    hi = Vec3{-1e9f, -1e9f, -1e9f};
+    for (const AmshVertex& v : data.vertices) {
+        lo = Vec3{f_min(lo.x, v.pos[0]), f_min(lo.y, v.pos[1]), f_min(lo.z, v.pos[2])};
+        hi = Vec3{f_max(hi.x, v.pos[0]), f_max(hi.y, v.pos[1]), f_max(hi.z, v.pos[2])};
+    }
+    return true;
+}
+}
+
+TEST(mustang, its_config_names_meshes_that_exist_and_seats_both_sides)
+{
+    Arena arena{megabytes(32)};
+    VehicleConfig cfg;
+    CHECK(vehicle_config_load(cfg, arena, kMustangPath));
+    CHECK(cfg.seat_count == 2u);
+    CHECK(cfg.seats[0].eye.x < 0.0f);
+    CHECK(cfg.seats[1].eye.x > 0.0f);
+    const CarLayout& l = cfg.layout;
+    const FixedString<32>* names[] = {&cfg.body_mesh, &cfg.wheel_mesh, &l.hood_mesh, &l.trunk_mesh, &l.door_mesh[0], &l.door_mesh[1],
+                                      &l.door_glass_mesh[0], &l.door_glass_mesh[1], &l.glass_mesh, &l.brakelight_mesh,
+                                      &l.revlight_mesh, &l.interior_mesh, &l.fuelcap_mesh, &l.lever_mesh};
+    for (const FixedString<32>* name : names) {
+        Vec3 lo;
+        Vec3 hi;
+        CHECK(!name->empty());
+        CHECK(mesh_bounds(name->view(), arena, lo, hi));
+    }
+    CHECK(l.popup_mesh.empty());
+    VehicleConfig excel;
+    CHECK(vehicle_config_load(excel, arena, kCarPath));
+}
+
+TEST(mustang, the_body_clears_the_road_and_the_wheel_mesh_matches_the_physics)
+{
+    Arena arena{megabytes(32)};
+    VehicleConfig cfg;
+    CHECK(vehicle_config_load(cfg, arena, kMustangPath));
+    Vec3 lo;
+    Vec3 hi;
+    CHECK(mesh_bounds(cfg.body_mesh.view(), arena, lo, hi));
+    const WheelConfig& wc = cfg.wheels[WHEEL_FL];
+    const f32 sag = (cfg.mass * 9.81f * 0.25f) / wc.spring_k;
+    const f32 road = wc.pos.y - wc.travel - wc.radius + sag;
+    CHECK(lo.y - road > 0.08f);
+    CHECK(f_abs(hi.x - cfg.half_extents.x) < 0.05f);
+
+    Vec3 wlo;
+    Vec3 whi;
+    CHECK(mesh_bounds(cfg.wheel_mesh.view(), arena, wlo, whi));
+    CHECK(f_abs((whi.y - wlo.y) * 0.5f - wc.radius) < 0.01f);
+    CHECK(f_abs(wlo.y + whi.y) < 0.01f);
+    VehicleConfig excel;
+    CHECK(vehicle_config_load(excel, arena, kCarPath));
+}
+
+TEST(mustang, its_panels_hang_from_their_hinges_and_the_trunk_fits_the_body)
+{
+    Arena arena{megabytes(32)};
+    VehicleConfig cfg;
+    CHECK(vehicle_config_load(cfg, arena, kMustangPath));
+    const CarLayout& l = cfg.layout;
+    Vec3 lo;
+    Vec3 hi;
+    CHECK(mesh_bounds(l.hood_mesh.view(), arena, lo, hi));
+    CHECK(f_abs(hi.z) < 0.01f);
+    CHECK(lo.z < -0.8f);
+    CHECK(mesh_bounds(l.trunk_mesh.view(), arena, lo, hi));
+    CHECK(f_abs(lo.z) < 0.01f);
+    CHECK(hi.z > 0.3f);
+    CHECK(mesh_bounds(l.door_mesh[0].view(), arena, lo, hi));
+    CHECK(f_abs(lo.z) < 0.01f);
+    CHECK(f_abs(lo.x) < 0.01f);
+    CHECK(hi.z > 1.0f);
+    Vec3 blo;
+    Vec3 bhi;
+    CHECK(mesh_bounds(cfg.body_mesh.view(), arena, blo, bhi));
+    CHECK(l.trunk_min.x > blo.x);
+    CHECK(l.trunk_max.x < bhi.x);
+    CHECK(l.trunk_max.z < bhi.z);
+    CHECK(l.trunk_min.y > blo.y);
+    VehicleConfig excel;
+    CHECK(vehicle_config_load(excel, arena, kCarPath));
+}
+
+TEST(mustang, it_launches_climbs_and_catches_a_slide_like_the_excel)
+{
+    {
+        Rig rig;
+        rig.path = kMustangPath;
+        CHECK(rig.setup(512, 8.0f));
+        rig.step(0.0f, 0.0f, 0.0f, false, 240);
+        i32 ticks = 0;
+        while (ticks < 1200 && length(rig.body().vel) * 3.6f < 50.0f) {
+            rig.step(1.0f, 0.0f, 0.0f, false, 1);
+            ticks++;
+        }
+        CHECK(static_cast<f32>(ticks) * kDt < 4.5f);
+    }
+    {
+        Rig rig;
+        rig.path = kMustangPath;
+        CHECK(rig.setup(512, 8.0f));
+        rig.step(0.0f, 0.0f, 0.0f, false, 240);
+        CHECK(reach_speed(rig, 72.0f));
+        for (i32 i = 0; i < 240 && f_abs(signed_slip_deg(rig)) < 25.0f; i++) {
+            rig.step(0.0f, 0.0f, 1.0f, true, 1);
+        }
+        i32 caught = -1;
+        for (i32 i = 0; i < 300 && caught < 0; i++) {
+            const f32 slip = signed_slip_deg(rig);
+            rig.step(0.15f, 0.0f, f_clamp(slip / 15.0f, -1.0f, 1.0f), false, 1);
+            if (f_abs(signed_slip_deg(rig)) < 10.0f && length(rig.body().vel) > 3.0f) {
+                caught = i;
+            }
+        }
+        CHECK(caught >= 0);
+    }
+    Arena arena{megabytes(4)};
+    VehicleConfig excel;
+    CHECK(vehicle_config_load(excel, arena, kCarPath));
 }

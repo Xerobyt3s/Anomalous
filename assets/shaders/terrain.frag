@@ -1,5 +1,6 @@
 #version 460 core
 #include "common.glsl"
+#include "terrain_rock.glsl"
 #include "frame.glsl"
 #include "shadow.glsl"
 #include "snow_ground.glsl"
@@ -35,32 +36,6 @@ const float MEADOW_TILE_METRES = 4.0;
 const float MEADOW_GAIN = 0.55;
 const vec3 MEADOW_GRADE = vec3(0.92, 1.12, 1.60);
 
-float vnoise(vec2 p)
-{
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    float a = hash12(i);
-    float b = hash12(i + vec2(1.0, 0.0));
-    float c = hash12(i + vec2(0.0, 1.0));
-    float d = hash12(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-vec3 apply_fog(vec3 lit, vec3 world)
-{
-    vec3 to_frag = world - u_cam_pos.xyz;
-    float dist = length(to_frag);
-    float height_falloff = exp(-max(world.y - 6.0, 0.0) * 0.035);
-    float density = u_fog_color_density.w * mix(0.55, 1.0, height_falloff);
-    float fog_amount = 1.0 - exp(-pow(dist * density, 2.0));
-    vec3 vdir = to_frag / max(dist, 1e-4);
-    float sun_glow = pow(max(dot(vdir, -u_sun_dir.xyz), 0.0), 9.0);
-    vec3 fog_c = u_fog_color_density.rgb
-               + u_sun_color_ambient.rgb * sun_glow * 0.45 * (1.0 - u_shadow_params.w);
-    return mix(lit, fog_c, fog_amount);
-}
-
 void main()
 {
     vec3 n = normalize(v_normal);
@@ -86,9 +61,7 @@ void main()
     rock = ALBEDO_ROCK * (0.70 + 0.85 * luminance(rock));
     road = ALBEDO_ROAD * (0.70 + 0.85 * luminance(road));
 
-    float slope_noise = (vnoise(wp * 0.06) - 0.5) * 0.22;
-    float rockiness = 1.0 - smoothstep(0.58 + slope_noise, 0.74 + slope_noise, n.y);
-    rockiness = clamp(rockiness + smoothstep(24.0, 34.0, v_world.y) * 0.55, 0.0, 1.0);
+    float rockiness = terrain_rockiness(wp, n.y, v_world.y);
     vec3 albedo = mix(grass, rock, rockiness);
 
     vec2 mask_uv = (wp - u_terrain.xy) * u_terrain.zw;

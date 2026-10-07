@@ -100,6 +100,7 @@ void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels,
     f32 avg_driven_omega = 0.0f;
     f32 avg_driven_slip = 0.0f;
     f32 max_drive_spin = 0.0f;
+    f32 road_speed = 0.0f;
     for (u32 i = 0; i < kWheelCount; i++) {
         wheels[i].drive_torque = 0.0f;
         if (cfg.wheels[i].driven) {
@@ -108,12 +109,14 @@ void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels,
             const f32 road = wheels[i].omega * wheels[i].radius - wheels[i].slide_long;
             const f32 spin = wheels[i].slide_long / f_max(f_abs(road), kTcSpeedFloor);
             max_drive_spin = f_max(max_drive_spin, spin * (train.gear < 0 ? -1.0f : 1.0f));
+            road_speed += f_abs(road);
             driven_count++;
         }
     }
     if (driven_count) {
         avg_driven_omega /= static_cast<f32>(driven_count);
         avg_driven_slip /= static_cast<f32>(driven_count);
+        road_speed /= static_cast<f32>(driven_count);
     }
 
     train.shift_lockout = f_max(train.shift_lockout - dt, 0.0f);
@@ -160,7 +163,9 @@ void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels,
     }
 
     const f32 tc_start = cfg.tire_peak_slip * cfg.tc_slip;
-    const f32 tc_target = cfg.tc_strength
+    const f32 fade = f_clamp01((road_speed - cfg.tc_fade_start) / f_max(cfg.tc_fade_full - cfg.tc_fade_start, 0.01f));
+    const f32 tc_strength = f_lerp(cfg.tc_low, cfg.tc_strength, fade * fade * (3.0f - 2.0f * fade));
+    const f32 tc_target = tc_strength
                         * f_clamp01((max_drive_spin - tc_start) / f_max(tc_start * 2.0f, 0.01f));
     const f32 tc_rate = tc_target > train.tc_cut ? kTcAttack : kTcRelease;
     train.tc_cut = f_move_toward(train.tc_cut, tc_target, tc_rate * dt);
@@ -185,7 +190,7 @@ void drivetrain_tick(Drivetrain& train, const VehicleConfig& cfg, Wheel* wheels,
     f32 clutch_engage = f_clamp01((rpm - cfg.idle_rpm * 0.9f)
                                   / f_max(bite_rpm - cfg.idle_rpm * 0.9f, 100.0f));
     clutch_engage *= clutch_engage;
-    if (train.shifting || ratio == 0.0f || train.brake_hold) {
+    if (train.shifting || ratio == 0.0f || train.brake_hold || train.declutch) {
         clutch_engage = 0.0f;
     }
 

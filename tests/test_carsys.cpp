@@ -248,7 +248,7 @@ TEST(carsys, an_impact_bumps_the_serial_and_records_severity)
     CHECK(rig.sys.impact_serial == before + 1);
 }
 
-TEST(carsys, headlights_place_two_beams_ahead_and_nothing_when_off)
+TEST(carsys, headlights_shine_two_cones_forward_from_the_lamps_and_nothing_when_off)
 {
     CarRig rig;
     CHECK(rig.setup());
@@ -260,14 +260,20 @@ TEST(carsys, headlights_place_two_beams_ahead_and_nothing_when_off)
     rig.car.effects().headlights_on = true;
     const u32 on = car_lights(body->pos, body->rot, rig.car, rig.sys, lights);
     CHECK(on == 3u);
-    CHECK(lights[0].pos.z < body->pos.z - 3.0f);
-    CHECK(lights[1].pos.z < body->pos.z - 3.0f);
+    for (u32 i = 0; i < 2; i++) {
+        CHECK(lights[i].pos.z < body->pos.z - 1.0f);
+        CHECK(lights[i].pos.z > body->pos.z - 2.5f);
+        CHECK(lights[i].dir.z < -0.95f);
+        CHECK(lights[i].dir.y < 0.0f);
+        CHECK(lights[i].cone > 0.5f);
+    }
+    CHECK(lights[2].cone < -1.0f);
     CHECK(lights[0].pos.x < lights[1].pos.x);
-    CHECK(lights[0].color.x > 5.0f);
+    const f32 full = lights[0].color.x;
 
     rig.sys.parts[PART_HEADLIGHTS].condition = 0.5f;
     car_lights(body->pos, body->rot, rig.car, rig.sys, lights);
-    CHECK(lights[0].color.x < 5.0f);
+    CHECK_NEAR(lights[0].color.x, full * 0.5f, 1e-3);
 }
 
 TEST(carsys, a_braking_car_lights_its_tail)
@@ -290,13 +296,6 @@ TEST(carsys, a_braking_car_lights_its_tail)
     CHECK(car_lights(body->pos, body->rot, rig.car, rig.sys, lights) == 1u);
 }
 
-TEST(carsys, puff_rate_grows_with_slide_and_is_zero_when_gripping)
-{
-    CHECK(puff_rate(0.0f) == 0.0f);
-    CHECK(puff_rate(2.5f) == 0.0f);
-    CHECK(puff_rate(4.0f) > 0.0f);
-    CHECK(puff_rate(8.0f) > puff_rate(4.0f));
-}
 
 TEST(carsys, start_blocker_names_the_missing_thing)
 {

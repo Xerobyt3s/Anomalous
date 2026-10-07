@@ -26,6 +26,7 @@ layout(std140, binding = 0) uniform CameraBlock {
     vec4 u_haze[4];
     vec4 u_haze_params;
     vec4 u_haze_tint;
+    vec4 u_point_dir[8];
 };
 
 #define u_time_seconds (u_time_params.x)
